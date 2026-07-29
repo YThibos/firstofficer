@@ -42,7 +42,7 @@ test_section_9_owns_positive_translation_contract() {
 test_scout_remains_allowed_house_vocabulary() {
   local contract
   contract=$(section_9)
-  assert_contains "$contract" "Scout and second mate are accepted Firstmate nautical house vocabulary and do not need translation" \
+  assert_contains "$contract" "Scout and second mate are accepted house vocabulary and do not need translation" \
     "section 9 does not preserve scout as allowed Firstmate vocabulary"
   assert_not_contains "$contract" "scout -> investigation" \
     "section 9 must not map scout to investigation"
@@ -106,7 +106,7 @@ test_verbatim_internal_evidence_is_rejected_from_chat() {
 test_routine_no_action_response_is_event_scoped() {
   local contract
   contract=$(section_9)
-  assert_contains "$contract" 'reply exactly `Captain, shipshape.` without characterizing the visible session' \
+  assert_contains "$contract" 'reply exactly `Captain, all systems nominal.` without characterizing the visible session' \
     "section 9 does not require the exact event-scoped routine no-action response"
   assert_not_contains "$contract" 'Captain, no decision is needed.' \
     "section 9 implies the visible session has no unrelated open decisions"
@@ -216,7 +216,7 @@ test_ahoy_owns_only_the_visible_session_recap() {
 test_ahoy_scans_visible_history_for_open_decisions() {
   assert_grep 'preserve the ordinary recap interval: recap what happened after that message and before the current invocation.' "$AHOY" \
     "ahoy no longer preserves its ordinary recap interval"
-  assert_grep 'inspect the entire session history visible to the current first mate before the current invocation for every explicit captain decision that remains unanswered' "$AHOY" \
+  assert_grep 'inspect the entire session history visible to the current First Officer before the current invocation for every explicit captain decision that remains unanswered' "$AHOY" \
     "ahoy does not scan globally visible session history for open decisions"
   assert_grep 'including decisions raised before the ordinary recap boundary.' "$AHOY" \
     "ahoy does not include open decisions from before the recap boundary"
