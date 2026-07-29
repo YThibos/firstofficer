@@ -1,0 +1,12 @@
+# Normalise text files to LF on commit; Git still checks out using the
+# platform's native line endings unless overridden below.
+* text=auto
+
+# Shell scripts must never be checked out with CRLF: bash chokes on a
+# trailing \r with errors like "$'\r': command not found", and patches
+# generated on one platform then fail to apply on another. Pin them to LF
+# unconditionally so a Windows/WSL checkout can't reintroduce the bug.
+*.sh text eol=lf
+
+# Binary asset; never subject to line-ending normalisation.
+*.png binary

@@ -6,8 +6,14 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab] [--branch <name>]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
+#   --branch <name> sets the ship branch name the crewmate creates and works on
+#   (e.g. feature/JUSTMD-123). It applies only to ship briefs (not --scout or
+#   --secondmate). There is no default: an omitted --branch renders a loud,
+#   unmistakable `{BRANCH}` placeholder in the brief instead of a silent guess,
+#   so firstmate must supply the caller-owned branch name for every ship task
+#   before dispatch.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   --secondmate writes a persistent secondmate charter. The project list
@@ -73,17 +79,29 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+BRANCH=""
 POS=()
-for a in "$@"; do
-  case "$a" in
-    --scout) KIND=scout ;;
-    --secondmate) KIND=secondmate ;;
-    --herdr-lab) HERDR_LAB=1 ;;
-    --no-projects) NO_PROJECTS=1 ;;
-    *) POS+=("$a") ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --scout) KIND=scout; shift ;;
+    --secondmate) KIND=secondmate; shift ;;
+    --herdr-lab) HERDR_LAB=1; shift ;;
+    --no-projects) NO_PROJECTS=1; shift ;;
+    --branch)
+      shift
+      [ "$#" -gt 0 ] || { echo "error: --branch requires a value" >&2; exit 1; }
+      BRANCH=$1
+      shift
+      ;;
+    *) POS+=("$1"); shift ;;
   esac
 done
 ID=${POS[0]}
+
+if [ -n "$BRANCH" ] && [ "$KIND" != ship ]; then
+  echo "error: --branch applies only to ship briefs" >&2
+  exit 1
+fi
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
@@ -148,6 +166,10 @@ Do not invent a second delegation system.
 You do not generate your own work.
 Act only on tasks the main firstmate routes to you.
 Never start a survey, audit, or "find improvements" sweep on your own initiative; that is not your job and it is unwanted.
+Every commit your crewmates produce, in every project you supervise, is authored in the captain's name only:
+never a \`Co-authored-by:\` trailer, or any other trailer, naming a model, an agent, Anthropic, or any other tool.
+Claude Code adds this trailer BY DEFAULT, so brief your crewmates to actively suppress it and to verify it is
+absent with \`git log -1 --format='%(trailers)'\` before reporting done.
 
 # Requests from the main firstmate
 You are a firstmate in your own home, so an incoming message reaches you in your own chat.
@@ -262,6 +284,10 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. Never add a \`Co-authored-by:\` trailer, or any other trailer, naming a model, an agent, Anthropic,
+   or any other tool, on any commit, including scratch commits in this worktree: every commit is
+   authored in the captain's name only. Claude Code adds this trailer BY DEFAULT, so you must actively
+   suppress it. Before reporting done, verify it is absent with \`git log -1 --format='%(trailers)'\`.
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -277,6 +303,12 @@ fi
 # Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief because the worker never owns approval decisions;
 # firstmate applies the authority contract in AGENTS.md section 7, so discard it.
+# No default branch name: the caller (firstmate) must supply one with --branch.
+# An omitted name renders as the loud, unmistakable {BRANCH} placeholder instead
+# of a silent guess like the historical `fm/$ID`, so a wrong or missing branch
+# name can never ship unnoticed.
+BRANCH_NAME=${BRANCH:-'{BRANCH}'}
+
 read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
@@ -284,7 +316,7 @@ EOF
 case "$MODE" in
   direct-PR)
     SETUP2=""
-    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
+    RULE1="1. Never push to the default branch (push only your \`$BRANCH_NAME\` branch). Never merge a PR."
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
@@ -295,13 +327,13 @@ EOF
     ;;
   local-only)
     SETUP2=""
-    RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
+    RULE1="1. Never push to any remote and never open a PR. Work only on your \`$BRANCH_NAME\` branch; firstmate handles the merge into local \`main\`."
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 This project ships **local-only**: no remote, no PR, no pipeline.
-The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
+The task is complete only when committed on your branch \`$BRANCH_NAME\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop.
+When it is implemented and committed, append \`done: ready in branch $BRANCH_NAME\` to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
     ;;
@@ -350,7 +382,7 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
-1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+1. First action: create your branch: \`git checkout -b $BRANCH_NAME\`$SETUP2
 
 # Rules
 $RULE1
@@ -376,6 +408,10 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. Never add a \`Co-authored-by:\` trailer, or any other trailer, naming a model, an agent, Anthropic,
+   or any other tool, on any commit: every commit is authored in the captain's name only. Claude Code
+   adds this trailer BY DEFAULT, so you must actively suppress it. Before reporting done, verify it is
+   absent with \`git log -1 --format='%(trailers)'\`.
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
