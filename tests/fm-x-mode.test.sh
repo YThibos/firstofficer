@@ -928,13 +928,13 @@ test_reply_dry_run_records_not_posts() {
   printf 'FMX_PAIRING_TOKEN=tok-d\n' > "$home/.env"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
     FMX_DRY_RUN=1 FAKE_CURL_LOG="$log" \
-    "$ROOT/bin/fm-x-reply.sh" "req-1" "Aye, a couple of fixes underway." 2>"$home/err"); rc=$?
+    "$ROOT/bin/fm-x-reply.sh" "req-1" "Aye, a couple of fixes in progress." 2>"$home/err"); rc=$?
   expect_code 0 "$rc" "dry-run reply exit"
   [ "$out" = "req-1" ] || fail "dry-run must still echo the request_id (got: $out)"
   # It must NOT have posted: the fake curl is never invoked, so no POST is logged.
   [ -f "$log" ] && grep -q "method=POST" "$log" && fail "dry-run must not POST to the relay"
   assert_present "$home/state/x-outbox/req-1.json" "dry-run must record the would-be reply"
-  [ "$(jq -r .text "$home/state/x-outbox/req-1.json")" = "Aye, a couple of fixes underway." ] \
+  [ "$(jq -r .text "$home/state/x-outbox/req-1.json")" = "Aye, a couple of fixes in progress." ] \
     || fail "outbox record must hold the would-be reply text"
   [ "$(jq -r .request_id "$home/state/x-outbox/req-1.json")" = "req-1" ] \
     || fail "outbox record must hold the request_id"
@@ -1064,9 +1064,9 @@ test_split_thread_lib() {
   . "$ROOT/bin/fm-x-lib.sh"
   local out n last rejoin maxlen txt
   # A reply that fits one tweet stays a single, UNNUMBERED chunk.
-  out=$(printf 'Aye, all shipshape.' | fmx_split_thread 280 25)
+  out=$(printf 'Aye, all systems nominal.' | fmx_split_thread 280 25)
   [ "$(printf '%s' "$out" | jq 'length')" = "1" ] || fail "short reply must be one chunk"
-  [ "$(printf '%s' "$out" | jq -r '.[0]')" = "Aye, all shipshape." ] || fail "short reply must be verbatim and unnumbered"
+  [ "$(printf '%s' "$out" | jq -r '.[0]')" = "Aye, all systems nominal." ] || fail "short reply must be verbatim and unnumbered"
   # A long reply splits on word boundaries; every chunk within the limit; lossless.
   txt="alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november"
   out=$(printf '%s' "$txt" | fmx_split_thread 30 25)

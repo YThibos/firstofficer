@@ -168,7 +168,7 @@ block_stop() {
       printf '●  X-mode relay polling needs supervision, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_BEACON_DESC"
     fi
     if [ "$CLAUDE_MODE" -eq 1 ]; then
-      printf '●  The Stop-owned auto-arm did not claim this home either, so recovery is NOT already under way.\n'
+      printf '●  The Stop-owned auto-arm did not claim this home either, so recovery is NOT already in progress.\n'
     fi
     printf '●  %s\n' "$reason"
     printf '●%s\n' "$rule"
