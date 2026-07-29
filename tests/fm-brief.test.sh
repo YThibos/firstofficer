@@ -488,6 +488,93 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
 
+test_ship_branch_defaults_to_loud_placeholder() {
+  local home id brief
+  home="$TMP_ROOT/branch-default-home"
+  mkdir -p "$home/data"
+  id="brief-branch-default-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+  assert_no_grep "fm/$id" "$brief" \
+    "ship brief still hardcodes an fm/<id> branch default"
+  assert_grep 'git checkout -b {BRANCH}' "$brief" \
+    "an omitted --branch must render a loud {BRANCH} placeholder, not a silent default"
+  pass "fm-brief.sh: an omitted ship branch name is a loud placeholder, never a silent fm/<id> default"
+}
+
+test_ship_branch_flag_lands_verbatim() {
+  local home id brief
+  home="$TMP_ROOT/branch-flag-home"
+  write_registry "$home"
+  id="brief-branch-flag-e2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --branch feature/JUSTMD-123 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+  assert_grep 'git checkout -b feature/JUSTMD-123' "$brief" \
+    "--branch value did not land verbatim in the setup step"
+  assert_grep 'push only your `feature/JUSTMD-123` branch' "$brief" \
+    "--branch value did not land verbatim in the direct-PR rule"
+  assert_no_grep '{BRANCH}' "$brief" \
+    "a supplied --branch left the loud placeholder behind"
+  assert_no_grep "fm/$id" "$brief" \
+    "a supplied --branch still left the old fm/<id> default in the brief"
+
+  id="brief-branch-flag-local-e3"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch chore/JUSTMD-9 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep 'git checkout -b chore/JUSTMD-9' "$brief" \
+    "--branch value did not land verbatim in the local-only setup step"
+  assert_grep 'ready in branch chore/JUSTMD-9' "$brief" \
+    "--branch value did not land verbatim in the local-only done instruction"
+  pass "fm-brief.sh: a supplied --branch name lands verbatim across ship modes"
+}
+
+test_ship_branch_flag_rejected_outside_ship() {
+  local home status=0
+  home="$TMP_ROOT/branch-misuse-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" branch-misuse-scout firstmate --scout --branch feature/JUSTMD-1 \
+    >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "--branch on a scout brief must fail"
+  assert_absent "$home/data/branch-misuse-scout/brief.md" \
+    "rejected --branch on a scout brief still wrote a file"
+
+  status=0
+  FM_HOME="$home" FM_SECONDMATE_CHARTER=x "$ROOT/bin/fm-brief.sh" branch-misuse-sm --secondmate --no-projects \
+    --branch feature/JUSTMD-1 >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "--branch on a secondmate charter must fail"
+  pass "fm-brief.sh: --branch is rejected outside ship briefs"
+}
+
+test_co_author_prohibition_in_every_variant() {
+  local home id brief
+  home="$TMP_ROOT/co-author-home"
+  mkdir -p "$home/data"
+
+  id="brief-co-author-ship-f1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --branch feature/JUSTMD-1 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep 'Co-authored-by:' "$brief" "ship brief missing co-author prohibition"
+  assert_grep 'git log -1' "$brief" "ship brief missing the trailer-verification command"
+
+  id="brief-co-author-scout-f2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep 'Co-authored-by:' "$brief" "scout brief missing co-author prohibition"
+
+  id="brief-co-author-herdr-f3"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --herdr-lab --branch feature/JUSTMD-2 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep 'Co-authored-by:' "$brief" "--herdr-lab ship brief missing co-author prohibition"
+
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='ops' "$ROOT/bin/fm-brief.sh" brief-co-author-sm-f4 --secondmate --no-projects \
+    >/dev/null 2>&1
+  brief="$home/data/brief-co-author-sm-f4/brief.md"
+  assert_grep 'Co-authored-by:' "$brief" "secondmate charter missing co-author prohibition"
+  pass "fm-brief.sh: every brief variant forbids agent co-author trailers"
+}
+
 test_scout_and_secondmate_load_decision_hold_policy() {
   local home scout charter
   home="$TMP_ROOT/decision-policy-home"
@@ -541,5 +628,9 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_secondmate_marked_request_reporting_contract
 test_pause_verb_override_renders_all_brief_scaffolds
+test_ship_branch_defaults_to_loud_placeholder
+test_ship_branch_flag_lands_verbatim
+test_ship_branch_flag_rejected_outside_ship
+test_co_author_prohibition_in_every_variant
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
