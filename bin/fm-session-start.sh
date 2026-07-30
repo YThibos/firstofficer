@@ -344,7 +344,7 @@ print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
 
-subsection "Work under way (state/*.meta)"
+subsection "Work in progress (state/*.meta)"
 META_FOUND=0
 for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
