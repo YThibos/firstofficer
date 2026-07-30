@@ -138,8 +138,12 @@ test_brief_assertion_precedes_branch() {
     "brief must not present git-dir/common-dir as decisive"
   assert_no_grep "they are identical in the primary checkout" "$brief" \
     "brief must not claim the primary checkout has identical git dirs"
+  # No --branch was supplied above, so the scaffold renders the loud
+  # {BRANCH} placeholder rather than a hardcoded fm/<id> prefix; match the
+  # branch step itself (`git checkout -b <name-or-placeholder>`), which
+  # fm-brief.sh renders identically for a supplied branch or the placeholder.
   iso=$(grep -n 'launched in primary checkout, not an isolated worktree' "$brief" | head -1 | cut -d: -f1)
-  br=$(grep -n 'git checkout -b fm/' "$brief" | head -1 | cut -d: -f1)
+  br=$(grep -n 'git checkout -b ' "$brief" | head -1 | cut -d: -f1)
   if [ -z "$iso" ] || [ -z "$br" ]; then
     fail "brief missing assertion ($iso) or branch step ($br)"
   fi
