@@ -604,6 +604,7 @@ test_ship_branch_flag_lands_verbatim() {
   assert_present "$brief" "brief was not scaffolded"
   assert_grep 'git checkout -b feature/JUSTMD-123' "$brief" \
     "--branch value did not land verbatim in the setup step"
+  # shellcheck disable=SC2016 # literal backticks from the brief text, not command substitution
   assert_grep 'push only your `feature/JUSTMD-123` branch' "$brief" \
     "--branch value did not land verbatim in the direct-PR rule"
   assert_no_grep '{BRANCH}' "$brief" \
