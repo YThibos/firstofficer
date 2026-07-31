@@ -126,6 +126,7 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 `fm-guard.sh` prints the repair command on the next mutable fleet action, while `bin/fm-session-start.sh` reports the same condition through bootstrap as a `TANGLE:` line at session start.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating the branch firstmate supplied with `--branch` (rendered as a loud `{BRANCH}` placeholder when no name was given), then stop with a blocked status if it landed in the primary checkout.
+Because the brief supplies that name, nothing downstream may reconstruct it: `bin/fm-task-branch-lib.sh` is the one owner of resolving a task's branch back from its worktree, with the retired `fm/<task-id>` name kept only as a fallback for tasks that still carry it.
 
 ## No-mistakes gate authority boundary
 
