@@ -14,6 +14,10 @@
 # That local branch is resolved, never constructed from the task id:
 # bin/fm-task-branch-lib.sh owns the order (the task worktree's checked-out
 # branch first, the legacy fm/<id> name only when it is genuinely present).
+# When that local branch is the compare side and it resolves to the project's
+# default branch, this refuses instead of printing an empty <default>..<default>
+# diff that a reviewer would read as "no work". A fetched PR head is exempt: the
+# compare side there is a SHA, not the local branch.
 # Usage: fm-review-diff.sh <task-id> [--stat]
 #   --stat prints only the stat summary; default prints stat summary plus full diff.
 set -eu
@@ -132,6 +136,13 @@ if [ -n "$PR_URL" ]; then
   else
     echo "warning: PR head unavailable; diff may lag the open PR (using local branch $BRANCH)" >&2
   fi
+fi
+
+# A task whose worktree never left the default branch resolves to that branch,
+# and diffing it against itself would show a reviewer an empty deliverable.
+if [ "$COMPARE_REF" = "$BRANCH" ] && [ "$BRANCH" = "$DEFAULT" ]; then
+  echo "error: task $ID resolves to the default branch '$DEFAULT'; it has no separate work branch to review" >&2
+  exit 1
 fi
 
 if git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then

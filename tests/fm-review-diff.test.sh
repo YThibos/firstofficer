@@ -19,6 +19,7 @@
 #   (g) legacy fm/<id> branch, detached worktree -> still diffed
 #   (h) stale fm/<id> alongside the real branch -> the worktree branch wins
 #   (i) neither resolvable -> refuses loudly, naming both candidates
+#   (j) worktree still on the default branch -> refuses loudly, never an empty diff
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -272,6 +273,23 @@ test_unresolvable_branch_refuses_loudly() {
   pass "fm-review-diff refuses loudly and names every branch it looked for"
 }
 
+test_default_branch_resolution_refuses_loudly() {
+  local case_dir
+  case_dir=$(make_case branch-default chore/JUSTMD-48)
+  # The crewmate never created its branch: the worktree is still on main.
+  git -C "$case_dir/wt" checkout -q --ignore-other-worktrees main
+  write_task_meta "$case_dir"
+
+  run_review_diff_capture "$case_dir" task-x1
+
+  expect_code 1 "$CODE" "branch-default: must refuse"
+  assert_contains "$ERR" "resolves to the default branch 'main'" \
+    "branch-default: must name the default branch it resolved to"
+  assert_not_contains "$OUT" 'no changes vs' \
+    "branch-default: must never degrade into an empty main..main diff"
+  pass "fm-review-diff refuses when the task resolves to the default branch"
+}
+
 test_pr_meta_uses_pr_head_not_stale_local
 test_pr_meta_fetches_pull_head_without_recorded_sha
 test_stale_recorded_pr_head_loses_to_fetched_pull_head
@@ -281,3 +299,4 @@ test_jira_keyed_branch_is_diffed
 test_legacy_fm_branch_still_diffed
 test_worktree_branch_beats_stale_legacy_ref
 test_unresolvable_branch_refuses_loudly
+test_default_branch_resolution_refuses_loudly
