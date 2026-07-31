@@ -11,6 +11,14 @@
 #   (d) pr= present but PR head unreachable -> fallback to local branch + warning
 #   (e) pr= + STALE recorded pr_head= + newer remote pull head -> must use fetched head
 #       (this is the class that bit reviewers holding merges over "missing" fixes)
+#
+# The local branch it compares is RESOLVED from the task's worktree, not
+# constructed as fm/<id>: that internal naming is retired and current tasks branch
+# on their JIRA key. A second matrix covers that resolution:
+#   (f) JIRA-keyed worktree branch -> diffed
+#   (g) legacy fm/<id> branch, detached worktree -> still diffed
+#   (h) stale fm/<id> alongside the real branch -> the worktree branch wins
+#   (i) neither resolvable -> refuses loudly, naming both candidates
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -20,8 +28,13 @@ fm_git_identity fmtest fmtest@example.invalid
 REVIEW_DIFF="$ROOT/bin/fm-review-diff.sh"
 TMP_ROOT=$(fm_test_tmproot fm-review-diff-tests)
 
+# The branch the fixture's worktree is created on. The PR-head matrix above keeps
+# the legacy fm/<id> name; the branch-resolution matrix passes its own.
+TASK_BRANCH=fm/task-x1
+
+# make_case <name> [branch]: build the fixture, defaulting to $TASK_BRANCH.
 make_case() {
-  local name=$1 case_dir
+  local name=$1 case_dir branch=${2:-$TASK_BRANCH}
   case_dir="$TMP_ROOT/$name"
   mkdir -p "$case_dir/state"
 
@@ -36,7 +49,7 @@ make_case() {
 
   git clone -q "$case_dir/origin.git" "$case_dir/project"
   git -C "$case_dir/project" remote set-head origin main 2>/dev/null || true
-  git -C "$case_dir/project" worktree add -q -b fm/task-x1 "$case_dir/wt" main
+  git -C "$case_dir/project" worktree add -q -b "$branch" "$case_dir/wt" main
 
   touch "$case_dir/state/.last-watcher-beat"
   printf '%s\n' "$case_dir"
@@ -64,7 +77,7 @@ stale_and_pr_commits() {
   git -C "$case_dir/wt" commit -qm "pipeline fix on PR"
   PR_SHA=$(git -C "$case_dir/wt" rev-parse HEAD)
 
-  git -C "$case_dir/wt" checkout -q fm/task-x1
+  git -C "$case_dir/wt" checkout -q "$TASK_BRANCH"
 }
 
 run_review_diff() {
@@ -169,8 +182,102 @@ test_unreachable_pr_head_falls_back_with_warning() {
   pass "fm-review-diff falls back to local branch with a warning when PR head is unreachable"
 }
 
+# --- branch resolution ------------------------------------------------------
+
+# deliverable_commit <case_dir>: one commit on the task branch, distinguishable
+# in the diff from the untouched baseline.
+deliverable_commit() {
+  local case_dir=$1
+  printf 'the-deliverable\n' > "$case_dir/wt/feature.txt"
+  git -C "$case_dir/wt" add feature.txt
+  git -C "$case_dir/wt" commit -qm "local-only deliverable"
+}
+
+run_review_diff_capture() {
+  local case_dir=$1 id=$2
+  shift 2
+  set +e
+  OUT=$(run_review_diff "$case_dir" "$id" "$@" 2> "$case_dir/stderr")
+  CODE=$?
+  set -e
+  ERR=$(cat "$case_dir/stderr")
+}
+
+test_jira_keyed_branch_is_diffed() {
+  local case_dir
+  case_dir=$(make_case branch-jira chore/JUSTMD-45)
+  deliverable_commit "$case_dir"
+  write_task_meta "$case_dir"
+
+  run_review_diff_capture "$case_dir" task-x1
+
+  expect_code 0 "$CODE" "branch-jira: diff should succeed on a JIRA-keyed branch"
+  assert_contains "$OUT" '+the-deliverable' \
+    "branch-jira: diff should show the JIRA-keyed branch's work"
+  pass "fm-review-diff diffs a JIRA-keyed task branch"
+}
+
+test_legacy_fm_branch_still_diffed() {
+  local case_dir
+  case_dir=$(make_case branch-legacy fm/task-x1)
+  deliverable_commit "$case_dir"
+  # Detached: only the legacy constructed name is left to resolve.
+  git -C "$case_dir/wt" checkout -q --detach HEAD
+  write_task_meta "$case_dir"
+
+  run_review_diff_capture "$case_dir" task-x1
+
+  expect_code 0 "$CODE" "branch-legacy: diff should succeed on the legacy branch"
+  assert_contains "$OUT" '+the-deliverable' \
+    "branch-legacy: diff should still resolve fm/<id>"
+  pass "fm-review-diff still resolves a legacy fm/<id> branch"
+}
+
+test_worktree_branch_beats_stale_legacy_ref() {
+  local case_dir
+  case_dir=$(make_case branch-stale-legacy chore/JUSTMD-46)
+  deliverable_commit "$case_dir"
+  # A leftover fm/<id> ref at the baseline: resolving it shows an empty diff and
+  # a reviewer sees no work at all.
+  git -C "$case_dir/project" branch fm/task-x1 main
+  write_task_meta "$case_dir"
+
+  run_review_diff_capture "$case_dir" task-x1
+
+  expect_code 0 "$CODE" "branch-stale-legacy: diff should succeed"
+  assert_contains "$OUT" '+the-deliverable' \
+    "branch-stale-legacy: the worktree branch must win over the stale fm/<id> ref"
+  assert_not_contains "$OUT" 'no changes vs' \
+    "branch-stale-legacy: a stale fm/<id> ref must not hide the deliverable"
+  pass "fm-review-diff prefers the worktree branch over a stale fm/<id> ref"
+}
+
+test_unresolvable_branch_refuses_loudly() {
+  local case_dir
+  case_dir=$(make_case branch-unresolvable chore/JUSTMD-47)
+  deliverable_commit "$case_dir"
+  git -C "$case_dir/wt" checkout -q --detach HEAD
+  git -C "$case_dir/project" branch -q -D chore/JUSTMD-47
+  write_task_meta "$case_dir"
+
+  run_review_diff_capture "$case_dir" task-x1
+
+  expect_code 1 "$CODE" "branch-unresolvable: must refuse"
+  assert_contains "$ERR" 'cannot resolve the branch for task task-x1' \
+    "branch-unresolvable: must say it could not resolve the branch"
+  assert_contains "$ERR" 'detached HEAD' \
+    "branch-unresolvable: must name why the worktree gave no branch"
+  assert_contains "$ERR" 'the legacy branch fm/task-x1 does not exist' \
+    "branch-unresolvable: must name the legacy candidate it looked for"
+  pass "fm-review-diff refuses loudly and names every branch it looked for"
+}
+
 test_pr_meta_uses_pr_head_not_stale_local
 test_pr_meta_fetches_pull_head_without_recorded_sha
 test_stale_recorded_pr_head_loses_to_fetched_pull_head
 test_no_pr_meta_uses_local_branch
 test_unreachable_pr_head_falls_back_with_warning
+test_jira_keyed_branch_is_diffed
+test_legacy_fm_branch_still_diffed
+test_worktree_branch_beats_stale_legacy_ref
+test_unresolvable_branch_refuses_loudly
