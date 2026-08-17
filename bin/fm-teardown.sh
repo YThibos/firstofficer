@@ -34,6 +34,13 @@
 # device. It refuses and preserves task state when that proof fails; otherwise
 # it removes the task's check, trust record, PR sidecar, publication record, and
 # quarantine entries with the rest of the volatile state.
+# The same sweep deregisters the per-harness turn-end hook before clearing state:
+# state/<id>.grok-turnend-token and state/<id>.kimi-turnend-token each hold the
+# basename of this task's entry in that harness's global hook registry, written
+# by bin/fm-spawn.sh. Teardown reads the token, removes exactly that registry
+# entry, and then removes the token file, so a hook is never orphaned and never
+# guessed at from ambient CLI state. A token naming anything outside a plain
+# [A-Za-z0-9._-] basename is ignored rather than acted on.
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.

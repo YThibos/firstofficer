@@ -208,13 +208,16 @@ fetch_once() {
 }
 
 # Which watched instruction paths changed between HEAD and BASE (comma list).
-# These are the files a running agent actually reads or runs: its instructions
-# (AGENTS.md, which CLAUDE.md symlinks), its agent-loaded skills
-# (.agents/skills/), and its tooling (bin/). Public skills/ is installer-facing
-# and intentionally not part of this watched instruction surface.
+# These are the files a running agent actually reads or runs: the always-loaded
+# anchor it operates from (CLAUDE.md), the full contract it reads on demand
+# (AGENTS.md), its agent-loaded skills (.agents/skills/), and its tooling (bin/).
+# CLAUDE.md is watched in its own right rather than as an alias: it is a real
+# fork-owned file, so an anchor-only change is exactly the change a running agent
+# must be told to re-read. Public skills/ is installer-facing and intentionally
+# not part of this watched instruction surface.
 changed_instr() {
   local dir=$1 base=$2 p out=""
-  for p in AGENTS.md bin .agents/skills; do
+  for p in CLAUDE.md AGENTS.md bin .agents/skills; do
     if ! git -C "$dir" diff --quiet HEAD "$base" -- "$p" 2>/dev/null; then
       out="$out${out:+, }$p"
     fi

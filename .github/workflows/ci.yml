@@ -355,8 +355,11 @@ jobs:
       - name: Symlinks must stay intact
         run: |
           set -eu
-          [ "$(readlink CLAUDE.md)" = "AGENTS.md" ] || { echo "::error::CLAUDE.md must be a symlink to AGENTS.md"; exit 1; }
           [ "$(readlink .claude/skills)" = "../.agents/skills" ] || { echo "::error::.claude/skills must be a symlink to ../.agents/skills"; exit 1; }
+      - name: Always-loaded anchor must stay a real file inside its budget
+        run: |
+          set -eu
+          bash tests/fm-anchor-budget.test.sh
       - name: Personal fleet paths must not be tracked
         run: |
           set -eu
