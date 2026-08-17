@@ -9,8 +9,10 @@
 #   - every other off-default state is left untouched and reported as a loud,
 #     quantified "STUCK: ... N commits behind ... - needs attention" warning
 #     instead of a quiet skip.
-# The pre-existing fast-forward / already-current / local-only / no-origin paths
-# must be unchanged, and bootstrap must relay the new outcomes as FLEET_SYNC lines.
+# The pre-existing fast-forward / already-current / no-origin paths must be
+# unchanged, and bootstrap must relay the new outcomes as FLEET_SYNC lines.
+# Delivery mode is deliberately not a skip reason: local-only projects publish, so
+# their clones are refreshed like any other and only an absent origin is skipped.
 #
 # It also pins the orphaned .git/packed-refs.lock recovery in the fetch step
 # (fetch_with_packed_refs_lock_guard, backed by bin/fm-lock-lib.sh's shared
@@ -355,7 +357,10 @@ test_no_origin_skipped() {
   pass "no-origin clone is skipped (benign), not flagged STUCK"
 }
 
-test_local_only_skipped() {
+# local-only projects publish to a remote now, so their clones go stale after a
+# merge exactly like any other mode's. Delivery mode must no longer be a skip
+# reason: only a genuinely absent origin is.
+test_local_only_clone_is_synced_not_skipped_by_mode() {
   local home clone out
   home=$(new_home)
   clone=$(build_pair "$home" iota)
@@ -365,9 +370,12 @@ test_local_only_skipped() {
 
   out=$(run_sync "$home" "$clone")
 
-  assert_contains "$out" "iota: skipped: local-only project" "local-only clone is skipped as before"
-  assert_not_contains "$out" "STUCK" "local-only skip is not escalated to STUCK"
-  pass "local-only clone is skipped (benign), not flagged STUCK"
+  assert_not_contains "$out" "skipped: local-only project" "delivery mode is no longer a fleet-sync skip reason"
+  assert_contains "$out" "iota:" "local-only clone produced no report line at all"
+  assert_not_contains "$out" "STUCK" "a clean local-only clone must not be flagged STUCK"
+  [ "$(head_sha "$clone")" = "$(git -C "$home/work-iota" rev-parse HEAD)" ] \
+    || fail "local-only clone was not fast-forwarded to origin"
+  pass "local-only clone is fast-forwarded, not skipped by mode"
 }
 
 test_single_project_by_bare_name_resolves() {
@@ -612,7 +620,7 @@ test_diverged_is_stuck_untouched
 test_on_default_clean_behind_fast_forwards
 test_already_current_unchanged
 test_no_origin_skipped
-test_local_only_skipped
+test_local_only_clone_is_synced_not_skipped_by_mode
 test_single_project_by_bare_name_resolves
 test_single_project_by_bare_name_ignores_cwd_shadow
 test_single_project_by_projects_relative_name_resolves

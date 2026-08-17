@@ -151,16 +151,18 @@ SH
   chmod +x "$case_dir/fakebin/tasks-axi"
 }
 
-# Write a meta file for the task. Args: case_dir mode kind
+# Write a meta file for the task. Args: case_dir mode kind [extra-key=value ...]
 write_meta() {
   local case_dir=$1 mode=$2 kind=$3
+  shift 3
   fm_write_meta "$case_dir/state/task-x1.meta" \
     "window=firstmate:fm-task-x1" \
     "endpoint_task_id=task-x1" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
     "kind=$kind" \
-    "mode=$mode"
+    "mode=$mode" \
+    "$@"
 }
 
 # Commit something on the worktree's task branch. Args: case_dir [message]
@@ -496,6 +498,44 @@ run_teardown() {
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" task-x1 "$@"
+}
+
+# A borrowed worktree belongs to a different, still-live task: a reviewer joined it
+# to read the work in place. Teardown of the borrower must leave it completely
+# alone. Returning it, detaching it, deleting its branch, or removing its turn-end
+# hook would destroy work this task never made, and the unlanded-work refusal must
+# not fire on the owner's commits either, or a reviewer could never be cleaned up.
+test_borrowed_worktree_is_left_untouched() {
+  local case_dir rc branch_before head_before
+  case_dir=$(make_case borrowed-worktree)
+  write_meta "$case_dir" local-only ship borrowed_worktree=1
+  wt_commit "$case_dir" "the owner's unpushed work"
+  mkdir -p "$case_dir/wt/.claude"
+  printf '{}\n' > "$case_dir/wt/.claude/settings.local.json"
+  branch_before=$(git -C "$case_dir/wt" rev-parse --abbrev-ref HEAD)
+  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "borrowed: teardown should succeed over another task's unpushed work"
+  ! grep -q REFUSED "$case_dir/stderr" \
+    || fail "borrowed: teardown refused over the owning task's unlanded work"
+  assert_contains "$(cat "$case_dir/stdout")" "is borrowed from another task and is left untouched" \
+    "borrowed: teardown did not say it left the worktree alone"
+  [ -d "$case_dir/wt" ] || fail "borrowed: teardown removed another task's worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse --abbrev-ref HEAD)" = "$branch_before" ] \
+    || fail "borrowed: teardown detached another task's worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+    || fail "borrowed: teardown moved another task's HEAD"
+  git -C "$case_dir/project" rev-parse --verify --quiet "refs/heads/$branch_before" >/dev/null \
+    || fail "borrowed: teardown deleted another task's branch"
+  assert_present "$case_dir/wt/.claude/settings.local.json" \
+    "borrowed: teardown removed the owning task's turn-end hook"
+  assert_absent "$case_dir/state/task-x1.meta" "borrowed: teardown left its own metadata behind"
+  pass "a borrowed worktree is left untouched, with its branch, commits, and hook intact"
 }
 
 test_local_only_fork_remote_allows() {
@@ -1378,6 +1418,7 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
 }
 
 test_local_only_fork_remote_allows
+test_borrowed_worktree_is_left_untouched
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses

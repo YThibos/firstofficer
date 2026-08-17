@@ -7,6 +7,7 @@
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab] [--branch <name>]
+#        fm-brief.sh <task-id> <repo-name> --craft-review <reviewed-task-id>
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --branch <name> sets the ship branch name the crewmate creates and works on
 #   (e.g. feature/JUSTMD-123). It applies only to ship briefs (not --scout or
@@ -16,6 +17,12 @@
 #   before dispatch.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   --craft-review <reviewed-task-id> writes the independent craftsmanship review
+#   contract: the reviewer reads the named ship task's diff, writes findings to
+#   data/<task-id>/craftsmanship-review.md, and records the verdict that
+#   bin/fm-craft-review.sh gates publication on. It never branches, pushes,
+#   merges, or edits the code it reviews. The remit itself is owned by the
+#   craftsmanship-review skill, which the generated brief requires it to load.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -37,8 +44,12 @@
 # and AGENTS.md task lifecycle):
 #   no-mistakes  implement -> /no-mistakes pipeline -> PR -> captain merge (default)
 #   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> captain merge
-#   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
-#                captain approves, firstmate merges to local main
+#   local-only   implement -> pipeline with push/pr/ci skipped -> independent
+#                craftsmanship review -> publish the branch, no merge request;
+#                the captain's separate "ship it" word authorises the PR later
+# The local-only name no longer describes that mode's delivery step, and is kept
+# deliberately; bin/fm-project-mode.sh's header owns why. A project with no remote
+# at all is the one case the name still fits: it ends at the guarded local merge.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
 # Every scaffold's status protocol distinguishes the configured
@@ -101,11 +112,19 @@ KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
 BRANCH=""
+REVIEWED_ID=""
 POS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --scout) KIND=scout; shift ;;
     --secondmate) KIND=secondmate; shift ;;
+    --craft-review)
+      KIND=craft-review
+      shift
+      [ "$#" -gt 0 ] || { echo "error: --craft-review requires the reviewed task id" >&2; exit 1; }
+      REVIEWED_ID=$1
+      shift
+      ;;
     --herdr-lab) HERDR_LAB=1; shift ;;
     --no-projects) NO_PROJECTS=1; shift ;;
     --branch)
@@ -125,7 +144,16 @@ if [ -n "$BRANCH" ] && [ "$KIND" != ship ]; then
 fi
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
-  echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
+  echo "error: --herdr-lab applies only to crewmate ship, scout, or craft-review briefs" >&2
+  exit 1
+fi
+
+# A worker cannot review its own code, so the reviewer and the reviewed task can
+# never be the same task. Catching it here keeps the impossible brief from being
+# written at all, rather than leaving bin/fm-craft-review.sh to refuse the verdict
+# after a whole review has been run.
+if [ "$KIND" = craft-review ] && [ "$REVIEWED_ID" = "$ID" ]; then
+  echo "error: --craft-review cannot review its own task $ID; the reviewer must be a separate task" >&2
   exit 1
 fi
 
@@ -145,6 +173,12 @@ shell_quote() {
 }
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
+# Every command a brief hands a crewmate resolves this home explicitly, because
+# the crewmate runs outside it and its own FM_HOME would otherwise pick the code
+# root's state dir instead of the home that dispatched the task.
+STATE_ENV="FM_STATE_OVERRIDE=$(shell_quote "$STATE")"
+CRAFT_REVIEW_BIN=$(shell_quote "$FM_ROOT/bin/fm-craft-review.sh")
+REVIEW_DIFF_BIN=$(shell_quote "$FM_ROOT/bin/fm-review-diff.sh")
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -321,6 +355,88 @@ echo "scaffolded: $BRIEF (scout; replace {TASK})"
 exit 0
 fi
 
+if [ "$KIND" = craft-review ]; then
+FINDINGS_DOC="$DATA/$ID/craftsmanship-review.md"
+FINDINGS_DOC_QUOTED=$(shell_quote "$FINDINGS_DOC")
+cat > "$BRIEF" <<EOF
+You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+
+# Task
+Review the craftsmanship of ship task $REVIEWED_ID on $REPO, which has passed validation and is waiting on you before it may publish its branch.
+{TASK}
+
+$HERDR_SECTION
+
+# Your remit is owned by a skill - load it first
+Your FIRST action is to read \`$FM_ROOT/.agents/skills/craftsmanship-review/SKILL.md\`.
+It owns your complete remit: the Clean Code and domain-driven-design bar, the captain's concrete style rules, the house writing rules, and the list of AI tells to flag.
+If you cannot read it, append \`blocked: craftsmanship review remit is unreadable\` to the status file and stop.
+Never review from memory: an unreviewed branch waiting is a better outcome than a review that held the wrong bar.
+
+These boundaries hold whether or not that skill loaded:
+
+- This is NOT a defect hunt. The validation pipeline's own review, test, document, and lint steps already ran and own correctness. Your question is whether the code reads as a craftsman wrote it.
+- You never publish, never open a PR, and never merge.
+- You never edit the code you review. You report findings; the implementing worker fixes them.
+  You are sharing that worker's checkout, so this is a hard safety rule, not a preference.
+- You never record a verdict for a task you implemented yourself.
+
+# Setup
+You are in task $REVIEWED_ID's OWN worktree, on the branch it built the work on. This is deliberate: one story keeps one checkout, so every step of it happens here.
+You did not create this checkout and you do not own it. Task $REVIEWED_ID is idle while you work, and it resumes here afterwards to fix what you find.
+
+**Verify before anything else.** Run \`pwd -P\`, \`git rev-parse --show-toplevel\`, and \`git status --porcelain\`.
+The first two must agree on a worktree that is not the primary checkout firstmate operates from, and \`git status --porcelain\` must be clean apart from agent-owned files such as \`.claude/\`.
+Uncommitted changes here mean either the implementing worker is still active in this directory or someone edited the code under review, and both break the review.
+If either check fails, append \`blocked: {which check failed and what it showed}\` to the status file and stop.
+
+This is a REVIEW task: the deliverables are a findings document and a recorded verdict, not a code change.
+Read the work under review with:
+   \`$STATE_ENV $REVIEW_DIFF_BIN $REVIEWED_ID\`
+Read enough surrounding code here to judge placement, ordering, and naming in context, not just the changed lines.
+
+# Rules
+1. Never push to any remote, never open a PR, and never merge.
+2. **Write nothing in this worktree.** Not a file, not a fix, not a scratch note, not a commit, not a branch, not a stash, and never \`git checkout\` or \`git rebase\`.
+   This is the whole reason it is safe for you to be in another task's checkout, and the verdict recorder refuses while the tree is dirty.
+   The only files you may write are the findings document, the verdict record, and the status file below, all of which live outside this worktree.
+   If you need to run something that writes, use your own temporary directory outside the worktree.
+3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+4. Report status by appending one line:
+   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
+   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
+   would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
+   FYI progress lines; firstmate reads your pane for that.
+   Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
+   known external wait you expect to clear on its own: firstmate then leaves your idle pane alone
+   and rechecks it on a long cadence instead of treating it as a possible wedge.
+   Use \`blocked:\` when you are stuck and need help.
+5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+6. A question about what the code SHOULD do is not yours to settle: it belongs to the captain's accepted
+   task criteria. Append \`needs-decision: {summary of options}\` and stop rather than turning a product
+   question into a craftsmanship finding.
+   When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
+7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
+   every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
+   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. You make no commits at all here, so the repository's authorship rules never come into play for you:
+   every commit on this branch is the implementing worker's, authored in the captain's name only.
+
+# Definition of done
+Write every finding to \`$FINDINGS_DOC\`, each with the file and line, what reads as uncraftsmanlike, and what shape the code should take instead.
+Recommend the change; do not make it.
+
+Then record the verdict, which is what decides whether the branch may be published:
+   \`$STATE_ENV $CRAFT_REVIEW_BIN record $REVIEWED_ID --reviewer $ID --verdict pass --findings $FINDINGS_DOC_QUOTED\`
+Use \`--verdict findings\` instead when the work is not publishable yet.
+Record \`pass\` only when you would be content to maintain this code yourself; it is pinned to the exact commit you reviewed, so it cannot leak onto later work.
+Finally append \`done: craftsmanship review of $REVIEWED_ID: {pass or findings}, {one-line conclusion}\` to the status file and stop.
+EOF
+echo "scaffolded: $BRIEF (craft-review of $REVIEWED_ID; replace {TASK})"
+exit 0
+fi
+
 # Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief because the worker never owns approval decisions;
 # firstmate applies the authority contract in AGENTS.md section 7, so discard it.
@@ -333,6 +449,21 @@ BRANCH_NAME=${BRANCH:-'{BRANCH}'}
 read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
+
+# Both pipeline-running modes hand the worker the same gate-driving contract, so
+# it is written once here rather than restated in each definition of done.
+IFS= read -r -d '' PIPELINE_GATES <<'EOF' || true
+You drive no-mistakes by responding to its gates, not by implementing fixes.
+Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and `no-mistakes axi run --help` plus the `help` lines in each `axi` response are authoritative and version-matched to the installed binary.
+Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
+
+Two firstmate-specific rules layer on top of that guidance:
+- ask-user findings are never yours to answer: escalate to firstmate (rule 6) and stop.
+  Firstmate applies the authority contract in its `AGENTS.md` and obtains any required captain decision.
+  When the decision comes back, feed it to the gate with `no-mistakes axi respond` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
+- Avoid `--yes`: it would silently bypass firstmate's authority check and any required captain escalation.
+EOF
+PIPELINE_GATES=${PIPELINE_GATES%$'\n'}
 
 case "$MODE" in
   direct-PR)
@@ -347,15 +478,37 @@ Do NOT run /no-mistakes. The configured merge authority decides whether to merge
 EOF
     ;;
   local-only)
-    SETUP2=""
-    RULE1="1. Never push to any remote and never open a PR. Work only on your \`$BRANCH_NAME\` branch; firstmate handles the merge into local \`main\`."
+    SETUP2="
+2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`.
+   If this project has no \`origin\` remote at all, the pipeline has nowhere to push: skip stage 2's validation run and take stage 5's no-remote outcome instead."
+    RULE1="1. Never push to the default branch (publish only your \`$BRANCH_NAME\` branch, and only at stage 5 below). Never open a PR or merge request, and never merge."
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
-This project ships **local-only**: no remote, no PR, no pipeline.
-The task is complete only when committed on your branch \`$BRANCH_NAME\`. Do NOT push, do NOT open a PR, do NOT merge.
-Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done: ready in branch $BRANCH_NAME\` to the status file and stop.
-The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
+This project ships **local-only**: you validate, an independent reviewer checks craftsmanship, then you publish your branch so the captain can look at it on the real repository.
+That mode name is kept for compatibility and no longer means unpublished - publishing IS the delivery.
+What you must NOT do is open the merge request: the captain gives a separate "ship it" word for that later.
+
+Work these stages in order on your branch \`$BRANCH_NAME\`.
+
+1. Implement and commit.
+   Keep the branch a clean fast-forward onto the current default branch - if the default branch has advanced, rebase onto it.
+2. Validate without publishing. Confirm the flag spelling against \`no-mistakes axi run --help\`, then run the pipeline with its publication and merge-request steps skipped:
+   \`no-mistakes axi run --intent '{what you set out to accomplish}' --skip push,pr,ci\`
+   It stops after the lint step, having pushed nothing.
+3. Stop for the independent craftsmanship review.
+   Append \`done: validated, ready for craftsmanship review\` to the status file and stop.
+   Firstmate dispatches a reviewer that did not write this code. Do not review your own work, and do not publish yet.
+4. When firstmate returns findings, fix them on this branch, run stage 2 again over the new commits, and report ready for re-review.
+   The review is pinned to the exact commit it passed, so every new commit needs a fresh one.
+5. Publish, and only once the review gate lets you:
+   \`$STATE_ENV $CRAFT_REVIEW_BIN verify $ID\`
+   If it refuses, do NOT publish: append \`blocked: {the exact reason it gave}\` to the status file and stop.
+   Once it passes, publish the branch with the pipeline's own push step and nothing beyond it:
+   \`no-mistakes axi run --intent '{what you set out to accomplish}' --skip pr,ci\`
+   Then append \`done: branch $BRANCH_NAME published\` and stop. Do NOT open a PR or merge request.
+   If this project has no remote at all, publication does not apply: append \`done: reviewed and ready in branch $BRANCH_NAME\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
+
+$PIPELINE_GATES
 EOF
     ;;
   *)  # no-mistakes (default)
@@ -368,15 +521,7 @@ The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 
-You drive no-mistakes by responding to its gates, not by implementing fixes.
-Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
-Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
-
-Two firstmate-specific rules layer on top of that guidance:
-- ask-user findings are never yours to answer: escalate to firstmate (rule 6) and stop.
-  Firstmate applies the authority contract in its \`AGENTS.md\` and obtains any required captain decision.
-  When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
-- Avoid \`--yes\`: it would silently bypass firstmate's authority check and any required captain escalation.
+$PIPELINE_GATES
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF

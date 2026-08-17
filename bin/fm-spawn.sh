@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--borrow-worktree <path>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
+#   --borrow-worktree <path> joins a live worktree that another task owns instead
+#   of allocating one, so every step of one story shares one checkout. It is for a
+#   task that only reads, such as the independent craftsmanship reviewer: the
+#   borrower reports findings and changes nothing, and the owning task must be idle
+#   while it runs. The spawn records borrowed_worktree=1 so teardown never returns,
+#   detaches, prunes, or cleans that worktree, and it refuses any harness whose
+#   turn-end signal is a fixed-name file inside the worktree, because writing that
+#   file would hijack the owning task's own signal.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -179,6 +187,7 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+BORROW_WT=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -195,6 +204,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      borrow-worktree) BORROW_WT=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -203,6 +213,8 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --borrow-worktree) want_value=borrow-worktree ;;
+    --borrow-worktree=*) BORROW_WT=${a#--borrow-worktree=} ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -223,6 +235,14 @@ case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
+
+# A borrowed worktree is a live worktree another task owns, joined so every step of
+# one story shares one checkout. Only a task that reads may borrow, and a secondmate
+# is the opposite of that: it owns a whole firstmate home of its own.
+if [ -n "$BORROW_WT" ] && [ "$KIND" = secondmate ]; then
+  echo "error: --borrow-worktree does not apply to a secondmate spawn; a secondmate owns its own home" >&2
+  exit 1
+fi
 
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else
@@ -521,6 +541,19 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+# A borrower writes nothing into the worktree it joined, and a worktree-resident
+# turn-end signal has one fixed name: writing it would silently hijack the owning
+# task's signal and leave firstmate blind to that task's turns. Refuse those
+# harnesses rather than breaking the owner's supervision quietly.
+if [ -n "$BORROW_WT" ]; then
+  case "$HARNESS" in
+    claude*|opencode*|grok*|kimi*)
+      echo "error: harness $HARNESS writes its turn-end signal into the worktree under one fixed name, so joining another task's worktree would hijack that task's turn-end signal; use codex, pi, or pi-signed for a worktree-sharing spawn, whose signal lives outside the worktree" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
@@ -1265,7 +1298,17 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ -n "$BORROW_WT" ] && [ "$KIND" != secondmate ]; then
+  # Join the owning task's live worktree instead of allocating one. It must already
+  # be a worktree root and, like any task worktree, distinct from the primary
+  # checkout; validate before the pane moves so a bad path never reaches an agent.
+  WT=$(cd "$BORROW_WT" 2>/dev/null && pwd -P) || {
+    echo "error: --borrow-worktree path does not exist: $BORROW_WT" >&2
+    exit 1
+  }
+  validate_spawn_worktree "--borrow-worktree" "$T"
+  spawn_send_text_line "$WT_TARGET" "cd $(printf '%q' "$WT")"
+elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -1337,6 +1380,10 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+# A borrower writes nothing into the worktree it joined, so its turn-end signal
+# must be one that lives outside it. The harness gate above already refused every
+# harness whose signal is worktree-resident, so the remaining ones (codex's notify=
+# and pi's state-resident extension) are installed by the same branches below.
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
@@ -1472,6 +1519,9 @@ META_WINDOW=$T
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # borrowed_worktree=1 means worktree= belongs to another task. Teardown must
+  # never return, detach, or prune it, and must leave the owner's hook files alone.
+  [ -z "$BORROW_WT" ] || echo "borrowed_worktree=1"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).

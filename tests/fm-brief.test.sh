@@ -228,13 +228,161 @@ test_faster_paths_use_configured_authority_without_stacked_review() {
   id="brief-local-authority-a4"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
-  assert_grep "The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path." "$brief" \
-    "local-only brief lost configured merge authority and guarded landing"
+  assert_grep "the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path" "$brief" \
+    "local-only brief lost configured merge authority on the remote-less landing"
   assert_no_grep "The captain approves the ready branch" "$brief" \
     "local-only brief hard-coded captain-only authority"
   assert_no_grep "Firstmate then reviews your branch diff" "$brief" \
-    "local-only brief retained a personal review stacked on the selected delivery path"
+    "local-only brief retained firstmate's own review stacked on the selected delivery path"
   pass "fm-brief.sh: faster paths use configured authority without stacked review"
+}
+
+# The delivery contract that this whole mode exists to carry: the worker publishes
+# its branch and stops short of the merge request. The historical "never push" and
+# "no remote, no PR, no pipeline" wording is what silently stranded finished
+# branches, so its absence is asserted as directly as its replacement.
+test_local_only_brief_publishes_and_stops_before_the_merge_request() {
+  local home id brief
+  home="$TMP_ROOT/publish-home"
+  write_registry "$home"
+  id="brief-local-publish-p1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-9 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_no_grep "Never push to any remote" "$brief" \
+    "local-only brief still forbids pushing, which strands the finished branch"
+  assert_no_grep "no remote, no PR, no pipeline" "$brief" \
+    "local-only brief still declares the mode unpublished and unvalidated"
+  assert_no_grep "Do NOT push" "$brief" "local-only brief still forbids the publication step"
+  assert_grep "publish your branch" "$brief" "local-only brief does not instruct publication"
+  assert_grep 'done: branch feature/JUSTMD-9 published' "$brief" \
+    "local-only brief has no publication completion gate naming the branch"
+  assert_grep "Do NOT open a PR or merge request" "$brief" \
+    "local-only brief does not forbid opening the merge request"
+  assert_grep 'separate "ship it" word' "$brief" \
+    "local-only brief does not say who authorises the merge request later"
+  pass "fm-brief.sh: local-only brief publishes the branch and forbids the merge request"
+}
+
+# Validation runs, and it runs in the shape that stops before publication: the
+# pipeline's own push step is what publishes, so a delivery run must skip it along
+# with the merge-request and CI steps that belong to the later ship-it stage.
+test_local_only_brief_runs_the_pipeline_stopping_before_publication() {
+  local home id brief
+  home="$TMP_ROOT/pipeline-home"
+  write_registry "$home"
+  id="brief-local-pipeline-p2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-9 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "--skip push,pr,ci" "$brief" \
+    "local-only brief does not stop the validation run before publication"
+  assert_grep "--skip pr,ci" "$brief" \
+    "local-only brief does not publish through the pipeline's own push step"
+  assert_grep "no-mistakes axi run --help" "$brief" \
+    "local-only brief does not send the worker to the authoritative flag reference"
+  assert_grep "Run \`no-mistakes doctor\`" "$brief" \
+    "local-only brief lost the pipeline initialization step it now needs"
+  assert_grep "ask-user findings are never yours to answer" "$brief" \
+    "local-only brief lost the gate-driving contract that pipeline modes share"
+  pass "fm-brief.sh: local-only brief validates with publication skipped"
+}
+
+# The review stage cannot be skipped silently: publication is gated on the
+# verifier, and a refusal is a stop-and-report outcome rather than a warning the
+# worker may publish through.
+test_local_only_brief_gates_publication_on_the_independent_review() {
+  local home id brief
+  home="$TMP_ROOT/review-gate-home"
+  write_registry "$home"
+  id="brief-local-gate-p3"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-9 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "fm-craft-review.sh' verify $id" "$brief" \
+    "local-only brief does not gate publication on the review verifier"
+  assert_grep "If it refuses, do NOT publish" "$brief" \
+    "local-only brief lets the worker publish through a refused review"
+  assert_grep "reviewer that did not write this code" "$brief" \
+    "local-only brief does not require an independent reviewer"
+  assert_grep "Do not review your own work" "$brief" \
+    "local-only brief lets the worker review itself"
+  assert_grep "every new commit needs a fresh one" "$brief" \
+    "local-only brief does not say the review is pinned to its commit"
+  pass "fm-brief.sh: local-only brief gates publication on the independent review"
+}
+
+test_craft_review_brief_states_its_remit_and_boundaries() {
+  local home id brief status
+  home="$TMP_ROOT/craft-home"
+  write_registry "$home"
+  id="brief-craft-c1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --craft-review brief-local-publish-p1 >/dev/null 2>&1
+  status=$?
+  expect_code 0 "$status" "craft-review brief should scaffold cleanly"
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "craft-review brief was not scaffolded"
+  assert_no_grep "EOF" "$brief" "craft-review brief leaked a heredoc EOF marker"
+
+  assert_grep "craftsmanship-review/SKILL.md" "$brief" \
+    "craft-review brief does not point the reviewer at its remit"
+  assert_grep "blocked: craftsmanship review remit is unreadable" "$brief" \
+    "craft-review brief lets an unreadable remit pass as a review"
+  assert_grep "NOT a defect hunt" "$brief" \
+    "craft-review brief does not separate its remit from the pipeline's review step"
+  assert_grep "never publish, never open a PR, and never merge" "$brief" \
+    "craft-review brief does not forbid the reviewer publishing or merging"
+  assert_grep "You never edit the code you review" "$brief" \
+    "craft-review brief lets the reviewer rewrite the code instead of reporting findings"
+  assert_grep "fm-review-diff.sh' brief-local-publish-p1" "$brief" \
+    "craft-review brief does not tell the reviewer how to read the work under review"
+  assert_grep "fm-craft-review.sh' record brief-local-publish-p1 --reviewer $id" "$brief" \
+    "craft-review brief does not have the reviewer record its verdict"
+  pass "fm-brief.sh: craft-review brief carries its remit pointer and hard boundaries"
+}
+
+# One story keeps one checkout: the reviewer reads in the implementing task's own
+# worktree rather than taking one of its own. That is only safe while the reviewer
+# writes nothing there and the two agents are serialised, so the brief must say both.
+test_craft_review_brief_shares_the_implementers_worktree_read_only() {
+  local home id brief
+  home="$TMP_ROOT/craft-colocation-home"
+  write_registry "$home"
+  id="brief-craft-colocated-c4"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --craft-review brief-local-publish-p1 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "in task brief-local-publish-p1's OWN worktree" "$brief" \
+    "craft-review brief does not put the reviewer in the implementer's worktree"
+  assert_no_grep "disposable git worktree" "$brief" \
+    "craft-review brief still gives the reviewer a checkout of its own"
+  assert_grep "Task brief-local-publish-p1 is idle while you work" "$brief" \
+    "craft-review brief does not serialise the two agents"
+  assert_grep "**Write nothing in this worktree.**" "$brief" \
+    "craft-review brief does not forbid writing in the shared worktree"
+  assert_grep "git status --porcelain" "$brief" \
+    "craft-review brief does not have the reviewer check the tree is clean on arrival"
+  assert_grep "not a commit, not a branch, not a stash" "$brief" \
+    "craft-review brief does not name the git writes that would corrupt the shared branch"
+  pass "fm-brief.sh: craft-review brief shares the implementer's worktree read-only"
+}
+
+test_craft_review_refuses_to_review_its_own_task() {
+  local home id out status
+  home="$TMP_ROOT/craft-self-home"
+  write_registry "$home"
+  id="brief-craft-self-c2"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --craft-review "$id" 2>&1); status=$?
+  expect_code 1 "$status" "a self-reviewing craft-review brief must be refused"
+  assert_contains "$out" "cannot review its own task" \
+    "refusal should say the reviewer must be a separate task"
+  assert_absent "$home/data/$id/brief.md" "no brief should be written for a self-review"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-craft-noval-c3 local-proj --craft-review 2>&1); status=$?
+  expect_code 1 "$status" "--craft-review without a reviewed task id must be refused"
+  assert_contains "$out" "requires the reviewed task id" \
+    "refusal should name the missing reviewed task id"
+  pass "fm-brief.sh: --craft-review refuses a self-review and a missing task id"
 }
 
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
@@ -711,6 +859,12 @@ test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
+test_local_only_brief_publishes_and_stops_before_the_merge_request
+test_local_only_brief_runs_the_pipeline_stopping_before_publication
+test_local_only_brief_gates_publication_on_the_independent_review
+test_craft_review_brief_states_its_remit_and_boundaries
+test_craft_review_brief_shares_the_implementers_worktree_read_only
+test_craft_review_refuses_to_review_its_own_task
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete

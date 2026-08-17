@@ -25,6 +25,10 @@
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
+# A task whose meta carries borrowed_worktree=1 (bin/fm-spawn.sh --borrow-worktree)
+# carves out of that check and out of every worktree mutation: it joined a worktree
+# another live task owns, so the branch, the commits, and the turn-end hook there
+# are that owner's, and the owner's own teardown is what checks and returns them.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -149,6 +153,8 @@ KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
+# Set when worktree= belongs to a different, still-live task; see the header.
+BORROWED_WORKTREE=$(grep '^borrowed_worktree=' "$META" | cut -d= -f2- || true)
 
 default_branch() {
   local ref branch
@@ -1110,7 +1116,12 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
-if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+# The unlanded-work check protects the work in a worktree from being discarded with
+# it. A borrowed worktree is not discarded here at all, and the commits in it belong
+# to the owning task, whose own teardown runs this same check against them. Running
+# it for the borrower would only refuse a reviewer's cleanup over someone else's
+# in-progress branch, so it is scoped to the tasks that actually own their worktree.
+if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$BORROWED_WORKTREE" != 1 ]; then
   if validate_worktree_teardown_safety; then
     :
   else
@@ -1125,7 +1136,14 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
 fi
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
+if [ "$BORROWED_WORKTREE" = 1 ]; then
+  # A borrowed worktree is the owning task's live checkout, still carrying that
+  # task's branch, commits, and turn-end hook. Detaching it, deleting that branch,
+  # removing that hook, or returning it to the pool would destroy work this task
+  # never made, so none of it runs here: only this task's own endpoint and state
+  # are cleaned, below.
+  echo "teardown $ID: worktree $WT is borrowed from another task and is left untouched"
+elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
     ORCA_PATH_MATCH_VERIFIED=1
@@ -1239,7 +1257,9 @@ remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token"
-if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
+# Every ship mode publishes now, so the clone is refreshed after any of them.
+# fm-fleet-sync.sh still skips a project with no origin on its own.
+if [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
 echo "teardown $ID complete (window $T, worktree $WT)"

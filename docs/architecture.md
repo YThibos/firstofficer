@@ -140,6 +140,9 @@ The helper's header owns the exact signal detection, relocated-home limitation, 
 
 Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks leave standalone investigation reports at `data/<id>/report.md` and never push.
 The intake and authority contract in `AGENTS.md` owns when separate scout research is warranted.
+A craftsmanship review is a third, narrower crewmate shape: it produces findings and a verdict for one ship task's branch, never a code change, and `CLAUDE.md` section 7 owns where it sits in the delivery contract.
+Unlike the other two it takes no worktree of its own: `bin/fm-spawn.sh --borrow-worktree` joins the implementing task's live worktree so one story keeps one checkout, records `borrowed_worktree=1` so `bin/fm-teardown.sh` never returns, detaches, prunes, or cleans a worktree it does not own, and refuses any harness whose turn-end signal is a fixed-name file inside the worktree because writing it would hijack the owning task's signal.
+The two agents are serialised rather than concurrent, and `bin/fm-craft-review.sh record` refuses on a dirty tree, which is what makes sharing one directory safe.
 
 ## Dispatch profiles
 
@@ -163,7 +166,7 @@ When seeded with `-`, the home is a durable treehouse lease under the secondmate
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
 If returning the lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
 Seeding is transactional: if validation, cloning, initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
-`local-only` projects stay with the main First Officer because they merge into the main local checkout instead of a remote-backed PR path.
+`local-only` projects stay with the main First Officer, which coordinates their craftsmanship review and relays the captain's "ship it" word, and which owns the main local checkout a remote-less one must merge into.
 The same project may appear in multiple secondmate homes when their scopes differ, such as issue triage versus feature development.
 Secondmates are idle by default: after startup recovery reconciles only work already in their own home, an empty queue waits silently for routed tasks, and they never self-initiate surveys or audits.
 When called with `FM_HOME=<this-firstmate-home>` or when `FM_HOME` is already set to the active firstmate home, metadata-routed `fm-send.sh` requests to a live `kind=secondmate` use the live-charter-compatible `from-firstmate` carrier owned by `bin/fm-operational-input.sh`, so the secondmate returns terse answers through status lines and detailed answers through docs plus status pointers instead of replying only in its own chat.
@@ -190,7 +193,10 @@ The `data/secondmates.md` line contract is owned by the [`secondmate-provisionin
 ## Project modes are explicit
 
 `data/projects.md` records each project's delivery mode and optional `+yolo` autonomy flag.
-`no-mistakes` projects run the full validation pipeline, `direct-PR` projects open PRs without that pipeline, and `local-only` projects stay local until firstmate performs an approved fast-forward merge.
+`no-mistakes` projects run the full validation pipeline, `direct-PR` projects open PRs without that pipeline, and `local-only` projects run that pipeline with its publication and merge-request steps skipped, pass an independent craftsmanship review, and then publish the branch without opening a merge request.
+The `local-only` name is a deliberate historical mismatch: renaming a config enum written into every home's registry and into in-flight task metadata would need a migration and would conflict permanently with upstream merges, so `bin/fm-project-mode.sh` documents the mismatch instead.
+That name still describes the one project shape that stays unpublished, a project with no remote at all, which lands through the approved fast-forward merge in `bin/fm-merge-local.sh`.
+The reviewer is a separate crewmate that did not write the code, briefed by `bin/fm-brief.sh --craft-review` with its remit owned by the [`craftsmanship-review` skill](../.agents/skills/craftsmanship-review/SKILL.md), and `bin/fm-craft-review.sh` pins its verdict to the reviewed commit so publication is refused while any later commit is unreviewed.
 When a selected delivery path calls for a diff, `bin/fm-review-diff.sh` refreshes the authoritative base and, when task meta records `pr=`, always fetches and compares against `refs/pull/<n>/head` by default (recorded `pr_head=` is only an offline fallback) before falling back to the local branch with a warning.
 For target project repos shipped through their own no-mistakes pipeline, commits under `.no-mistakes/evidence/` are the pipeline's PR-viewable validation evidence and are expected to stay in the crew branch until the evidence-hosting design changes.
 The firstmate repo itself is the exception: its `.no-mistakes/` directory is local state, stays gitignored, and is rejected by CI if tracked.
