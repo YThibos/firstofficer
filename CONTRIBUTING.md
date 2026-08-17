@@ -36,6 +36,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - This repo is a template for running a firstmate orchestrator agent.
   `CLAUDE.md` is the fork-owned anchor the running agent loads on every turn: it carries every hard rule and every skill load trigger, and its byte budget is enforced by `tests/fm-anchor-budget.test.sh`.
   `AGENTS.md` is the full upstream contract and stays byte-untouched so it keeps merging cleanly from upstream; it is read on demand rather than loaded every session, and a rule-bearing upstream change to it is reconciled into `CLAUDE.md` by hand.
+`tests/fm-anchor-budget.test.sh` pins the reconciled `AGENTS.md` revision, so an upstream merge fails the build until you reconcile the anchor and bump the pin in the same commit.
   `.claude/skills` is a symlink to `.agents/skills`.
 - Only shared material is tracked: `AGENTS.md`, `CLAUDE.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/`.
   `.agents/skills/` holds agent-loaded skills that assume a live firstmate home and carry `metadata.internal: true` so installers such as [skills.sh](https://skills.sh) hide them from discovery; `skills/` holds standalone, installer-facing public skills with no firstmate dependency (see the README's "Two-tier skill layout").

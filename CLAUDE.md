@@ -291,4 +291,5 @@ This anchor is fork-owned and is the file every session pays for, so keep it to 
 Before adding anything here, load `firstmate-coding-guidelines` and apply its knowledge-placement decision tree: situational procedure belongs in a skill with a one-line trigger here, mechanics belong in a script header and `--help`, and configuration schemas belong in `docs/configuration.md`.
 Never restate a contract another file already owns; leave a one-line cross-reference instead.
 `AGENTS.md` is never edited by this fork, so a rule-bearing upstream change is reconciled into this anchor by hand rather than merged into it.
+`tests/fm-anchor-budget.test.sh` pins the reconciled `AGENTS.md` revision and fails once upstream moves past it, so reconcile the anchor and bump that pin in the same commit.
 Preserve every safety boundary when rewriting, and prefer pruning or rewriting an existing entry over appending a new one.
