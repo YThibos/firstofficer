@@ -8,7 +8,7 @@
       "*.txt",
       "docs/examples/*"
     ],
-    "description": "Tracked Markdown-like prose, including symlinked aliases, plus copyable documentation examples. Script headers, executable configuration, generated JSON evidence, and legal text keep their existing code/config/legal owners."
+    "description": "Tracked Markdown-like prose, including the always-loaded agent anchor and any symlinked aliases, plus copyable documentation examples. Script headers, executable configuration, generated JSON evidence, and legal text keep their existing code/config/legal owners."
   },
   "allowedAudiences": [
     "public-product",
@@ -40,6 +40,10 @@
     {
       "source": ".no-mistakes.yaml",
       "target": "docs/documentation-audiences.md"
+    },
+    {
+      "source": "CLAUDE.md",
+      "target": "AGENTS.md"
     },
     {
       "source": "CONTRIBUTING.md",

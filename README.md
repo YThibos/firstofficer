@@ -14,6 +14,13 @@ FirstOfficer takes the solid foundation of its predecessor and propels it into t
 
 Backend-specific setup is linked in [Documentation](#documentation).
 
+## Agent instructions
+
+FirstOfficer's agent reads two instruction files, and the split is deliberate.
+
+- [CLAUDE.md](CLAUDE.md) is the fork-owned anchor loaded on every turn. It carries every hard rule and every skill load trigger, and `tests/fm-anchor-budget.test.sh` keeps it inside the always-loaded byte budget.
+- [AGENTS.md](AGENTS.md) is the full contract, kept byte-untouched so it keeps merging cleanly from upstream. It is read on demand rather than loaded every session.
+
 ## Documentation
 
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional X mode, the files you set, and harness support.

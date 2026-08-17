@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # Bind an intentional custom watcher check to its current bytes.
+#
+# Writes state/<id>.check-trust, the private content binding that authorises the
+# watcher to execute state/<id>.check.sh. The record is a two-line file - the
+# format tag fm-custom-check-v1 followed by the check's SHA-256 - written 0600
+# through an atomic temp-and-rename on the state device, so a check whose bytes
+# changed after registration no longer matches and is refused rather than run.
+# Registration is refused unless the check is an ordinary single-link 0700 file
+# on that same device, and the trust record is removed again if the freshly
+# written binding does not validate. bin/fm-teardown.sh removes it with the rest
+# of the task's volatile state.
+#
 # Usage: fm-check-register.sh <id>
 set -u
 

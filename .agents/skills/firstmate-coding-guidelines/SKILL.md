@@ -57,6 +57,8 @@ The model to copy is `AGENTS.md` section 8's "Away-mode stub": it keeps only the
 
 ## Size discipline
 
+In this fork the always-loaded surface is `CLAUDE.md`, the fork-owned anchor, while `AGENTS.md` stays byte-untouched as the full upstream contract read on demand.
+So wherever the rules below say `AGENTS.md`, an inline addition lands in the anchor, and `tests/fm-anchor-budget.test.sh` is the hard backstop that fails the build when the anchor outgrows its byte budget.
 Apply the decision tree above to every line you are about to add to `AGENTS.md`.
 If an addition needs more than a few lines of conditional detail (detail that matters only in a specific situation) or reference detail (a wire format, an exact schema, historical rationale), you are almost certainly adding it to the wrong file.
 `AGENTS.md`'s token cost is paid by every session of every fleet member, every time, whether or not that session ever hits the situation the new lines describe.

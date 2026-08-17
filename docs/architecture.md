@@ -4,7 +4,7 @@ How firstmate works, in depth.
 
 The [README](../README.md) carries the high-level diagram and a short synopsis.
 This document expands every part of it.
-firstmate's always-loaded operating contract and routing index for conditional procedures is [`AGENTS.md`](../AGENTS.md); this is the human-facing companion.
+firstmate's always-loaded operating contract and routing index for conditional procedures is the fork-owned anchor [`CLAUDE.md`](../CLAUDE.md), with [`AGENTS.md`](../AGENTS.md) as the full contract it reads on demand; this is the human-facing companion.
 
 ## Event-driven supervision
 

@@ -5,6 +5,24 @@
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
+#
+# The private artifacts this arms, all under state/ and all removed by
+# bin/fm-teardown.sh with the rest of the task's volatile state:
+#   <id>.pr-poll               validated data sidecar: the provider-tagged
+#                              identity (provider, url, host, project path,
+#                              number) the static poll reads instead of having
+#                              PR data interpolated into shell source.
+#   <id>.pr-poll-registration  transactional provenance record binding the task,
+#                              its canonical metadata identity, that sidecar, and
+#                              the published poll; a poll whose registration does
+#                              not reconstruct the exact stored URL is refused.
+#   <id>.pr-poll-retirement    identity-bound crash-recovery receipt written for
+#                              one exact validated merged result after its
+#                              durable wake is appended, so a restart can finish
+#                              fixed-path removal without executing state bytes.
+# bin/fm-pr-lib.sh owns the record formats and the atomic write, validation, and
+# retirement helpers; this script only validates its inputs and drives them.
+#
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
