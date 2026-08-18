@@ -546,6 +546,60 @@ test_borrowed_worktree_is_left_untouched() {
   pass "a borrowed worktree is left untouched, with its branch, commits, and hook intact"
 }
 
+# A secondmate home can dispatch a reviewer that borrows the implementing task's
+# live worktree. Forced teardown of that home walks its children, so the child path
+# needs the same carve-out the top-level path has: without it, cleaning up the home
+# returns or deletes a sibling task's checkout along with its unlanded commits.
+test_borrowed_child_worktree_is_left_untouched() {
+  local case_dir rc branch_before head_before sub
+  case_dir=$(make_case borrowed-child-worktree)
+  sub="$case_dir/subhome"
+  mkdir -p "$sub/state" "$sub/data" "$sub/config" "$sub/projects"
+  printf '%s\n' task-x1 > "$sub/.fm-secondmate-home"
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$sub" \
+    "project=$case_dir/project" \
+    "kind=secondmate" \
+    "home=$sub" \
+    "mode=local-only"
+  fm_write_meta "$sub/state/task-r1.meta" \
+    "window=firstmate:fm-task-r1" \
+    "endpoint_task_id=task-r1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "borrowed_worktree=1"
+  wt_commit "$case_dir" "the owner's unpushed work"
+  mkdir -p "$case_dir/wt/.claude"
+  printf '{}\n' > "$case_dir/wt/.claude/settings.local.json"
+  printf '{}\n' > "$sub/state/task-r1.claude-settings.json"
+  branch_before=$(git -C "$case_dir/wt" rev-parse --abbrev-ref HEAD)
+  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "borrowed child: forced secondmate teardown should succeed"
+  [ -d "$case_dir/wt" ] || fail "borrowed child: teardown removed the owning task's worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse --abbrev-ref HEAD)" = "$branch_before" ] \
+    || fail "borrowed child: teardown detached the owning task's worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+    || fail "borrowed child: teardown moved the owning task's HEAD"
+  git -C "$case_dir/project" rev-parse --verify --quiet "refs/heads/$branch_before" >/dev/null \
+    || fail "borrowed child: teardown deleted the owning task's branch"
+  assert_present "$case_dir/wt/.claude/settings.local.json" \
+    "borrowed child: teardown reached into the owning task's worktree"
+  assert_absent "$sub/state/task-r1.claude-settings.json" \
+    "borrowed child: teardown left the borrower's own turn-end hook behind"
+  assert_absent "$sub/state/task-r1.meta" "borrowed child: teardown left the borrower's metadata behind"
+  pass "a child's borrowed worktree survives its secondmate home teardown, branch and commits intact"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -1427,6 +1481,7 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
 
 test_local_only_fork_remote_allows
 test_borrowed_worktree_is_left_untouched
+test_borrowed_child_worktree_is_left_untouched
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses

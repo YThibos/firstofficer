@@ -309,6 +309,23 @@ test_borrow_refuses_a_missing_worktree() {
   pass "--borrow-worktree refuses a path that is not there"
 }
 
+# The orca backend allocates a managed worktree of its own, and teardown leaves a
+# borrowed worktree untouched, so a borrowing orca spawn would abandon that
+# allocation forever. It must be refused before anything is allocated.
+test_borrow_refuses_the_orca_backend() {
+  local rec id out status
+  id=borrow-orca-z8
+  rec=$(make_settle_case borrow-orca "$id" 0)
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id" --backend orca --borrow-worktree "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "borrowing on the orca backend must be refused"
+  assert_contains "$out" "--borrow-worktree does not apply to a backend=orca spawn"     "refusal did not explain that orca allocates its own worktree"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused borrowing orca spawn still recorded metadata"
+  pass "--borrow-worktree refuses the orca backend, so no orca worktree is allocated and abandoned"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_borrowed_worktree_is_joined_and_marked
@@ -317,5 +334,6 @@ test_raw_claude_launch_without_the_placeholder_warns
 test_borrowing_claude_keeps_the_owners_hook_intact
 test_borrow_refuses_an_unverified_harness
 test_borrow_refuses_a_missing_worktree
+test_borrow_refuses_the_orca_backend
 
 echo "# all fm-spawn-worktree-settle tests passed"

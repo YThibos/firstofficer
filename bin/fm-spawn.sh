@@ -269,6 +269,13 @@ if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=cmux does not support --secondmate spawns yet" >&2
   exit 1
 fi
+# The orca backend allocates its own managed worktree before a borrower could join
+# one, and teardown leaves a borrowed worktree untouched, so that allocation would
+# leak permanently. Refuse here, before anything is allocated.
+if [ "$BACKEND" = orca ] && [ -n "$BORROW_WT" ]; then
+  echo "error: --borrow-worktree does not apply to a backend=orca spawn; orca allocates its own worktree" >&2
+  exit 1
+fi
 if [ "$BACKEND" = orca ]; then
   fm_backend_orca_runtime_check || exit 1
 fi
