@@ -89,6 +89,7 @@ Confirm the implementing worker has actually stopped first: the two share one di
 `claude`, `codex`, `pi`, and `pi-signed` can share a worktree, because each keys its turn-end signal on the task id and stores it outside the checkout.
 The spawn refuses `opencode`, `grok`, and `kimi`: nobody has measured what they do in a shared worktree, and a wrong guess would hijack the implementer's own signal.
 A refusal there is a real blocker to report, not a reason to give the reviewer its own checkout instead.
+`--borrow-worktree` is also refused on a `backend=orca` spawn, because orca allocates its own managed worktree.
 Both agents raise the folder-trust prompt independently on first launch in a fresh worktree, so clear it in the reviewer's pane too rather than assuming the implementer already cleared it for that directory.
 
 ## Judging the review as firstmate
@@ -96,3 +97,4 @@ Both agents raise the folder-trust prompt independently on first launch in a fre
 The verdict is pinned to the commit that was reviewed, so any later commit - including the fix for these findings - invalidates it and needs a fresh review.
 Route findings back to the implementing worker, which fixes them on its own branch, and then dispatch the re-review rather than accepting the stale pass.
 The worker under review never records its own verdict, and a review that cannot run is a blocker to report, never a reason to publish unreviewed.
+Tear the reviewer down before the implementing task: the owner's teardown refuses while a live task still borrows its worktree, because returning it would kill the reviewer mid-review.
