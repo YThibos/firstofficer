@@ -600,6 +600,97 @@ test_borrowed_child_worktree_is_left_untouched() {
   pass "a child's borrowed worktree survives its secondmate home teardown, branch and commits intact"
 }
 
+# The other side of the same carve-out: the owning task's teardown returns the
+# worktree, which kills every process in it and hands the directory back to the
+# pool. While a reviewer is still borrowing it, that would kill it mid-review and
+# leave its meta pointing at a checkout an unrelated task may already own.
+test_owner_teardown_refuses_while_a_borrower_is_live() {
+  local case_dir rc
+  case_dir=$(make_case owner-with-borrower)
+  write_meta "$case_dir" local-only ship
+  fm_write_meta "$case_dir/state/task-r1.meta" \
+    "window=firstmate:fm-task-r1" \
+    "endpoint_task_id=task-r1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "borrowed_worktree=1"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "owner-with-borrower: teardown should refuse while a borrower is live"
+  assert_contains "$(cat "$case_dir/stderr")" "task-r1" \
+    "owner-with-borrower: the refusal does not name the borrowing task"
+  [ -d "$case_dir/wt" ] || fail "owner-with-borrower: teardown removed a borrowed worktree"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "owner-with-borrower: refused teardown still cleared its own metadata"
+  pass "the owning task's teardown refuses while another task is borrowing its worktree"
+}
+
+# A borrower living in a secondmate's home is just as live, so the owner's refusal
+# must see it too - otherwise the guard only holds for flat, single-home fleets.
+test_owner_teardown_refuses_for_a_borrower_in_a_child_home() {
+  local case_dir rc sub
+  case_dir=$(make_case owner-with-child-borrower)
+  sub="$case_dir/subhome"
+  mkdir -p "$sub/state"
+  write_meta "$case_dir" local-only ship
+  fm_write_meta "$case_dir/state/task-s1.meta" \
+    "window=firstmate:fm-task-s1" \
+    "endpoint_task_id=task-s1" \
+    "worktree=$sub" \
+    "project=$case_dir/project" \
+    "kind=secondmate" \
+    "home=$sub" \
+    "mode=local-only"
+  fm_write_meta "$sub/state/task-r1.meta" \
+    "window=firstmate:fm-task-r1" \
+    "endpoint_task_id=task-r1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "borrowed_worktree=1"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "child borrower: teardown should refuse while a borrower in a child home is live"
+  assert_contains "$(cat "$case_dir/stderr")" "task-r1" \
+    "child borrower: the refusal does not name the borrowing task in the child home"
+  pass "the owner's teardown refuses for a borrower living in a secondmate home"
+}
+
+# The guard is a refusal, not a lock: --force stays the one explicit override.
+test_owner_teardown_force_overrides_a_live_borrower() {
+  local case_dir rc
+  case_dir=$(make_case owner-borrower-force)
+  write_meta "$case_dir" local-only ship
+  fm_write_meta "$case_dir/state/task-r1.meta" \
+    "window=firstmate:fm-task-r1" \
+    "endpoint_task_id=task-r1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "borrowed_worktree=1"
+
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "owner-borrower-force: --force should tear the owner down anyway"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "owner-borrower-force: teardown still refused under --force"
+  pass "--force still tears down an owner whose worktree is borrowed"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -1482,6 +1573,9 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
 test_local_only_fork_remote_allows
 test_borrowed_worktree_is_left_untouched
 test_borrowed_child_worktree_is_left_untouched
+test_owner_teardown_refuses_while_a_borrower_is_live
+test_owner_teardown_refuses_for_a_borrower_in_a_child_home
+test_owner_teardown_force_overrides_a_live_borrower
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses

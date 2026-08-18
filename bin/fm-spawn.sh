@@ -1352,6 +1352,26 @@ if [ -n "$BORROW_WT" ] && [ "$KIND" != secondmate ]; then
   }
   validate_spawn_worktree "--borrow-worktree" "$T"
   spawn_send_text_line "$WT_TARGET" "cd $(printf '%q' "$WT")"
+
+  # Sending the cd is not the same as arriving there. If it never takes effect -
+  # the pane's shell is not ready yet, the backend drops the line, the path goes
+  # away between validation and execution - the agent would launch with
+  # --dangerously-skip-permissions in the primary checkout while state/<id>.meta
+  # claims the borrowed worktree. Confirm the pane's own cwd before launching, and
+  # fail loudly rather than let that mismatch through.
+  borrow_arrived=
+  for _ in $(seq 1 "${FM_BORROW_CD_POLLS:-60}"); do
+    p=$(spawn_current_path "$WT_TARGET" || true)
+    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT" ]; then
+      borrow_arrived=1
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$borrow_arrived" ]; then
+    echo "error: the pane did not enter the borrowed worktree $WT in time (last path '${p:-none}'); refusing to launch to avoid tangling the primary checkout. Inspect window $T" >&2
+    exit 1
+  fi
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 

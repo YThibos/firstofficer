@@ -503,8 +503,8 @@ Work these stages in order on your branch \`$BRANCH_NAME\`.
 5. Publish, and only once the review gate lets you:
    \`$STATE_ENV $CRAFT_REVIEW_BIN verify $ID\`
    If it refuses, do NOT publish: append \`blocked: {the exact reason it gave}\` to the status file and stop.
-   Once it passes, publish the branch with the pipeline's own push step and nothing beyond it:
-   \`no-mistakes axi run --intent '{what you set out to accomplish}' --skip pr,ci\`
+   Once it passes, publish the branch with the pipeline's own push step and nothing beyond it - every step that can commit a fix is skipped too, because stage 2 already ran them and a fix commit made now would reach the remote without the craftsmanship review the verdict is pinned to:
+   \`no-mistakes axi run --intent '{what you set out to accomplish}' --skip review,test,document,lint,pr,ci\`
    Then append \`done: branch $BRANCH_NAME published\` and stop. Do NOT open a PR or merge request.
    If this project has no remote at all, publication does not apply: append \`done: reviewed and ready in branch $BRANCH_NAME\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
 

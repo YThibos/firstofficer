@@ -51,12 +51,13 @@ usage() {
 }
 
 record_review() {
-  local id=$1 reviewer=$2 verdict=$3 findings=$4 commit
+  local id=$1 reviewer=$2 verdict=$3 findings=$4 wt commit
 
   reject_unusable_verdict "$verdict" || return 1
   reject_self_review "$id" "$reviewer" || return 1
-  commit=$(reviewed_commit "$id") || return 1
-  reject_dirty_worktree "$id" || return 1
+  wt=$(task_worktree "$id") || return 1
+  commit=$(reviewed_commit "$id" "$wt") || return 1
+  reject_dirty_worktree "$id" "$wt" || return 1
   write_verdict "$id" "$reviewer" "$verdict" "$findings" "$commit"
   echo "recorded craftsmanship review for $id: $verdict at $commit"
 }
@@ -81,8 +82,7 @@ reject_self_review() {
 # worktree has checked out. A detached worktree has no branch to publish, so
 # fm_task_branch refusing here is the correct outcome, not an obstacle.
 reviewed_commit() {
-  local id=$1 wt branch
-  wt=$(task_worktree "$id") || return 1
+  local id=$1 wt=$2 branch
   branch=$(fm_task_branch "$id" "$wt" "$wt") || return 1
   git -C "$wt" rev-parse --verify --quiet "refs/heads/$branch^{commit}" \
     || { echo "error: branch $branch in $wt has no commit to review" >&2; return 1; }
@@ -103,8 +103,7 @@ task_worktree() {
 # reported findings instead of editing, and that the implementer was idle rather
 # than working in the same directory at the same time.
 reject_dirty_worktree() {
-  local id=$1 wt dirty
-  wt=$(task_worktree "$id") || return 1
+  local id=$1 wt=$2 dirty
   dirty=$(uncommitted_changes "$wt")
   [ -n "$dirty" ] || return 0
   echo "REFUSED: the worktree of task $id has uncommitted changes, so this review cannot be recorded." >&2
@@ -134,9 +133,10 @@ write_verdict() {
 }
 
 verify_review() {
-  local id=$1 commit record verdict passed_commit
+  local id=$1 wt commit record verdict passed_commit
 
-  commit=$(reviewed_commit "$id") || return 1
+  wt=$(task_worktree "$id") || return 1
+  commit=$(reviewed_commit "$id" "$wt") || return 1
   record="$STATE/$id.craft-review"
   if [ ! -f "$record" ]; then
     echo "REFUSED: task $id has no craftsmanship review; commit $commit is unreviewed and must not be published." >&2

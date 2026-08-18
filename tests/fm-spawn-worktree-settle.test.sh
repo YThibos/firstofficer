@@ -111,7 +111,7 @@ run_settle_spawn() {
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
-    FM_FAKE_PANE_PATH="$WT_DIR" FM_FAKE_PANE_STALE="$STALE_DIR" \
+    FM_FAKE_PANE_PATH="${FM_FAKE_PANE_PATH:-$WT_DIR}" FM_FAKE_PANE_STALE="$STALE_DIR" \
     FM_FAKE_PANE_STALE_READS="$STALE_READS" FM_FAKE_PANE_COUNTFILE="$COUNTFILE" \
     FM_FAKE_SENDLOG="${FM_FAKE_SENDLOG:-}" \
     PATH="$FAKEBIN_DIR:$PATH" \
@@ -173,8 +173,10 @@ test_borrowed_worktree_is_joined_and_marked() {
   borrowed="$PROJ_DIR-owner-wt"
   git -C "$PROJ_DIR" worktree add --quiet -b owner-branch-z3 "$borrowed"
 
+  FM_FAKE_PANE_PATH="$borrowed"
   out=$(run_settle_spawn "$id" --borrow-worktree "$borrowed")
   status=$?
+  unset FM_FAKE_PANE_PATH
   expect_code 0 "$status" "a borrowing spawn should succeed"
   assert_grep "worktree=$borrowed" "$HOME_DIR/state/$id.meta" \
     "meta did not record the borrowed worktree"
@@ -274,6 +276,30 @@ test_borrowing_claude_keeps_the_owners_hook_intact() {
 # problem: grok and kimi already keep the hook outside the worktree but key it on the
 # workspace path, which two co-located agents resolve identically. Refusing loudly is
 # the only honest answer until each gets its own live two-agent experiment.
+# Sending `cd <worktree>` is not the same as arriving there. A pane that never
+# moves would launch the agent with --dangerously-skip-permissions in the primary
+# checkout while the meta claims the borrowed worktree, so the spawn must confirm
+# the pane's own cwd and fail loudly instead.
+test_borrow_refuses_when_the_pane_never_enters_the_worktree() {
+  local rec id out status borrowed
+  id=borrow-no-cd-z9
+  rec=$(make_settle_case borrow-no-cd "$id" 0)
+  read_settle_record "$rec"
+  borrowed="$PROJ_DIR-owner-wt-z9"
+  git -C "$PROJ_DIR" worktree add --quiet -b owner-branch-z9 "$borrowed"
+
+  export FM_BORROW_CD_POLLS=2
+  out=$(run_settle_spawn "$id" --borrow-worktree "$borrowed")
+  status=$?
+  unset FM_BORROW_CD_POLLS
+  expect_code 1 "$status" "a pane that never entered the borrowed worktree must not launch an agent"
+  assert_contains "$out" "did not enter the borrowed worktree" \
+    "refusal did not explain that the pane never reached the borrowed worktree"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "a refused borrowing spawn still recorded a worktree the agent is not in"
+  pass "--borrow-worktree refuses when the pane's cwd never becomes the borrowed worktree"
+}
+
 test_borrow_refuses_an_unverified_harness() {
   local rec id out status harness n
   n=0
@@ -333,6 +359,7 @@ test_claude_spawn_keeps_its_hook_out_of_the_worktree
 test_raw_claude_launch_without_the_placeholder_warns
 test_borrowing_claude_keeps_the_owners_hook_intact
 test_borrow_refuses_an_unverified_harness
+test_borrow_refuses_when_the_pane_never_enters_the_worktree
 test_borrow_refuses_a_missing_worktree
 test_borrow_refuses_the_orca_backend
 

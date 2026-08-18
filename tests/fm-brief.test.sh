@@ -277,8 +277,8 @@ test_local_only_brief_runs_the_pipeline_stopping_before_publication() {
 
   assert_grep "--skip push,pr,ci" "$brief" \
     "local-only brief does not stop the validation run before publication"
-  assert_grep "--skip pr,ci" "$brief" \
-    "local-only brief does not publish through the pipeline's own push step"
+  assert_grep "--skip review,test,document,lint,pr,ci" "$brief" \
+    "local-only brief does not publish through the pipeline's own push step alone, so a fix commit could reach the remote unreviewed"
   assert_grep "no-mistakes axi run --help" "$brief" \
     "local-only brief does not send the worker to the authoritative flag reference"
   assert_grep "Run \`no-mistakes doctor\`" "$brief" \

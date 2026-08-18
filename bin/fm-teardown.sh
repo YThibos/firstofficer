@@ -29,6 +29,9 @@
 # carves out of that check and out of every worktree mutation: it joined a worktree
 # another live task owns, so the branch, the commits, and the turn-end hook there
 # are that owner's, and the owner's own teardown is what checks and returns them.
+# The owning task's teardown holds the other half of that contract: it REFUSES while
+# any still-live task borrows its worktree, because returning it would kill that
+# borrower's agent and hand its checkout to an unrelated task. --force overrides.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -1144,6 +1147,47 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$BORROWED_WORKTREE" != 1 ]; t
       exit 1
     fi
   fi
+fi
+
+# The borrowed-worktree carve-out protects the borrower's side; this protects the
+# owner's. Returning or releasing a worktree kills every process in it and hands
+# the directory back to the pool, so doing that while a reviewer is still working
+# there would kill that reviewer mid-review and leave its meta pointing at a
+# worktree an unrelated task may already have been given. Name the borrower and
+# refuse instead; --force stays the explicit override, as everywhere else here.
+borrowers_of_worktree() {  # <worktree> <state-dir>
+  local wt=$1 state_dir=$2 meta borrower_id borrower_wt borrower_home
+  [ -d "$state_dir" ] || return 0
+  for meta in "$state_dir"/*.meta; do
+    [ -e "$meta" ] || continue
+    borrower_id=$(basename "$meta" .meta)
+    [ "$borrower_id" != "$ID" ] || continue
+    borrower_wt=$(meta_value "$meta" worktree)
+    if [ "$(meta_value "$meta" borrowed_worktree)" = 1 ] && [ -n "$borrower_wt" ] \
+       && [ "$(canonical_existing_dir "$borrower_wt" || printf '%s' "$borrower_wt")" = "$wt" ]; then
+      printf '%s\n' "$borrower_id"
+    fi
+    if [ "$(meta_value "$meta" kind)" = secondmate ]; then
+      borrower_home=$(meta_value "$meta" home)
+      [ -n "$borrower_home" ] || borrower_home=$borrower_wt
+      [ -z "$borrower_home" ] || borrowers_of_worktree "$wt" "$borrower_home/state"
+    fi
+  done
+}
+
+reject_teardown_while_borrowed() {
+  local wt_real borrowers
+  [ -d "$WT" ] || return 0
+  wt_real=$(canonical_existing_dir "$WT") || return 0
+  borrowers=$(borrowers_of_worktree "$wt_real" "$STATE")
+  [ -n "$borrowers" ] || return 0
+  echo "REFUSED: worktree $WT is borrowed by still-live task(s): $(printf '%s' "$borrowers" | tr '\n' ' ')" >&2
+  echo "Returning it would kill their agents and hand their checkout to another task. Tear them down first, or use --force after explicitly accepting that." >&2
+  return 1
+}
+
+if [ "$BORROWED_WORKTREE" != 1 ] && [ "$FORCE" != "--force" ]; then
+  reject_teardown_while_borrowed || exit 1
 fi
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
