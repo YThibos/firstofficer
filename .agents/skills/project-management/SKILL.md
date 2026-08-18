@@ -39,7 +39,11 @@ Choose the delivery mode when adding or creating the project:
 
 - `no-mistakes` runs the full validation pipeline before a PR and is the default when the captain does not specify a mode.
 - `direct-PR` pushes and opens a PR without the no-mistakes pipeline.
-- `local-only` has no required remote or PR and lands only through the approved local fast-forward path.
+- `local-only` runs that pipeline with its publication and merge-request steps skipped, passes an independent craftsmanship review, then publishes the branch and leaves the merge request to the captain's separate "ship it" word.
+
+The `local-only` name no longer describes its delivery step, and that mismatch is deliberate: `bin/fm-project-mode.sh`'s header owns why the enum value is kept.
+It still describes the one shape that stays unpublished, a project with no remote at all, which lands through the approved local fast-forward path instead.
+Choose `local-only` for the captain's normal flow, where he wants a reviewable branch on the real repository before he asks for the merge request.
 
 The optional `+yolo` posture changes routine approval authority but does not change the delivery mode.
 Default it off, and enable it only on the captain's explicit instruction.
@@ -51,7 +55,7 @@ Confirm the source URL, local project name, delivery mode, and autonomy posture.
 Clone into `projects/<name>` and add the registry entry only after the destination is known to be unused.
 A `no-mistakes` project must have an `origin` remote and must complete the initialization procedure below.
 A `direct-PR` project needs an `origin` remote but skips no-mistakes initialization.
-A `local-only` project may have no remote and skips no-mistakes initialization.
+A `local-only` project runs the pipeline, so it must complete the initialization procedure below; it needs an `origin` remote to publish to, and only a deliberately remote-less project may go without one.
 
 ## Create a project
 
@@ -60,12 +64,13 @@ Before making that remote change, propose the repository name, owner or organiza
 Use `gh-axi` for the approved GitHub operation and consult its current help rather than relying on remembered flags.
 After remote creation succeeds, clone it locally, add the registry entry, and initialize it according to its delivery mode.
 
-For a purely `local-only` project, create a local Git repository under its unused `projects/<name>` path, add the registry entry, and make no GitHub call.
+For a deliberately remote-less project, create a local Git repository under its unused `projects/<name>` path, add the registry entry with the `local-only` mode, and make no GitHub call.
 The captain's request to create that local project authorizes this local initialization, but it does not authorize an unmentioned remote repository.
+Such a project cannot publish, so its delivery ends at the reviewed ready branch and the approved local fast-forward merge.
 
 ## Initialize
 
-Run no-mistakes initialization only for `no-mistakes` projects:
+Run no-mistakes initialization for `no-mistakes` and `local-only` projects, which both run the validation pipeline, and skip it for `direct-PR` and for a deliberately remote-less project:
 
 ```sh
 cd projects/<name> && no-mistakes init && no-mistakes doctor

@@ -128,6 +128,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/craftsmanship-review/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/decision-hold-lifecycle/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -306,6 +310,10 @@
     {
       "path": "docs/turnend-guard.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/verification/claude-colocation.md",
+      "audience": "maintainer-verification"
     },
     {
       "path": "docs/verification/runtime-backends.md",

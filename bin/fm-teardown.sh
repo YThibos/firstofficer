@@ -25,6 +25,13 @@
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
+# A task whose meta carries borrowed_worktree=1 (bin/fm-spawn.sh --borrow-worktree)
+# carves out of that check and out of every worktree mutation: it joined a worktree
+# another live task owns, so the branch, the commits, and the turn-end hook there
+# are that owner's, and the owner's own teardown is what checks and returns them.
+# The owning task's teardown holds the other half of that contract: it REFUSES while
+# any still-live task borrows its worktree, because returning it would kill that
+# borrower's agent and hand its checkout to an unrelated task. --force overrides.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -149,6 +156,8 @@ KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
+# Set when worktree= belongs to a different, still-live task; see the header.
+BORROWED_WORKTREE=$(grep '^borrowed_worktree=' "$META" | cut -d= -f2- || true)
 
 default_branch() {
   local ref branch
@@ -947,7 +956,7 @@ remove_firstmate_home() {
 }
 
 validate_firstmate_home_children_removal() {
-  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id
+  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_borrowed
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -959,7 +968,12 @@ validate_firstmate_home_children_removal() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
-    if [ "$child_kind" = secondmate ]; then
+    child_borrowed=$(meta_value "$child_meta" borrowed_worktree)
+    if [ "$child_borrowed" = 1 ]; then
+      # A borrowed worktree belongs to another task and is never removed here, so
+      # there is nothing about it to validate for removal.
+      :
+    elif [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       validate_firstmate_home_for_removal "$child_home" "child firstmate home" "$child_id" >/dev/null || return 1
@@ -979,7 +993,7 @@ validate_firstmate_home_children_removal() {
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_borrowed
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -990,12 +1004,13 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
+    child_borrowed=$(meta_value "$child_meta" borrowed_worktree)
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
     else
       child_t=$(fm_backend_target_of_meta "$child_meta")
     fi
-    if [ "$child_backend" = orca ] && [ "$child_kind" != secondmate ]; then
+    if [ "$child_backend" = orca ] && [ "$child_kind" != secondmate ] && [ "$child_borrowed" != 1 ]; then
       child_orca_worktree_id=$(require_orca_worktree_id "$child_meta") || return 1
       if [ -n "$child_wt" ] && [ -e "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
@@ -1010,7 +1025,11 @@ cleanup_firstmate_home_children() {
         fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
       fi
     fi
-    if [ "$child_kind" = secondmate ]; then
+    if [ "$child_borrowed" = 1 ]; then
+      # The worktree is the owning task's live checkout, carrying that task's branch,
+      # commits, and turn-end hook. Only this child's own state is cleaned, below.
+      echo "teardown $child_id: worktree $child_wt is borrowed from another task and is left untouched"
+    elif [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
@@ -1047,6 +1066,7 @@ cleanup_firstmate_home_children() {
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
+      "$sub_state/$child_id.claude-settings.json" \
       "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token"
   done
 }
@@ -1110,7 +1130,12 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
-if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+# The unlanded-work check protects the work in a worktree from being discarded with
+# it. A borrowed worktree is not discarded here at all, and the commits in it belong
+# to the owning task, whose own teardown runs this same check against them. Running
+# it for the borrower would only refuse a reviewer's cleanup over someone else's
+# in-progress branch, so it is scoped to the tasks that actually own their worktree.
+if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$BORROWED_WORKTREE" != 1 ]; then
   if validate_worktree_teardown_safety; then
     :
   else
@@ -1124,8 +1149,56 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
+# The borrowed-worktree carve-out protects the borrower's side; this protects the
+# owner's. Returning or releasing a worktree kills every process in it and hands
+# the directory back to the pool, so doing that while a reviewer is still working
+# there would kill that reviewer mid-review and leave its meta pointing at a
+# worktree an unrelated task may already have been given. Name the borrower and
+# refuse instead; --force stays the explicit override, as everywhere else here.
+borrowers_of_worktree() {  # <worktree> <state-dir>
+  local wt=$1 state_dir=$2 meta borrower_id borrower_wt borrower_home
+  [ -d "$state_dir" ] || return 0
+  for meta in "$state_dir"/*.meta; do
+    [ -e "$meta" ] || continue
+    borrower_id=$(basename "$meta" .meta)
+    [ "$borrower_id" != "$ID" ] || continue
+    borrower_wt=$(meta_value "$meta" worktree)
+    if [ "$(meta_value "$meta" borrowed_worktree)" = 1 ] && [ -n "$borrower_wt" ] \
+       && [ "$(canonical_existing_dir "$borrower_wt" || printf '%s' "$borrower_wt")" = "$wt" ]; then
+      printf '%s\n' "$borrower_id"
+    fi
+    if [ "$(meta_value "$meta" kind)" = secondmate ]; then
+      borrower_home=$(meta_value "$meta" home)
+      [ -n "$borrower_home" ] || borrower_home=$borrower_wt
+      [ -z "$borrower_home" ] || borrowers_of_worktree "$wt" "$borrower_home/state"
+    fi
+  done
+}
+
+reject_teardown_while_borrowed() {
+  local wt_real borrowers
+  [ -d "$WT" ] || return 0
+  wt_real=$(canonical_existing_dir "$WT") || return 0
+  borrowers=$(borrowers_of_worktree "$wt_real" "$STATE")
+  [ -n "$borrowers" ] || return 0
+  echo "REFUSED: worktree $WT is borrowed by still-live task(s): $(printf '%s' "$borrowers" | tr '\n' ' ')" >&2
+  echo "Returning it would kill their agents and hand their checkout to another task. Tear them down first, or use --force after explicitly accepting that." >&2
+  return 1
+}
+
+if [ "$BORROWED_WORKTREE" != 1 ] && [ "$FORCE" != "--force" ]; then
+  reject_teardown_while_borrowed || exit 1
+fi
+
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
+if [ "$BORROWED_WORKTREE" = 1 ]; then
+  # A borrowed worktree is the owning task's live checkout, still carrying that
+  # task's branch, commits, and turn-end hook. Detaching it, deleting that branch,
+  # removing that hook, or returning it to the pool would destroy work this task
+  # never made, so none of it runs here: only this task's own endpoint and state
+  # are cleaned, below.
+  echo "teardown $ID: worktree $WT is borrowed from another task and is left untouched"
+elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
     ORCA_PATH_MATCH_VERIFIED=1
@@ -1150,6 +1223,9 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     fi
   fi
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
+  # claude no longer writes .claude/settings.local.json - its hook lives in state/ and
+  # rides --settings - but the removal stays for worktrees spawned before that change,
+  # and because --settings merges with any such leftover rather than replacing it.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   # Kills remaining processes in the worktree (including the agent), resets, returns
@@ -1237,9 +1313,11 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
-  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
-  "$STATE/$ID.kimi-turnend-token"
-if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
+  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.claude-settings.json" \
+  "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token"
+# Every ship mode publishes now, so the clone is refreshed after any of them.
+# fm-fleet-sync.sh still skips a project with no origin on its own.
+if [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
 echo "teardown $ID complete (window $T, worktree $WT)"

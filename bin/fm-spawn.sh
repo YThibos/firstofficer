@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--borrow-worktree <path>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
+#   --borrow-worktree <path> joins a live worktree that another task owns instead
+#   of allocating one, so every step of one story shares one checkout. It is for a
+#   task that only reads, such as the independent craftsmanship reviewer: the
+#   borrower reports findings and changes nothing, and the owning task must be idle
+#   while it runs. The spawn records borrowed_worktree=1 so teardown never returns,
+#   detaches, prunes, or cleans that worktree, and it refuses any harness with no
+#   verified way to signal turn-end from a shared worktree, because a signal keyed on
+#   the worktree alone would hijack the owning task's own signal.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -99,6 +107,9 @@
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
+#     __CLAUDESETTINGS__ absolute path to state/<task-id>.claude-settings.json (claude
+#                  turn-end hook declaration, written by this script; outside the worktree
+#                  so two claude agents can share one checkout without overwriting it)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
@@ -179,6 +190,7 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+BORROW_WT=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -195,6 +207,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      borrow-worktree) BORROW_WT=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -203,6 +216,8 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --borrow-worktree) want_value=borrow-worktree ;;
+    --borrow-worktree=*) BORROW_WT=${a#--borrow-worktree=} ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -224,6 +239,14 @@ case "$EFFORT" in
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
 
+# A borrowed worktree is a live worktree another task owns, joined so every step of
+# one story shares one checkout. Only a task that reads may borrow, and a secondmate
+# is the opposite of that: it owns a whole firstmate home of its own.
+if [ -n "$BORROW_WT" ] && [ "$KIND" = secondmate ]; then
+  echo "error: --borrow-worktree does not apply to a secondmate spawn; a secondmate owns its own home" >&2
+  exit 1
+fi
+
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else
 # default tmux (fm_backend_name). fm_backend_validate_spawn refuses unknown or
@@ -244,6 +267,13 @@ if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
 fi
 if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=cmux does not support --secondmate spawns yet" >&2
+  exit 1
+fi
+# The orca backend allocates its own managed worktree before a borrower could join
+# one, and teardown leaves a borrowed worktree untouched, so that allocation would
+# leak permanently. Refuse here, before anything is allocated.
+if [ "$BACKEND" = orca ] && [ -n "$BORROW_WT" ]; then
+  echo "error: --borrow-worktree does not apply to a backend=orca spawn; orca allocates its own worktree" >&2
   exit 1
 fi
 if [ "$BACKEND" = orca ]; then
@@ -453,7 +483,21 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # --settings carries the turn-end hook per agent instance, so the declaration
+    # lives in state/ instead of the worktree and two agents can share one checkout
+    # without overwriting each other's hook. The file form is deliberate over the
+    # inline-JSON form --settings also accepts: this string is assembled in shell,
+    # sent through tmux, and re-expanded in the pane, and a path avoids three layers
+    # of nested-quote risk for no benefit. A secondmate has no spawn-written hook -
+    # its home is a firstmate checkout whose own tracked .claude/settings.json holds
+    # the primary guards - so it launches without the flag.
+    claude)
+      if [ "$kind" = secondmate ]; then
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings __CLAUDESETTINGS__ __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -486,9 +530,11 @@ launch_template() {
   esac
 }
 
+RAW_LAUNCH=0
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
+    RAW_LAUNCH=1
     HARNESS=""
     for word in $LAUNCH; do
       case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
@@ -521,6 +567,37 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+# A raw claude launch command must carry __CLAUDESETTINGS__ itself, the same way a
+# raw codex one must carry __TURNEND__. Claude used to pick the hook up for free from
+# the worktree, so warn rather than let an escape-hatch launch lose its turn-end
+# signal in silence; a caller's own --settings is their choice and passes quietly.
+if [ "$RAW_LAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  case "$HARNESS:$LAUNCH" in
+    claude*:*__CLAUDESETTINGS__*|claude*:*--settings*) ;;
+    claude*:*) echo "warn: raw claude launch command has no __CLAUDESETTINGS__ placeholder, so this crewmate will not signal turn-end; add --settings __CLAUDESETTINGS__ to it" >&2 ;;
+  esac
+fi
+
+# Sharing a worktree is safe only when each agent's turn-end signal is keyed on its
+# own task id. Where it is keyed on the worktree instead, the borrower's signal
+# silently replaces the owning task's and leaves firstmate blind to that task's
+# turns, so refuse rather than break the owner's supervision quietly.
+#
+# claude, codex, pi, and pi-signed all key on the task id, claude since its hook
+# moved to state/ and onto --settings. The three below are refused because nobody
+# has measured them: opencode still writes a fixed-name plugin into the worktree,
+# while grok and kimi key their hook on the workspace path, which two co-located
+# agents resolve identically. Lifting any of them needs its own live two-agent
+# experiment; docs/verification/claude-colocation.md covers only claude.
+if [ -n "$BORROW_WT" ]; then
+  case "$HARNESS" in
+    opencode*|grok*|kimi*)
+      echo "error: harness $HARNESS has no verified way to signal turn-end from a shared worktree, so joining another task's worktree would hijack that task's turn-end signal; use claude, codex, pi, or pi-signed for a worktree-sharing spawn" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
@@ -1265,7 +1342,37 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ -n "$BORROW_WT" ] && [ "$KIND" != secondmate ]; then
+  # Join the owning task's live worktree instead of allocating one. It must already
+  # be a worktree root and, like any task worktree, distinct from the primary
+  # checkout; validate before the pane moves so a bad path never reaches an agent.
+  WT=$(cd "$BORROW_WT" 2>/dev/null && pwd -P) || {
+    echo "error: --borrow-worktree path does not exist: $BORROW_WT" >&2
+    exit 1
+  }
+  validate_spawn_worktree "--borrow-worktree" "$T"
+  spawn_send_text_line "$WT_TARGET" "cd $(printf '%q' "$WT")"
+
+  # Sending the cd is not the same as arriving there. If it never takes effect -
+  # the pane's shell is not ready yet, the backend drops the line, the path goes
+  # away between validation and execution - the agent would launch with
+  # --dangerously-skip-permissions in the primary checkout while state/<id>.meta
+  # claims the borrowed worktree. Confirm the pane's own cwd before launching, and
+  # fail loudly rather than let that mismatch through.
+  borrow_arrived=
+  for _ in $(seq 1 "${FM_BORROW_CD_POLLS:-60}"); do
+    p=$(spawn_current_path "$WT_TARGET" || true)
+    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT" ]; then
+      borrow_arrived=1
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$borrow_arrived" ]; then
+    echo "error: the pane did not enter the borrowed worktree $WT in time (last path '${p:-none}'); refusing to launch to avoid tangling the primary checkout. Inspect window $T" >&2
+    exit 1
+  fi
+elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -1337,14 +1444,25 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+# A borrower writes nothing into the worktree it joined, so its turn-end signal
+# must be one that lives outside it. The harness gate above already refused every
+# harness that cannot do that, so every branch below installs a signal keyed on the
+# task id and stored outside the worktree.
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
-      mkdir -p "$WT/.claude"
-      cat > "$WT/.claude/settings.local.json" <<EOF
+      # Written OUTSIDE the worktree and delivered by --settings on the launch
+      # command, the same shape pi's extension below uses. The worktree location this
+      # used to occupy, .claude/settings.local.json, has one fixed name, so a second
+      # agent joining the worktree overwrote the first agent's hook and left
+      # supervision unable to tell whose turn ended. Keeping the declaration per task
+      # id is what makes co-location safe (docs/verification/claude-colocation.md).
+      # Nothing may recreate that worktree file: --settings MERGES with it rather
+      # than replacing it, so a leftover copy fires the other agent's hook on every
+      # turn of this one - a false wake that makes an idle agent look alive.
+      cat > "$STATE/$ID.claude-settings.json" <<EOF
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
-      exclude_path '.claude/settings.local.json'
       ;;
     opencode*)
       mkdir -p "$WT/.opencode/plugins"
@@ -1472,6 +1590,9 @@ META_WINDOW=$T
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # borrowed_worktree=1 means worktree= belongs to another task. Teardown must
+  # never return, detach, or prune it, and must leave the owner's hook files alone.
+  [ -z "$BORROW_WT" ] || echo "borrowed_worktree=1"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
@@ -1505,6 +1626,7 @@ META_WINDOW=$T
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
+sq_claudesettings=$(shell_quote "$STATE/$ID.claude-settings.json")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
@@ -1515,6 +1637,7 @@ LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
+LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$sq_claudesettings}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}

@@ -11,7 +11,18 @@
 # mode = how a finished change reaches main:
 #   no-mistakes  full pipeline -> PR -> captain merge (default)
 #   direct-PR    push + PR via gh-axi, no pipeline -> captain merge
-#   local-only   local branch, no remote/PR -> captain approve -> guarded local merge
+#   local-only   pipeline with push/pr/ci skipped -> independent craftsmanship
+#                review -> publish the branch, no merge request -> the captain's
+#                separate "ship it" word -> PR -> captain merge
+#
+# The local-only name is a historical mismatch, kept deliberately. Its delivery
+# step is now publication, but the name is a config enum: it is written into every
+# home's data/projects.md and into state/<id>.meta for tasks already in flight,
+# and this fork keeps merging upstream, where renaming an enum value would
+# conflict permanently. Renaming it therefore needs a config migration and a
+# rename-map merge driver, not a wording pass, so the behaviour is documented
+# here instead. A project with no remote at all is the one case the name still
+# describes: it stays local and lands through bin/fm-merge-local.sh.
 # yolo (orthogonal) = when on, firstmate may make routine approval decisions itself.
 #   AGENTS.md section 7 is the single owner of authority exceptions, including
 #   ask-user contract expansion and stronger captain boundaries.

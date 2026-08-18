@@ -120,14 +120,21 @@ Supervise all live work under section 8.
 
 ### Selected delivery path and approval authority
 
-The selected delivery path owns its own rigour: when no-mistakes is selected it alone owns review, fixes, tests, documentation, push, PR, and CI, and otherwise you follow the faster path without adding an independent reviewer.
-Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
-A separate review or audit is allowed only when the captain explicitly asks for that deliverable or the authorised task is a knowledge-only review, and one named question stays scoped to that question.
+The selected delivery path owns its own rigour, and its own defined stages are the only rigour you add.
+When no-mistakes is selected it alone owns review, fixes, tests, documentation, push, PR, and CI.
+Never invent a manual gate, hold work for an ad-hoc clean verdict, stack serial manual reviews, or infer authority for a review from security, architecture, or risk alone.
+A further separate review or audit is allowed only when the captain explicitly asks for that deliverable or the authorised task is a knowledge-only review, and one named question stays scoped to that question.
 If fast-path risk needs more rigour, escalate whether to use no-mistakes instead of inventing a manual gate.
 
 - **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
 - **direct-PR** has the worker push and open a PR without the pipeline, then waits for the configured merge authority.
-- **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
+- **local-only** keeps that registry name but no longer means unpublished: the worker validates, passes an independent craftsmanship review, then publishes its branch and opens no merge request.
+
+That craftsmanship review is the one contract-defined independent reviewer, so it is mandatory rather than invented rigour.
+On that path the worker runs the pipeline with its publication and merge-request steps skipped, stops so you dispatch a reviewer that did not write the code, and fixes its findings before publishing.
+The captain's separate "ship it" word is what authorises the merge request afterwards, and a project with no remote at all instead ends at the guarded local merge path.
+`bin/fm-brief.sh --craft-review` generates that reviewer's instructions and the `craftsmanship-review` skill owns its remit; publication is refused while `bin/fm-craft-review.sh verify` has no pass verdict for the exact commit.
+One story keeps one local copy: spawn the reviewer into the implementing task's own copy with `--borrow-worktree`, only once that worker has stopped, because the two are serialised and never both active there.
 
 Delivery mode and `yolo` are orthogonal.
 With `yolo` off, the captain owns ask-user findings, PR merges, and local-only merge approval.
@@ -136,7 +143,7 @@ Standing `yolo` authority never approves an ask-user Fix that would materially e
 Complexity alone is not expansion: a difficult correction genuinely required by accepted intent, including explicitly requested complex architecture, remains autonomous.
 Load `ask-user-authority` before deciding any ask-user finding; the implementation worker never answers its own finding.
 Never merge a red PR.
-Use `bin/fm-pr-merge.sh` for every task PR merge and `bin/fm-merge-local.sh` for approved local-only landing, never a lower-level merge command around their guards, and give the captain a one-line full-URL or local-main outcome after an autonomous merge.
+Use `bin/fm-pr-merge.sh` for every task PR merge and `bin/fm-merge-local.sh` only for an approved landing on a project with no remote, never a lower-level merge command around their guards, and give the captain a one-line full-URL or local-main outcome after an autonomous merge.
 
 ### Validate, landing, and scout outcome
 
@@ -258,6 +265,7 @@ Agent-only reference skills, which the captain does not invoke:
 - `bootstrap-diagnostics` - on any actionable bootstrap diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `FMX:`).
 - `diagnostic-reasoning` - before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - before deciding any ask-user finding, whatever the project's `yolo` posture.
+- `craftsmanship-review` - before dispatching or judging the independent craftsmanship review that stands between validation and publication.
 - `quota-array-dispatch` - before choosing among a matched crew-dispatch profile array.
 - `harness-adapters` - before any spawn, recovery, trust dialog, harness-specific skill invocation, interrupt, exit, resume, or adapter verification.
 - `firstmate-orca` - before switching to Orca, spawning or supervising Orca-backed work, smoke-testing it, or reconciling Orca-backed task state or metadata.
