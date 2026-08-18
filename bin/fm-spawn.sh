@@ -10,9 +10,9 @@
 #   task that only reads, such as the independent craftsmanship reviewer: the
 #   borrower reports findings and changes nothing, and the owning task must be idle
 #   while it runs. The spawn records borrowed_worktree=1 so teardown never returns,
-#   detaches, prunes, or cleans that worktree, and it refuses any harness whose
-#   turn-end signal is a fixed-name file inside the worktree, because writing that
-#   file would hijack the owning task's own signal.
+#   detaches, prunes, or cleans that worktree, and it refuses any harness with no
+#   verified way to signal turn-end from a shared worktree, because a signal keyed on
+#   the worktree alone would hijack the owning task's own signal.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -107,6 +107,9 @@
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
+#     __CLAUDESETTINGS__ absolute path to state/<task-id>.claude-settings.json (claude
+#                  turn-end hook declaration, written by this script; outside the worktree
+#                  so two claude agents can share one checkout without overwriting it)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
@@ -473,7 +476,21 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # --settings carries the turn-end hook per agent instance, so the declaration
+    # lives in state/ instead of the worktree and two agents can share one checkout
+    # without overwriting each other's hook. The file form is deliberate over the
+    # inline-JSON form --settings also accepts: this string is assembled in shell,
+    # sent through tmux, and re-expanded in the pane, and a path avoids three layers
+    # of nested-quote risk for no benefit. A secondmate has no spawn-written hook -
+    # its home is a firstmate checkout whose own tracked .claude/settings.json holds
+    # the primary guards - so it launches without the flag.
+    claude)
+      if [ "$kind" = secondmate ]; then
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings __CLAUDESETTINGS__ __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -506,9 +523,11 @@ launch_template() {
   esac
 }
 
+RAW_LAUNCH=0
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
+    RAW_LAUNCH=1
     HARNESS=""
     for word in $LAUNCH; do
       case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
@@ -542,14 +561,32 @@ case "$ARG3" in
     ;;
 esac
 
-# A borrower writes nothing into the worktree it joined, and a worktree-resident
-# turn-end signal has one fixed name: writing it would silently hijack the owning
-# task's signal and leave firstmate blind to that task's turns. Refuse those
-# harnesses rather than breaking the owner's supervision quietly.
+# A raw claude launch command must carry __CLAUDESETTINGS__ itself, the same way a
+# raw codex one must carry __TURNEND__. Claude used to pick the hook up for free from
+# the worktree, so warn rather than let an escape-hatch launch lose its turn-end
+# signal in silence; a caller's own --settings is their choice and passes quietly.
+if [ "$RAW_LAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  case "$HARNESS:$LAUNCH" in
+    claude*:*__CLAUDESETTINGS__*|claude*:*--settings*) ;;
+    claude*:*) echo "warn: raw claude launch command has no __CLAUDESETTINGS__ placeholder, so this crewmate will not signal turn-end; add --settings __CLAUDESETTINGS__ to it" >&2 ;;
+  esac
+fi
+
+# Sharing a worktree is safe only when each agent's turn-end signal is keyed on its
+# own task id. Where it is keyed on the worktree instead, the borrower's signal
+# silently replaces the owning task's and leaves firstmate blind to that task's
+# turns, so refuse rather than break the owner's supervision quietly.
+#
+# claude, codex, pi, and pi-signed all key on the task id, claude since its hook
+# moved to state/ and onto --settings. The three below are refused because nobody
+# has measured them: opencode still writes a fixed-name plugin into the worktree,
+# while grok and kimi key their hook on the workspace path, which two co-located
+# agents resolve identically. Lifting any of them needs its own live two-agent
+# experiment; docs/verification/claude-colocation.md covers only claude.
 if [ -n "$BORROW_WT" ]; then
   case "$HARNESS" in
-    claude*|opencode*|grok*|kimi*)
-      echo "error: harness $HARNESS writes its turn-end signal into the worktree under one fixed name, so joining another task's worktree would hijack that task's turn-end signal; use codex, pi, or pi-signed for a worktree-sharing spawn, whose signal lives outside the worktree" >&2
+    opencode*|grok*|kimi*)
+      echo "error: harness $HARNESS has no verified way to signal turn-end from a shared worktree, so joining another task's worktree would hijack that task's turn-end signal; use claude, codex, pi, or pi-signed for a worktree-sharing spawn" >&2
       exit 1
       ;;
   esac
@@ -1382,16 +1419,23 @@ exclude_path() {
 }
 # A borrower writes nothing into the worktree it joined, so its turn-end signal
 # must be one that lives outside it. The harness gate above already refused every
-# harness whose signal is worktree-resident, so the remaining ones (codex's notify=
-# and pi's state-resident extension) are installed by the same branches below.
+# harness that cannot do that, so every branch below installs a signal keyed on the
+# task id and stored outside the worktree.
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
-      mkdir -p "$WT/.claude"
-      cat > "$WT/.claude/settings.local.json" <<EOF
+      # Written OUTSIDE the worktree and delivered by --settings on the launch
+      # command, the same shape pi's extension below uses. The worktree location this
+      # used to occupy, .claude/settings.local.json, has one fixed name, so a second
+      # agent joining the worktree overwrote the first agent's hook and left
+      # supervision unable to tell whose turn ended. Keeping the declaration per task
+      # id is what makes co-location safe (docs/verification/claude-colocation.md).
+      # Nothing may recreate that worktree file: --settings MERGES with it rather
+      # than replacing it, so a leftover copy fires the other agent's hook on every
+      # turn of this one - a false wake that makes an idle agent look alive.
+      cat > "$STATE/$ID.claude-settings.json" <<EOF
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
-      exclude_path '.claude/settings.local.json'
       ;;
     opencode*)
       mkdir -p "$WT/.opencode/plugins"
@@ -1555,6 +1599,7 @@ META_WINDOW=$T
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
+sq_claudesettings=$(shell_quote "$STATE/$ID.claude-settings.json")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
@@ -1565,6 +1610,7 @@ LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
+LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$sq_claudesettings}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}

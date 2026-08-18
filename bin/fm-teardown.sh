@@ -1053,6 +1053,7 @@ cleanup_firstmate_home_children() {
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
+      "$sub_state/$child_id.claude-settings.json" \
       "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token"
   done
 }
@@ -1168,6 +1169,9 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     fi
   fi
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
+  # claude no longer writes .claude/settings.local.json - its hook lives in state/ and
+  # rides --settings - but the removal stays for worktrees spawned before that change,
+  # and because --settings merges with any such leftover rather than replacing it.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   # Kills remaining processes in the worktree (including the agent), resets, returns
@@ -1255,8 +1259,8 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
-  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
-  "$STATE/$ID.kimi-turnend-token"
+  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.claude-settings.json" \
+  "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token"
 # Every ship mode publishes now, so the clone is refreshed after any of them.
 # fm-fleet-sync.sh still skips a project with no origin on its own.
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then

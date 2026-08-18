@@ -179,6 +179,12 @@ The shared symptom is a healthy-looking pane with no work in progress, so each a
 First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
 After every spawn, peek the pane within about 20 seconds.
 If such a dialog is showing, accept it from an active firstmate session using `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window> --key Enter`, or the choice the dialog requires, unless `FM_HOME` is already set to the active firstmate home; verify the brief started processing.
+Two claude agents in one worktree each raise that dialog for themselves, so clear it per pane rather than once per directory.
+
+Claude can share a worktree with another claude agent, which is what lets a craftsmanship reviewer join the implementing task's checkout.
+`fm-spawn` writes each crewmate's turn-end hook to `state/<task-id>.claude-settings.json` and passes it with `--settings`, so the declaration is keyed on the task id like the marker it touches.
+Nothing may write `<worktree>/.claude/settings.local.json` again: `--settings` merges with that file rather than replacing it, so a stray copy fires another task's hook on every turn of this one and makes an idle agent look alive.
+[`docs/verification/claude-colocation.md`](../../../docs/verification/claude-colocation.md) owns the measurements and what else two co-located agents share.
 
 Claude renders a predicted-next-prompt suggestion as dim/faint text inside an otherwise-empty composer after a turn completes.
 A plain `tmux capture-pane` cannot tell that ghost text apart from typed text.
@@ -190,7 +196,7 @@ That styled capture is internal to the boolean detector only.
 `fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
 
 **Primary-session guard fact (verified 2026-07-04, Claude Code 2.1.201; preserved 2026-07-08, Claude Code 2.1.204; Stop-owned auto-arm revalidated 2026-07-24, Claude Code 2.1.219).**
-This is separate from the per-task crewmate turn-end hook above (that one just `touch`es a marker file in a task's own `.claude/settings.local.json`).
+This is separate from the per-task crewmate turn-end hook above (that one just `touch`es a marker file from the task's own `state/<task-id>.claude-settings.json`).
 The firstmate PRIMARY's own `.claude/settings.json` registers two Stop hooks: `bin/fm-turnend-guard.sh --claude` and the Stop-owned auto-arm `bin/fm-claude-stop-autoarm.sh` (`asyncRewake: true`, `timeout: 28800`), and exiting the guard with status 2 plus stderr reliably forces the model to continue.
 Claude Code's stdin payload to a Stop hook carries a `stop_hook_active` boolean that is `true` when the current stop attempt follows ANY stop-hook-driven continuation, including `asyncRewake` rewakes; the primary guard therefore ignores it in `--claude` mode and uses the cooperative claim/epoch check plus a bounded re-block budget instead, while the codex-mode default still treats it as a one-block loop guard.
 A project-level `.claude/settings.json` only takes effect when Claude Code's project root is that exact directory - it does not walk up from a subdirectory looking for one, so firstmate launches the primary from the repo root.

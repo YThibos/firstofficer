@@ -505,6 +505,8 @@ run_teardown() {
 # alone. Returning it, detaching it, deleting its branch, or removing its turn-end
 # hook would destroy work this task never made, and the unlanded-work refusal must
 # not fire on the owner's commits either, or a reviewer could never be cleaned up.
+# Each agent's hook is keyed on its own task id, so the borrower's own must go while
+# the owner's survives; removing the owner's would leave it unable to signal a turn.
 test_borrowed_worktree_is_left_untouched() {
   local case_dir rc branch_before head_before
   case_dir=$(make_case borrowed-worktree)
@@ -512,6 +514,8 @@ test_borrowed_worktree_is_left_untouched() {
   wt_commit "$case_dir" "the owner's unpushed work"
   mkdir -p "$case_dir/wt/.claude"
   printf '{}\n' > "$case_dir/wt/.claude/settings.local.json"
+  printf '{}\n' > "$case_dir/state/task-owner.claude-settings.json"
+  printf '{}\n' > "$case_dir/state/task-x1.claude-settings.json"
   branch_before=$(git -C "$case_dir/wt" rev-parse --abbrev-ref HEAD)
   head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
 
@@ -533,7 +537,11 @@ test_borrowed_worktree_is_left_untouched() {
   git -C "$case_dir/project" rev-parse --verify --quiet "refs/heads/$branch_before" >/dev/null \
     || fail "borrowed: teardown deleted another task's branch"
   assert_present "$case_dir/wt/.claude/settings.local.json" \
-    "borrowed: teardown removed the owning task's turn-end hook"
+    "borrowed: teardown reached into another task's worktree"
+  assert_present "$case_dir/state/task-owner.claude-settings.json" \
+    "borrowed: teardown removed the owning task's turn-end hook, leaving it unable to signal"
+  assert_absent "$case_dir/state/task-x1.claude-settings.json" \
+    "borrowed: teardown left its own turn-end hook behind"
   assert_absent "$case_dir/state/task-x1.meta" "borrowed: teardown left its own metadata behind"
   pass "a borrowed worktree is left untouched, with its branch, commits, and hook intact"
 }

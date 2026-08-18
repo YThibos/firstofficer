@@ -386,7 +386,7 @@ You are in task $REVIEWED_ID's OWN worktree, on the branch it built the work on.
 You did not create this checkout and you do not own it. Task $REVIEWED_ID is idle while you work, and it resumes here afterwards to fix what you find.
 
 **Verify before anything else.** Run \`pwd -P\`, \`git rev-parse --show-toplevel\`, and \`git status --porcelain\`.
-The first two must agree on a worktree that is not the primary checkout firstmate operates from, and \`git status --porcelain\` must be clean apart from agent-owned files such as \`.claude/\`.
+The first two must agree on a worktree that is not the primary checkout firstmate operates from, and \`git status --porcelain\` must be clean apart from the untracked agent-owned files the verdict recorder already exempts.
 Uncommitted changes here mean either the implementing worker is still active in this directory or someone edited the code under review, and both break the review.
 If either check fails, append \`blocked: {which check failed and what it showed}\` to the status file and stop.
 

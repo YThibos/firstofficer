@@ -160,8 +160,7 @@ test_dirty_worktree_refuses_a_verdict() {
   assert_absent "$case_dir/state/task-x1.craft-review" "dirty-tree: no verdict should be written"
 
   git -C "$case_dir/wt" checkout -q -- feature.txt
-  mkdir -p "$case_dir/wt/.claude"
-  printf '{}\n' > "$case_dir/wt/.claude/settings.local.json"
+  printf 'token\n' > "$case_dir/wt/.fm-grok-turnend"
   run_gate "$case_dir" record task-x1 --reviewer task-x1-craft --verdict pass
   expect_code 0 "$CODE" "dirty-tree: an agent-owned file must not block a verdict"
   pass "a dirty worktree refuses a verdict, while agent-owned files do not"

@@ -86,8 +86,10 @@ Flag each of these as a finding when it appears:
 
 Spawn the reviewer into the implementing task's own worktree with `bin/fm-spawn.sh --borrow-worktree <that worktree>`, and brief it with `bin/fm-brief.sh <reviewer-id> <repo> --craft-review <implementer-id>`.
 Confirm the implementing worker has actually stopped first: the two share one directory and must never both be active in it.
-The spawn refuses a harness whose turn-end signal is a fixed-name file inside the worktree, because writing it would hijack the implementer's own signal; `codex`, `pi`, and `pi-signed` keep that signal outside the worktree and are the ones that can share.
+`claude`, `codex`, `pi`, and `pi-signed` can share a worktree, because each keys its turn-end signal on the task id and stores it outside the checkout.
+The spawn refuses `opencode`, `grok`, and `kimi`: nobody has measured what they do in a shared worktree, and a wrong guess would hijack the implementer's own signal.
 A refusal there is a real blocker to report, not a reason to give the reviewer its own checkout instead.
+Both agents raise the folder-trust prompt independently on first launch in a fresh worktree, so clear it in the reviewer's pane too rather than assuming the implementer already cleared it for that directory.
 
 ## Judging the review as firstmate
 
