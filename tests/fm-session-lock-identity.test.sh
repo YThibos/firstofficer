@@ -43,21 +43,37 @@ LIB="$ROOT/bin/fm-session-lock-lib.sh"
 PROBE='. "$LIB"; printf "%s %s\n" "$$" "$(fm_harness_ancestry_pid || echo NONE)"'
 export PROBE LIB
 
-# A child that holds its own process name for the length of the check. Plain
-# "sleep 30" would exec-optimise into the sleep binary, replacing exactly the
-# process shape under test; the trailing ":" keeps the shell alive as itself.
-HOLD='sleep 30; :'
+# A child that holds its own process name for the length of the check. It blocks
+# in a shell builtin reading a fifo nobody ever writes, so the fixture shell
+# stays alive AS ITSELF: no "sleep" is exec-optimised over the process shape
+# under test, and no separate long-lived child survives the kill still holding
+# the test's inherited stdout, which would stall the serial runner's tee.
+HOLD_FIFO="$TMP_ROOT/hold.fifo"
+mkfifo "$HOLD_FIFO"
+HOLD="read -r _ < '$HOLD_FIFO'"
 
 # start_child <argv0> <binary> [extra arg]: run <binary> under the given argv[0]
 # in the background and set CHILD_PID to it once it is up. It sets a variable
 # rather than echoing, because a command substitution would hold the child's
-# stdout and disturb the very process shape under test.
+# stdout and disturb the very process shape under test. It waits for the exec to
+# actually land: until then the child is still the intermediate "bash", which no
+# rule matches, so a negative assertion could pass for the wrong reason.
 CHILD_PID=''
 start_child() {
-  local argv0=$1 binary=$2 extra=${3:-}
+  local argv0=$1 binary=$2 extra=${3:-} want comm tries=0
+  want=$(basename -- "$binary")
   bash -c 'exec -a "$1" "$2" -c "$3" "$4"' _ "$argv0" "$binary" "$HOLD" "$extra" &
   CHILD_PID=$!
-  sleep 0.2
+  while [ "$tries" -lt 100 ]; do
+    comm=$(ps -o comm= -p "$CHILD_PID" 2>/dev/null || true)
+    comm="${comm#"${comm%%[![:space:]]*}"}"
+    comm="${comm%"${comm##*[![:space:]]}"}"
+    [ "$(basename -- "$comm")" = "$want" ] && return 0
+    tries=$((tries + 1))
+    sleep 0.02
+  done
+  stop_child "$CHILD_PID"
+  fail "fixture child never became '$want' (argv[0] '$argv0'); last process name: '${comm:-none}'"
 }
 
 # stop_child <pid>: kill a fixture child and reap it without leaking job noise.

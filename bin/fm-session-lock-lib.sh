@@ -29,7 +29,7 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 #     "claude ..." command, an editor holding an adapter path - cannot claim to
 #     be one, and so cannot take a home's lock away from the real session.
 fm_harness_identity() {
-  local comm=$1 args=$2 candidate
+  local comm=$1 args=$2 candidate argv0
   candidate=$(basename -- "$comm")
   if printf '%s' "$candidate" | grep -qE "$FM_HARNESS_RE"; then
     printf '%s' "$candidate"
@@ -43,7 +43,10 @@ fm_harness_identity() {
       fi
       ;;
   esac
-  candidate=$(basename -- "${args%% *}")
+  argv0="${args#"${args%%[![:space:]]*}"}"
+  argv0="${argv0%%[[:space:]]*}"
+  [ -n "$argv0" ] || return 1
+  candidate=$(basename -- "$argv0")
   if printf '%s' "$candidate" | grep -qE "$FM_HARNESS_RE"; then
     printf '%s' "$candidate"
     return 0
@@ -67,22 +70,16 @@ fm_harness_identity() {
 # as long as the session, unlike the transient subshell pid of any one tool
 # call.
 fm_harness_ancestry_pid() {
-  local pid=$$ comm args ident best='' extending=0 hit=0 is_claude=0
+  local pid=$$ comm args ident best='' extending=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
-    hit=0; is_claude=0
     if ident=$(fm_harness_identity "$comm" "$args"); then
-      hit=1
-      case "$ident" in *claude*) is_claude=1 ;; esac
-    fi
-    if [ "$hit" -eq 1 ]; then
       best="$pid"
-      if [ "$is_claude" -eq 1 ]; then
-        extending=1
-      else
-        break
-      fi
+      case "$ident" in
+        *claude*) extending=1 ;;
+        *) break ;;
+      esac
     elif [ "$extending" -eq 1 ]; then
       break
     fi
