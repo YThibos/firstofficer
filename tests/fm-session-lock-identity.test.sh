@@ -9,10 +9,11 @@
 #
 # The fix falls back to argv[0]'s basename, which still names the harness. These
 # tests pin both halves of that: the versioned launcher IS recognised when it was
-# invoked as a harness, and is NOT recognised when nothing but a later argument
-# mentions one, so an unrelated versioned binary cannot claim a home. They also
-# pin the two narrower rules the fallback sits behind, so widening one cannot
-# silently replace them.
+# invoked as a harness, and is NOT recognised when the only mention of one is a
+# later argument or a directory component of argv[0]'s own path, so neither an
+# unrelated versioned binary nor the leaf session process can claim a home. They
+# also pin the two narrower rules the fallback sits behind, so widening one
+# cannot silently replace them.
 # shellcheck disable=SC2016,SC2089,SC2090 # PROBE is a shell snippet handed verbatim to a child shell, so its single quotes and unexpanded $LIB are deliberate
 set -u
 
@@ -32,6 +33,14 @@ NAMED="$FAKEBIN/codex"
 ln -s /bin/bash "$NAMED"
 NODE="$FAKEBIN/node"
 ln -s /bin/bash "$NODE"
+
+# The real Claude Code leaf shape: the release binary lives under a directory
+# named after the harness, so a harness name appears in argv[0]'s PATH while its
+# basename is still a bare version. Rule 3 must not reach it.
+LEAF_DIR="$TMP_ROOT/claude/versions"
+mkdir -p "$LEAF_DIR"
+LEAF="$LEAF_DIR/2.1.235"
+ln -s /bin/bash "$LEAF"
 
 LIB="$ROOT/bin/fm-session-lock-lib.sh"
 
@@ -123,6 +132,19 @@ if fm_harness_pid_alive "$live_other"; then
 fi
 pass "a versioned binary with no harness name in argv[0] is not a harness"
 stop_child "$live_other"
+
+# Nor when a DIRECTORY component of argv[0] names a harness. This is the leaf
+# session process itself, whose argv[0] is the versioned binary's own full path
+# under .../claude/versions/. Matching it would hand a home to any binary merely
+# living under a "claude" directory, so only argv[0]'s basename is ever matched.
+start_child "$LEAF" "$LEAF"
+live_leaf=$CHILD_PID
+if fm_harness_pid_alive "$live_leaf"; then
+  stop_child "$live_leaf"
+  fail "a versioned binary under a claude-named directory was treated as a harness"
+fi
+pass "a harness name in a directory component of argv[0] is not a harness"
+stop_child "$live_leaf"
 
 # --- the two narrower rules still stand ------------------------------------
 # A process whose own name is a harness name needs no fallback at all.

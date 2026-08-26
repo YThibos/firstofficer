@@ -26,8 +26,11 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 #     ("2.1.235") and names no harness, while argv[0] is still "claude". This
 #     rule reads argv[0] and never the rest of the command line, so a process
 #     that merely mentions a harness in an argument - a shell running a
-#     "claude ..." command, an editor holding an adapter path - cannot claim to
-#     be one, and so cannot take a home's lock away from the real session.
+#     "claude ..." command, an editor holding an adapter path - is not mistaken
+#     for one by accident. argv[0] is freely settable by any process of the same
+#     user, so this is a guard against misidentification, not against a
+#     deliberate forge - as rule 1 already was, since naming or symlinking an
+#     executable "claude" has always been enough for it.
 #     The leaf session process, whose argv[0] is the versioned binary's own
 #     path, is deliberately left unmatched here: its basename is the version
 #     string too, and reaching it would mean matching a directory component of
@@ -36,14 +39,14 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 #     the argv[0]-named launcher above it.
 fm_harness_identity() {
   local comm=$1 args=$2 candidate argv0
-  candidate=$(basename -- "$comm")
-  if printf '%s' "$candidate" | grep -qE "$FM_HARNESS_RE"; then
+  candidate=${comm##*/}
+  if [[ $candidate =~ $FM_HARNESS_RE ]]; then
     printf '%s' "$candidate"
     return 0
   fi
   case "$comm" in
     *node*|*python*)
-      if printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"; then
+      if [[ $args =~ $FM_HARNESS_RE ]]; then
         printf '%s' "$args"
         return 0
       fi
@@ -52,8 +55,8 @@ fm_harness_identity() {
   argv0="${args#"${args%%[![:space:]]*}"}"
   argv0="${argv0%%[[:space:]]*}"
   [ -n "$argv0" ] || return 1
-  candidate=$(basename -- "$argv0")
-  if printf '%s' "$candidate" | grep -qE "$FM_HARNESS_RE"; then
+  candidate=${argv0##*/}
+  if [[ $candidate =~ $FM_HARNESS_RE ]]; then
     printf '%s' "$candidate"
     return 0
   fi
