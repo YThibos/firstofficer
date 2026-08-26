@@ -28,6 +28,12 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 #     that merely mentions a harness in an argument - a shell running a
 #     "claude ..." command, an editor holding an adapter path - cannot claim to
 #     be one, and so cannot take a home's lock away from the real session.
+#     The leaf session process, whose argv[0] is the versioned binary's own
+#     path, is deliberately left unmatched here: its basename is the version
+#     string too, and reaching it would mean matching a directory component of
+#     that path, which would hand a home to any binary merely living under a
+#     "claude" directory. The walk below still resolves such a session, through
+#     the argv[0]-named launcher above it.
 fm_harness_identity() {
   local comm=$1 args=$2 candidate argv0
   candidate=$(basename -- "$comm")
