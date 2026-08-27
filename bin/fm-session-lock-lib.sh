@@ -11,6 +11,58 @@
 # Known harness command names; extend when a new adapter is verified.
 FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 
+# Decide whether one process is a verified harness, from its name ($1, ps comm)
+# and its command line ($2, ps args). Echoes the string that identified it, so
+# a caller can tell WHICH harness matched, and returns non-zero when none did.
+# Both the ancestry walk and the liveness check below go through here: if they
+# matched by different rules, the walk could record a lock holder that liveness
+# then reads back as stale, and every guard would see the home as unowned.
+#
+# Three rules, narrowest first:
+#  1. the process name itself names a harness;
+#  2. a bare interpreter (node, python) running a script whose path names one;
+#  3. a versioned launcher, matched on argv[0]'s basename alone. Claude Code
+#     execs its own release binary, so the process name is the version string
+#     ("2.1.235") and names no harness, while argv[0] is still "claude". This
+#     rule reads argv[0] and never the rest of the command line, so a process
+#     that merely mentions a harness in an argument - a shell running a
+#     "claude ..." command, an editor holding an adapter path - is not mistaken
+#     for one by accident. argv[0] is freely settable by any process of the same
+#     user, so this is a guard against misidentification, not against a
+#     deliberate forge - as rule 1 already was, since naming or symlinking an
+#     executable "claude" has always been enough for it.
+#     The leaf session process, whose argv[0] is the versioned binary's own
+#     path, is deliberately left unmatched here: its basename is the version
+#     string too, and reaching it would mean matching a directory component of
+#     that path, which would hand a home to any binary merely living under a
+#     "claude" directory. The walk below still resolves such a session, through
+#     the argv[0]-named launcher above it.
+fm_harness_identity() {
+  local comm=$1 args=$2 candidate argv0
+  candidate=${comm##*/}
+  if [[ $candidate =~ $FM_HARNESS_RE ]]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  case "$comm" in
+    *node*|*python*)
+      if [[ $args =~ $FM_HARNESS_RE ]]; then
+        printf '%s' "$args"
+        return 0
+      fi
+      ;;
+  esac
+  argv0="${args#"${args%%[![:space:]]*}"}"
+  argv0="${argv0%%[[:space:]]*}"
+  [ -n "$argv0" ] || return 1
+  candidate=${argv0##*/}
+  if [[ $candidate =~ $FM_HARNESS_RE ]]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  return 1
+}
+
 # Walk the current process ancestry (up to 16 hops) and print a harness pid.
 # For every harness except Claude, the first match wins (innermost pid), which
 # is where e.g. Pi's shared signed-wrapper ancestry actually holds the session:
@@ -27,33 +79,16 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 # as long as the session, unlike the transient subshell pid of any one tool
 # call.
 fm_harness_ancestry_pid() {
-  local pid=$$ comm args best='' bc extending=0 hit=0 is_claude=0
+  local pid=$$ comm args ident best='' extending=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
-    bc=$(basename -- "$comm")
-    hit=0; is_claude=0
-    if printf '%s' "$bc" | grep -qE "$FM_HARNESS_RE"; then
-      hit=1
-      case "$bc" in *claude*) is_claude=1 ;; esac
-    else
-      # Bare interpreter (e.g. node): match the harness name in its script path.
-      case "$comm" in
-        *node*|*python*)
-          if printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"; then
-            hit=1
-            case "$args" in *claude*) is_claude=1 ;; esac
-          fi
-          ;;
-      esac
-    fi
-    if [ "$hit" -eq 1 ]; then
+    if ident=$(fm_harness_identity "$comm" "$args"); then
       best="$pid"
-      if [ "$is_claude" -eq 1 ]; then
-        extending=1
-      else
-        break
-      fi
+      case "$ident" in
+        *claude*) extending=1 ;;
+        *) break ;;
+      esac
     elif [ "$extending" -eq 1 ]; then
       break
     fi
@@ -69,16 +104,8 @@ fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  if printf '%s' "$(basename -- "$comm")" | grep -qE "$FM_HARNESS_RE"; then
-    return 0
-  fi
-  case "$comm" in
-    *node*|*python*)
-      args=$(ps -o args= -p "$pid" 2>/dev/null)
-      printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"
-      ;;
-    *) return 1 ;;
-  esac
+  args=$(ps -o args= -p "$pid" 2>/dev/null)
+  fm_harness_identity "$comm" "$args" >/dev/null
 }
 
 # True when state dir $1 holds a session lock whose pid is the harness ancestor

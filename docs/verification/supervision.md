@@ -94,6 +94,10 @@ The same run proved the Claude-compatible Stop entries stay inert under `GROK_AG
 The secondmate-home scope and manual-repair wake path were measured with Claude Code 2.1.207 on 2026-07-12, when a native background completion re-invoked the idle model with no human input.
 The current Stop-owned main/secondmate inclusion and child-worktree exclusion are covered deterministically by `tests/fm-claude-stop-autoarm.test.sh`.
 On 2026-07-28 with Claude Code 2.1.205, `fm_harness_ancestry_pid()` in `bin/fm-session-lock-lib.sh` was fixed to resolve the outermost pid of a contiguous nested-harness run instead of the first match, so the Stop auto-arm correctly reaches the session's true lock owner through Claude Code's multi-level `bg-spare` hook worker chain.
+On 2026-08-20 with Claude Code 2.1.235, a session launched from a versioned release binary could not acquire its home lock at all: Claude Code execs that binary directly, so the process name is the version string (`2.1.235`), which matches no harness name and is not the bare `node` or `python` the interpreter fallback expected.
+Both `fm_harness_ancestry_pid()` and `fm_harness_pid_alive()` now share one `fm_harness_identity()` helper that adds a third rule matching the basename of argv[0] alone, never the rest of the command line, so a process that merely mentions a harness in an argument still cannot claim a home's lock.
+The leaf session process stays deliberately unmatched, because its argv[0] basename is the version string too and reaching it would mean matching a directory component of that path; the walk resolves such a session through the argv[0]-named launcher above it, as verified on Claude Code 2.1.246.
+`bin/fm-session-lock-lib.sh`'s header owns the full rule and `tests/fm-session-lock-identity.test.sh` pins every case deterministically, including that exclusion.
 
 The Claude product live path ran with Claude Code 2.1.219 on 2026-07-24:
 
