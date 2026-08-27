@@ -110,8 +110,19 @@ The two verbatim messages `bin/fm-transcript-limit-stop.mjs` matches, `You've hi
 Run over the 60 real transcripts on that machine containing the session-limit text, the classifier called 28 stopped and 32 still working, the latter being sessions that resumed after the limit cleared and therefore end on an ordinary record.
 Review of that change found the transcript tail alone insufficient: resuming a limit-stopped session reuses its session id and its `.jsonl`, so until the resumed session writes a new conversational record the tail still ends on the limit error while that session is live and holding the lock.
 The same 60-transcript survey confirms resumed sessions continue in the same file rather than starting a new one, which is what makes that window reachable in normal use.
-The takeover therefore also requires the last record's own instant to be at or after the holder process's start time, read from that process's age via `ps -o etimes=` rather than from any file timestamp, and refuses when either value is missing or unparseable.
-`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins every half deterministically, including a resumed-session case that fails without that start-time condition.
+The takeover therefore also requires the last record's own instant to be at or after the holder process's start time, read from that process's age via the POSIX `ps -o etime=` field rather than from any file timestamp, and refuses when either value is missing or unparseable.
+`etimes` was tried first and rejected: it is a procps extension that BSD `ps` refuses outright, so on macOS, a supported host, every takeover would have refused and the feature would have been a silent no-op.
+
+A later review found the sibling window still open: a holder's argv is fixed at exec, so a session that replaces its conversation in place through `/clear`, `/new`, or `/fork` keeps naming the transcript of the session it replaced, whose tail is the limit record that same process wrote.
+Claude Code's per-pid session record at `<config-root>/sessions/<pid>.json` was checked against every live session on that machine: it carries the session's CURRENT `sessionId`, its `cwd`, and a `procStart` that exactly matches field 22 of `/proc/<pid>/stat`, and its `sessionId` resolves to a real existing transcript in every case.
+The takeover now refuses when such a record inside the holder's own process tree names a different session, as a purely restrictive cross-check: resolution still comes from argv alone, and a record that is missing, unreadable, unparseable, or whose `procStart` does not match the live process adds no restriction at all.
+That `procStart` verification needs `/proc`, so on a non-Linux host every record is unverifiable and the cross-check changes nothing there.
+
+The transcript directory mangling was checked at the same time and deliberately left narrow.
+All 72 real project directories on that machine were compared with the working directory each transcript records internally, 72 of 72 matched the `/` and `.` to `-` rule exactly, and the only special characters appearing in any recorded path were `-`, `.` and `/`.
+Widening it to every non-alphanumeric character was rejected because it would break a path holding an underscore that resolves correctly today, and a path mangled differently only ever yields no transcript, which refuses.
+
+`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins every half deterministically, including a resumed-session case that fails without that start-time condition and a replaced-session case that fails without the per-pid cross-check.
 
 The Claude product live path ran with Claude Code 2.1.219 on 2026-07-24:
 

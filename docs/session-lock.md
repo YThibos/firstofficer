@@ -31,11 +31,28 @@ Resuming a limit-stopped session reuses its session id and its transcript, so be
 The holder's process start time separates the two: a session that hit the limit itself was already running when that record was written, while a resumed one started after it.
 So the takeover additionally requires the last record's own instant to be at or after the holder process's start, and a start time that cannot be read refuses like every other unavailable value.
 This compares two recorded instants rather than guessing at idleness, which is what keeps it clear of the timestamp rule below.
+That start time is read from the process's own age through the POSIX `ps -o etime=` field rather than the procps-only `etimes`, because BSD `ps` rejects the latter and macOS is a supported host, where the takeover would otherwise be a silent no-op.
+
+A resumed session is not the only way a holder can outlive the session its argv names.
+A holder's argv is fixed at exec, so a live session that replaces its conversation in place, through `/clear`, `/new`, or `/fork`, still points at the transcript of the session it replaced, whose tail is the limit record that same process wrote before the replacement.
+`fm_claude_session_replaced` closes that window by cross-checking the per-pid session record Claude Code keeps at `<config-root>/sessions/<pid>.json`, which names that process's CURRENT session id.
+The lock records the outermost pid of a run while those records are keyed on an inner pid, so the search covers the holder and its own descendants and never a record belonging to an unrelated process tree.
+
+That cross-check may only ever refuse.
+It is never an alternative way to resolve the session id, which still comes from argv alone, and it can never permit a takeover that would otherwise refuse.
+A record is trusted only when its `procStart` matches the live process's own start value in `/proc/<pid>/stat`, so a record left behind by a since-recycled pid is not mistaken for the holder's.
+That verification needs `/proc` and therefore exists only on Linux; on any other host every record is unverifiable and is treated exactly like an absent one.
+A missing, unreadable, unparseable, or unverifiable record adds no restriction whatsoever, so every other condition still decides the outcome on its own, and absence is never read as permission either.
 
 Three evidence rules matter enough to state here, because each was established against real transcripts and each is easy to get wrong.
 
 The classification is a real JSON parse of the last `user` or `assistant` record, never a text match over the file.
 An ordinary tool result inside a live session's transcript can quote a past limit message verbatim - a session working on this very mechanism does exactly that - and a text match would hand a working session's lock away.
+
+The transcript directory is named after the home's absolute path with only `/` and `.` replaced by `-`.
+All 72 real project directories on the machine this was established on were checked against the working directory each transcript records internally, and 72 of 72 matched that rule exactly, the only special characters appearing in any recorded path being `-`, `.` and `/`.
+Widening it to every non-alphanumeric character was rejected deliberately: if Claude Code really maps only these two, an all-punctuation rule would break a path holding an underscore that resolves correctly today.
+A path mangled differently simply yields no transcript, which refuses, so the narrow rule costs a missed takeover and never a wrong one.
 
 Transcript timestamps are not evidence of idleness.
 Claude rewrites trailing metadata records long after a session ends, so the file's mtime can be hours newer than its last real record, and neither mtime nor elapsed idle time is used anywhere in this decision.
@@ -43,7 +60,7 @@ Claude rewrites trailing metadata records long after a session ends, so the file
 ## Why every other case refuses
 
 Taking the lock from a session that is genuinely working is far worse than refusing one that is finished, so the test is deliberately asymmetric: it returns true only for a positively identified limit stop and false for everything else.
-Refusal is the outcome when the holder is not Claude, when its session id never reaches its own argv, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, when the last conversational record is anything other than the usage-limit error, including every other API error, when that record carries no instant or one that does not parse, when the holder's start time cannot be read, and when the holder started after that record was written.
+Refusal is the outcome when the holder is not Claude, when its session id never reaches its own argv, when a trusted per-pid record shows it working under a session other than the one its argv names, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, when the last conversational record is anything other than the usage-limit error, including every other API error, when that record carries no instant or one that does not parse, when the holder's start time cannot be read, and when the holder started after that record was written.
 A session hosted without an explicit session id in its argv, such as a plain foreground `claude`, is therefore never taken over; nothing else can tie that process to a transcript, and inventing a link would be exactly the guess this contract exists to avoid.
 
 ## Where the condition is reported
@@ -59,6 +76,7 @@ Claiming a lock is a fleet mutation, and taking one from a live process is preci
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.
 It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.
+It also pins the per-pid cross-check in all three directions: a holder whose record names a different session keeps its lock, a holder with no record at all is still taken over, and a record whose `procStart` belongs to a since-recycled pid changes nothing.
 
 ## Maintaining this file
 

@@ -59,10 +59,13 @@ make_case() {
   printf '%s|%s|%s|%s\n' "$dir" "$dir/home" "$dir/fakebin" "$dir/ps-table"
 }
 
-# make_fake_ps <fakebin>: serve `ps -o comm=|args=|ppid=|etimes= -p <pid>` from
-# the tab separated table in FM_TEST_PS_TABLE (pid, ppid, comm, args, etimes).
-# etimes is the process's age in seconds, which is how a fixture places a
-# holder's start time relative to its transcript's last record. A pid with no row
+# make_fake_ps <fakebin>: serve `ps -o comm=|args=|ppid=|etime= -p <pid>` from
+# the tab separated table in FM_TEST_PS_TABLE (pid, ppid, comm, args, age).
+# The age is the process's age in seconds, which is how a fixture places a
+# holder's start time relative to its transcript's last record; the fake renders
+# it in the POSIX [[dd-]hh:]mm:ss form real ps prints, so the parser under test
+# is exercised rather than bypassed, and passes a non-numeric age through
+# verbatim so a fixture can still present an unreadable one. A pid with no row
 # answers as a plain foreground claude, which is what the transient process
 # running the command under test looks like from inside these fixtures. Its
 # parent is FM_TEST_PS_DEFAULT_PPID, so a fixture can put a live process there
@@ -82,29 +85,47 @@ for arg in "$@"; do
     comm=) field=comm ;;
     args=) field=args ;;
     ppid=) field=ppid ;;
-    etimes=) field=etimes ;;
+    etime=) field=etime ;;
   esac
   [ "$prev" = "-p" ] && pid=$arg
   prev=$arg
 done
 [ -n "$field" ] && [ -n "$pid" ] || exit 1
+# Render an age in seconds the way ps prints "etime": [[dd-]hh:]mm:ss.
+as_etime() {
+  case "$1" in
+    ''|*[!0-9]*) printf '%s\n' "$1"; return 0 ;;
+  esac
+  local total=$1 days hours mins secs
+  days=$(( total / 86400 ))
+  hours=$(( total % 86400 / 3600 ))
+  mins=$(( total % 3600 / 60 ))
+  secs=$(( total % 60 ))
+  if [ "$days" -gt 0 ]; then
+    printf '%d-%02d:%02d:%02d\n' "$days" "$hours" "$mins" "$secs"
+  elif [ "$hours" -gt 0 ]; then
+    printf '%02d:%02d:%02d\n' "$hours" "$mins" "$secs"
+  else
+    printf '%02d:%02d\n' "$mins" "$secs"
+  fi
+}
 row=$(awk -F'\t' -v p="$pid" '$1 == p { print; exit }' "$FM_TEST_PS_TABLE" 2>/dev/null)
 if [ -z "$row" ]; then
   case "$field" in
     comm|args) printf 'claude\n' ;;
     ppid) printf '%s\n' "${FM_TEST_PS_DEFAULT_PPID:-1}" ;;
-    etimes) printf '0\n' ;;
+    etime) as_etime 0 ;;
   esac
   exit 0
 fi
-IFS=$'\t' read -r _ row_ppid row_comm row_args row_etimes <<EOF
+IFS=$'\t' read -r _ row_ppid row_comm row_args row_age <<EOF
 $row
 EOF
 case "$field" in
   comm) printf '%s\n' "$row_comm" ;;
   args) printf '%s\n' "$row_args" ;;
   ppid) printf '%s\n' "$row_ppid" ;;
-  etimes) printf '%s\n' "${row_etimes:-0}" ;;
+  etime) as_etime "${row_age:-0}" ;;
 esac
 SH
   chmod +x "$fakebin/ps"
@@ -474,6 +495,90 @@ EOF
   pass "only the session that took the lock over is told it did"
 }
 
+# --- the per-pid session record cross-check ---------------------------------
+#
+# Claude Code keeps one record per live session process at
+# <config-root>/sessions/<pid>.json naming that session's CURRENT session id, so
+# a holder that replaced its conversation in place can be told apart from one
+# still working on the session its argv names. The record is only trusted when
+# its procStart matches the live process, which needs /proc and therefore only
+# exists on Linux; elsewhere every record is unverifiable and the cross-check
+# adds nothing, which is exactly what these cases assert for an absent one.
+
+proc_supported() { [ -r "/proc/$$/stat" ]; }
+
+# proc_start_ticks <pid>: field 22 of /proc/<pid>/stat, the value Claude Code
+# records as procStart.
+proc_start_ticks() {
+  awk '{ sub(/^[^)]*\) /, ""); print $20 }' "/proc/$1/stat"
+}
+
+# write_session_record <pid> <session-id> [proc-start]: a real per-pid session
+# record, defaulting to the live process's true start value.
+write_session_record() {
+  local pid=$1 id=$2 start=${3:-}
+  [ -n "$start" ] || start=$(proc_start_ticks "$pid")
+  mkdir -p "$CLAUDE_CONFIG_DIR/sessions"
+  printf '{"pid":%s,"sessionId":"%s","cwd":"/tmp","procStart":"%s","kind":"interactive"}\n' \
+    "$pid" "$id" "$start" > "$CLAUDE_CONFIG_DIR/sessions/$pid.json"
+}
+
+test_replaced_session_keeps_its_lock() {
+  local rec home fakebin table holder transcript status=0
+  if ! proc_supported; then
+    pass "the replaced-session cross-check needs /proc and is not evaluated on this host"
+    return 0
+  fi
+  # The reported defect: the holder hit the limit under the session its argv
+  # names, then replaced its conversation in place and is working again under a
+  # new one. Its argv, and so the transcript this resolves, cannot know that.
+  rec=$(limit_stop_case replaced limit-stop)
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  write_session_record "$holder" eeeeeeee-5555-5555-5555-eeeeeeeeeeee
+  claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a holder working under a replaced session was taken over"
+  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a working holder lost its lock"
+  pass "a holder whose current session differs from the one its argv names keeps its lock"
+}
+
+test_absent_session_record_still_takes_over() {
+  local rec home fakebin table holder transcript session status=0
+  rec=$(limit_stop_case no-record limit-stop)
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  [ -e "$CLAUDE_CONFIG_DIR/sessions/$holder.json" ] \
+    && fail "this case depends on the holder having no per-pid record"
+  session=$(add_session "$table")
+  claim "$home" "$fakebin" "$table" "$session" >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "a holder with no per-pid record was refused, so the cross-check did more than restrict"
+  [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the takeover did not record the taking session"
+  pass "a holder with no per-pid record is taken over exactly as before"
+}
+
+test_stale_session_record_is_ignored() {
+  local rec home fakebin table holder transcript session status=0
+  if ! proc_supported; then
+    pass "the stale-record case needs /proc and is not evaluated on this host"
+    return 0
+  fi
+  rec=$(limit_stop_case stale-record limit-stop)
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  # A record left behind by a process that once had this pid: it names another
+  # session, but its procStart belongs to that dead process, so it is not this
+  # holder's record and must not restrict anything.
+  write_session_record "$holder" eeeeeeee-6666-6666-6666-eeeeeeeeeeee 1
+  session=$(add_session "$table")
+  claim "$home" "$fakebin" "$table" "$session" >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "a record from a reused pid was trusted and blocked the takeover"
+  [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the takeover did not record the taking session"
+  pass "a per-pid record whose procStart does not match the live process is ignored"
+}
+
 test_status_names_the_takeover_command() {
   local rec home fakebin table holder transcript out
   rec=$(limit_stop_case status-report limit-stop)
@@ -502,5 +607,8 @@ test_unresolvable_holders_refuse
 test_resumed_session_keeps_its_lock
 test_missing_record_instant_refuses
 test_unreadable_start_time_refuses
+test_replaced_session_keeps_its_lock
+test_absent_session_record_still_takes_over
+test_stale_session_record_is_ignored
 test_takeover_is_not_attributed_to_other_readers
 test_status_names_the_takeover_command

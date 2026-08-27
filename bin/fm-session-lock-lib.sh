@@ -215,6 +215,16 @@ fm_claude_session_id() {
 # Print the directory Claude Code keeps transcripts in for working directory $1.
 # It names that directory after the absolute path with every "/" and every "."
 # replaced by "-", under the config root CLAUDE_CONFIG_DIR selects.
+#
+# That mapping is deliberately narrow. All 72 real project directories on the
+# machine this was established on were checked against the working directory
+# each transcript records internally, and 72 of 72 matched this rule exactly;
+# the only special characters appearing in any recorded path were "-", "." and
+# "/". Widening it to every non-alphanumeric character was rejected because a
+# path holding an underscore resolves correctly today and an all-punctuation
+# rule would break it. A path some other character is mangled differently in
+# simply yields no transcript, which refuses, so this costs a missed takeover
+# and never a wrong one.
 fm_claude_transcript_dir() {
   local cwd=$1
   printf '%s/projects/%s' \
@@ -226,13 +236,128 @@ fm_claude_transcript_dir() {
 # Derived from the elapsed time ps reports for that pid, which is the process's
 # own age rather than anything about a file, so it stays clear of the transcript
 # mtime this decision must never depend on. A pid that is gone, or an elapsed
-# time that is not a plain number, fails rather than guessing.
+# time that does not parse, fails rather than guessing.
+#
+# It reads the POSIX "etime" field in its [[dd-]hh:]mm:ss form rather than the
+# plain seconds of "etimes", because the latter is a procps extension that BSD
+# ps rejects outright and macOS is a supported host: on Darwin every takeover
+# would otherwise refuse and the feature would be a silent no-op there.
 fm_process_start_epoch() {
-  local pid=$1 elapsed
-  elapsed=$(ps -o etimes= -p "$pid" 2>/dev/null) || return 1
+  local pid=$1 elapsed days=0 hours=0 mins secs rest part
+  elapsed=$(ps -o etime= -p "$pid" 2>/dev/null) || return 1
   elapsed=${elapsed//[[:space:]]/}
-  case "$elapsed" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$(( $(date -u +%s) - elapsed ))"
+  case "$elapsed" in *-*) days=${elapsed%%-*}; elapsed=${elapsed#*-} ;; esac
+  case "$elapsed" in
+    *:*:*) hours=${elapsed%%:*}; rest=${elapsed#*:} ;;
+    *:*) rest=$elapsed ;;
+    *) return 1 ;;
+  esac
+  mins=${rest%%:*}
+  secs=${rest#*:}
+  for part in "$days" "$hours" "$mins" "$secs"; do
+    case "$part" in ''|*[!0-9]*) return 1 ;; esac
+  done
+  printf '%s' "$(( $(date -u +%s) \
+    - (10#$days * 86400 + 10#$hours * 3600 + 10#$mins * 60 + 10#$secs) ))"
+}
+
+# Print field $2 of /proc/$1/stat, counted from 0 at the state field that
+# follows the process name, or fail when it cannot be read. The name is skipped
+# through its closing parenthesis, because a process may have spaces or
+# parentheses in it. /proc is Linux-only, so every caller of this treats a
+# failure as "cannot be verified here" rather than as evidence of anything.
+fm_proc_stat_field() {
+  local pid=$1 index=$2 line rest
+  local -a fields
+  { read -r line < "/proc/$pid/stat"; } 2>/dev/null || return 1
+  rest=${line#*') '}
+  [ "$rest" != "$line" ] || return 1
+  # shellcheck disable=SC2206
+  fields=($rest)
+  [ -n "${fields[$index]:-}" ] || return 1
+  printf '%s' "${fields[$index]}"
+}
+
+# True when pid $1 is pid $2 or one of its descendants, walking up to 16 hops of
+# real parent links. Bounded in both directions: the hop count caps the walk,
+# and reaching pid 1 or an unreadable process ends it, so a process outside the
+# holder's own tree is never reported as being in it.
+fm_pid_in_tree() {
+  local pid=$1 root=$2
+  case "$pid$root" in ''|*[!0-9]*) return 1 ;; esac
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+    [ "$pid" = "$root" ] && return 0
+    [ "$pid" -gt 1 ] || return 1
+    pid=$(fm_proc_stat_field "$pid" 1) || return 1
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  done
+  return 1
+}
+
+# Print the session id Claude Code currently records for pid $1, or fail when
+# there is no record that can be TRUSTED for that pid. Claude Code keeps one
+# such record per session process at <config-root>/sessions/<pid>.json, holding
+# that session's current sessionId and the procStart of the process it belongs
+# to.
+#
+# A pid is reused, so the record is only trusted when its procStart matches the
+# live process's own start value in /proc/<pid>/stat; anything else is a leftover
+# from a pid that has since been recycled. /proc exists only on Linux, so on any
+# other host that verification cannot be performed at all and every record is
+# therefore unverifiable, which the single caller below treats exactly like an
+# absent one - leaving existing behaviour untouched there.
+fm_claude_recorded_session_id() {
+  local pid=$1 record started recorded id
+  started=$(fm_proc_stat_field "$pid" 19) || return 1
+  record="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$pid.json"
+  [ -f "$record" ] && [ -r "$record" ] || return 1
+  recorded=$(sed -n \
+    's/.*"procStart"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\).*/\1/p' \
+    "$record" 2>/dev/null | head -n 1)
+  [ -n "$recorded" ] && [ "$recorded" = "$started" ] || return 1
+  id=$(sed -n \
+    's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
+    "$record" 2>/dev/null | head -n 1)
+  [ -n "$id" ] || return 1
+  printf '%s' "$id"
+}
+
+# True when the session lock holder $1 is demonstrably NOT working on session id
+# $2 any more, because a trusted per-pid record inside its own process tree names
+# a different session.
+#
+# A holder's argv is fixed at exec, so a live session that replaces its
+# conversation in place (/clear, /new, /fork) keeps pointing at the transcript of
+# the session it replaced - whose tail is still the limit record that same
+# process wrote before the replacement. Without this the holder would be taken
+# over while actively working.
+#
+# This is a purely restrictive cross-check and never an alternative way to
+# resolve the session id: resolution still comes from argv alone. A missing,
+# unreadable, unparseable, or unverifiable record adds no restriction at all, so
+# every existing condition still decides the outcome on its own.
+#
+# The lock deliberately records the OUTERMOST pid of a run while these records
+# are keyed on an inner pid, so the search covers the holder and its own
+# descendants. It walks the recorded pids rather than the process table, and
+# confines itself to the holder's tree, so a record belonging to an unrelated
+# process is never consulted. A record that names the expected session wins over
+# one that does not, because corroboration may only ever permit.
+fm_claude_session_replaced() {
+  local holder=$1 expected=$2 dir record pid id replaced=1
+  dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions"
+  [ -d "$dir" ] || return 1
+  for record in "$dir"/*.json; do
+    [ -f "$record" ] || continue
+    pid=${record##*/}
+    pid=${pid%.json}
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    fm_pid_in_tree "$pid" "$holder" || continue
+    id=$(fm_claude_recorded_session_id "$pid") || continue
+    [ "$id" = "$expected" ] && return 1
+    replaced=0
+  done
+  return "$replaced"
 }
 
 # True when the session behind lock-holder pid $1, running in home $2, is
@@ -252,6 +377,10 @@ fm_session_limit_stopped() {
   # Claude is the only harness with a verified limit-stop transcript shape.
   fm_harness_is_claude "$comm" "$args" || return 1
   session_id=$(fm_claude_session_id "$args") || return 1
+  # A holder that has since replaced its conversation in place is still working,
+  # under a session id its argv cannot know about. This only ever refuses; where
+  # no trusted record exists it adds nothing and the conditions below decide.
+  fm_claude_session_replaced "$pid" "$session_id" && return 1
   transcript="$(fm_claude_transcript_dir "$home")/$session_id.jsonl"
   [ -f "$transcript" ] && [ -r "$transcript" ] || return 1
   # Resuming a limit-stopped session reuses its session id and its transcript,
