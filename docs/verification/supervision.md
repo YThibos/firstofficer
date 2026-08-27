@@ -99,6 +99,17 @@ Both `fm_harness_ancestry_pid()` and `fm_harness_pid_alive()` now share one `fm_
 The leaf session process stays deliberately unmatched, because its argv[0] basename is the version string too and reaching it would mean matching a directory component of that path; the walk resolves such a session through the argv[0]-named launcher above it, as verified on Claude Code 2.1.246.
 `bin/fm-session-lock-lib.sh`'s header owns the full rule and `tests/fm-session-lock-identity.test.sh` pins every case deterministically, including that exclusion.
 
+On 2026-08-27 with Claude Code 2.1.247, that same walk was found resolving a background session to `claude daemon run`, the supervisor every background session on the machine descends from and which outlives all of them.
+`ps -eo pid,ppid,comm,args` showed the session's own host `claude bg-pty-host` (pid 3617, process name `2.1.247`) parented directly by that daemon (pid 3492, process name `claude`), and because the daemon is claude-named the walk extended past the host and returned the daemon instead.
+That breaks ownership twice: the daemon never exits, so a lock recording it reads as live forever and refuses every later session, and every concurrent background session in the home resolves to that one pid, so no two of them can tell each other apart.
+`fm_harness_identity()` now rejects a process shared across sessions before any of its three rules, matching the subcommand in argv[1] rather than a substring of the command line, so the walk stops one hop below such a process and keeps the session's own host, and a lock already recording one reads back as stale and reclaimable.
+Re-run against the same live processes, the daemon is rejected while pids 3617, 3655, 2827, and a plain foreground `claude` all still resolve as harnesses.
+
+On the same date, `bin/fm-lock.sh` gained the one takeover a live holder permits: a holder whose session is positively identified as stopped on a usage limit.
+The two verbatim messages `bin/fm-transcript-limit-stop.mjs` matches, `You've hit your session limit` and `You've hit your monthly spend limit`, were both read from real transcripts under `~/.claude/projects`, alongside transient `API Error:` records that must never authorise a takeover.
+Run over the 60 real transcripts on that machine containing the session-limit text, the classifier called 28 stopped and 32 still working, the latter being sessions that resumed after the limit cleared and therefore end on an ordinary record.
+`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins both halves deterministically.
+
 The Claude product live path ran with Claude Code 2.1.219 on 2026-07-24:
 
 ```sh

@@ -43,6 +43,7 @@ It never tears down a task, merges a PR, dispatches new work, steers a worker, a
    Until then it stays queued with the reason.
    The `(main-inventory)` gate is an action-free integrity warning rather than queued work.
    Render it under Charted Next with the related `omitted` disclosure, never invent an Underway row from backlog-only state, and never move it into Captain's Call.
+   The snapshot's `session_lock` field is the one field that describes this session rather than the fleet, and it renders under Charted Next by the rule below.
 
 2. **Compose the four-section chat digest from the fresh snapshot.**
    The gather step is deterministic; your judgment is scoped to ranking the command's facts by what matters right now and writing scannable captain-facing prose.
@@ -60,7 +61,7 @@ It never tears down a task, merges a PR, dispatches new work, steers a worker, a
    - **Captain's Call** - every open decision summarized with its options from the structured decision record, plus each PR ready to merge and each needed credential or login, every PR with the full `https://...` URL, never a bare `#number`.
    - **Recently Landed** - the bounded current recent-completions baseline from structured state across the main fleet and every registered secondmate home, rendered in full on every run.
    - **Underway** - each live direct report making progress, with its current state, and the plans or main pickup pointers worth reopening (`data/<id>/report.md` files, `.lavish/*.html` boards).
-   - **Charted Next** - queued or gated work, including any main-inventory integrity warning, with each item's blocker, date, or integrity reason.
+   - **Charted Next** - queued or gated work, including any main-inventory integrity warning and any reportable `session_lock` condition, with each item's blocker, date, or integrity reason.
    After writing the file, return the concise four-section chat digest and include the report path or link without adding a fifth section.
    For a richer review surface, optionally offer a Lavish board with `lavish-axi` when the report has enough structure to deserve one, but only after the required digest is ready.
 
@@ -84,6 +85,10 @@ Rules that keep the contract unambiguous:
 - Every chat digest and file-mode report is a complete current snapshot, never a delta against a prior report.
 - Recently Landed always renders the bounded current baseline, even when the same completions appeared in an earlier report.
 - The four buckets are mutually exclusive, so every item is forced into exactly one: needs-your-action is Captain's Call, done is Recently Landed, self-progressing is Underway, and not-yet-started work or an action-free fleet-integrity warning is Charted Next.
+- The `session_lock` field renders as a Charted Next line, and only when it says something other than that this session holds the lock cleanly.
+  Say plainly that this session took over from a session stopped by a usage limit when the field reports that, and otherwise name the condition and the one command that resolves it.
+  This skill never runs that command: it is a fleet mutation, and taking a lock from a live process is exactly the kind of act the read-only contract exists to keep out of a status read, so the line reports the condition and leaves the claim to the normal lifecycle.
+  It is never a Captain's Call item, because claiming the lock is firstmate's own action rather than the captain's.
 - The strict boundary keeps action-free items OUT of Captain's Call: a working or validating task, a queued item blocked on another task or a date, landed work, a completed scout's report pointer, a declared `paused:` external wait, and a bare recorded PR with no merge-ready signal each belong to one of the other three sections, never Captain's Call.
 - A secondmate's own row appears Underway only for `active_child_work`; `externally_held` belongs in Charted Next, and `unknown` belongs there as an unavailable-state gate unless its reason requires the captain's action.
 - Do not suppress separately projected decisions, landed records, or gates from a `partial-structured` home merely because that secondmate's own row is `unknown`.

@@ -11,6 +11,11 @@
 # output, it never removes them from - or otherwise weakens - the canonical snapshot,
 # which stays complete.
 #
+# ONE field is sourced locally rather than projected: session_lock. It is not fleet
+# state at all but this session's own authority over the home, and a bearings read
+# is exactly when a fresh session needs it. The decision stays in the session-lock
+# lib's report (see docs/session-lock.md); this script only renders its tokens.
+#
 # LOCAL-ONLY by default: a normal invocation makes ZERO GitHub/network/auth calls.
 # It MAY surface PR URLs already recorded locally in task meta (recorded_prs), but it
 # performs no live discovery or checks. Live PR discovery/checks happen ONLY under
@@ -55,7 +60,8 @@
 #   --all-pr-repos   query every discovered repository under --include-prs
 #   -h,--help        usage
 #
-# Output contract: `fm-bearings.v1`. Read-only; no locks, no mutation, no reports.
+# Output contract: `fm-bearings.v1`. Read-only; it reads the session lock but
+# never acquires or reclaims one, mutates nothing, and writes no reports.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,7 +108,8 @@ usage: fm-bearings-snapshot.sh [--json] [--include-prs] [--fields <list>]
 Compact bearings projection over fm-fleet-snapshot.sh. TOON by default.
 Default is LOCAL-ONLY (no network); --include-prs is the only path that fetches.
 
-Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
+Default fields: schema, home, generated, prs, session_lock,
+  in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
@@ -175,6 +182,31 @@ else
 fi
 HOME_LABEL=$(printf '%s' "$SNAP" | jq -er '.fm_home | strings | split("/") | (.[-2:] | join("/"))') \
   || { echo "fm-bearings-snapshot: invalid canonical snapshot" >&2; exit 1; }
+
+# --- session lock (local, read-only) ---------------------------------------
+# Not fleet state, so it is not in the canonical snapshot: it is a fact about
+# THIS session's own authority over the home, and a bearings read is exactly
+# when a fresh session needs it. The decision itself stays in the session-lock
+# lib; this only renders its tokens as one field.
+# shellcheck source=bin/fm-session-lock-lib.sh
+. "$SCRIPT_DIR/fm-session-lock-lib.sh"
+HOME_PATH=$(printf '%s' "$SNAP" | jq -r '.fm_home | strings // empty')
+SESSION_LOCK='unknown'
+TAKEOVER_NOTE=''
+while IFS= read -r report_line; do
+  case "${report_line%% *}" in
+    owned) SESSION_LOCK='held by this session' ;;
+    free) SESSION_LOCK='unclaimed - run bin/fm-lock.sh to claim it' ;;
+    held) SESSION_LOCK='held by another live session - this session is read-only' ;;
+    limit-stopped)
+      SESSION_LOCK='held by a session stopped by a usage limit - run bin/fm-lock.sh to take over'
+      ;;
+    stale) SESSION_LOCK='no live session holds it - run bin/fm-lock.sh to claim it' ;;
+    unreadable|malformed) SESSION_LOCK='unreadable - resolve before mutating fleet state' ;;
+    took-over-from) TAKEOVER_NOTE=' (took over from a session stopped by a usage limit)' ;;
+  esac
+done <<<"$(fm_session_lock_report "$HOME_PATH/state" "$HOME_PATH")"
+SESSION_LOCK="$SESSION_LOCK$TAKEOVER_NOTE"
 
 # --- optional live PR enrichment (the ONLY network path) --------------------
 PR_STATUS='not_requested (run: /bearings include PRs)'
@@ -278,6 +310,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
   --arg prs "$PR_STATUS" \
+  --arg session_lock "$SESSION_LOCK" \
   --arg fields "$FIELDS" \
   --argjson landed_n "$FM_BEARINGS_LANDED" \
   --argjson landed_per_home_n "$FM_BEARINGS_LANDED_PER_HOME" \
@@ -426,6 +459,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       home: $home,
       generated: $now,
       prs: $prs,
+      session_lock: $session_lock,
       in_flight: (if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end),
       secondmates: (if $all_secondmates == 1 then $secondmates_all else $secondmates_all[:$secondmates_n] end),
       decisions_open: (if $all_decisions == 1 then $decisions_all else $decisions_all[:$decisions_n] end),

@@ -26,7 +26,10 @@
 # was bootstrap-then-lock):
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
-#                       mutating step runs.
+#                       mutating step runs. When the claim takes the lock from a
+#                       holder stopped on a usage limit, the digest says so on
+#                       its own TAKEOVER line rather than letting a fresh
+#                       session assume it started from an unheld home.
 #   2. bootstrap      - home-local stale Herdr projection cleanup runs only
 #                       when this session actually holds the lock. Detect-only
 #                       diagnostics always run. Bootstrap's five MUTATING sweeps
@@ -249,6 +252,13 @@ LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
+# A takeover is never silent: the previous holder was alive but stopped on a
+# usage limit, so this session holds the lock only because it claimed it.
+case "$LOCK_OUT" in
+  *"lock takeover:"*)
+    printf 'TAKEOVER: this session took over the fleet lock from a session stopped by a usage limit; it is fully in control.\n'
+    ;;
+esac
 if [ "$LOCK_RC" -ne 0 ]; then
   READ_ONLY=1
   BAR='●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
