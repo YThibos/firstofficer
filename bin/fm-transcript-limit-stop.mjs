@@ -13,10 +13,22 @@
 // kind of work does exactly that - and mistaking one for a stopped session
 // would hand a working session's lock to someone else.
 //
-// Usage: fm-transcript-limit-stop.mjs <transcript.jsonl>
-//   exit 0  the last conversational record is a usage-limit stop
+// A stopped session is not the only thing that leaves a transcript ending on
+// that error. Resuming a limit-stopped session REUSES its session id and its
+// transcript, so between the resume and its first new conversational record the
+// tail is unchanged while the session is live and working again. The holder's
+// process start time separates the two: a session that hit the limit itself was
+// already running when that record was written, while a resumed one started
+// after it. So the caller passes the holder's start time and the record must be
+// at or after it. That is a comparison of two recorded instants, not an idle
+// heuristic: the transcript's mtime and any elapsed-time signal stay unused,
+// because Claude rewrites trailing metadata records long after a session ends.
+//
+// Usage: fm-transcript-limit-stop.mjs <transcript.jsonl> <holder-start-epoch>
+//   exit 0  the last conversational record is a usage-limit stop that the
+//           holder process was already running to write
 //   exit 1  everything else, including every unreadable, unparseable, empty,
-//           or otherwise ambiguous transcript
+//           timestamp-less, or otherwise ambiguous transcript
 // Nothing is printed on either path; the exit status is the whole contract.
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
@@ -89,11 +101,26 @@ function isLimitStop(record) {
   return typeof text === 'string' && LIMIT_STOP.some((pattern) => pattern.test(text));
 }
 
-const [path] = process.argv.slice(2);
-if (path === undefined) process.exit(1);
+// True when the record was written while the holder was already running. A
+// record with no timestamp, or one that does not parse, is ambiguous and so
+// refuses rather than falling back to a weaker signal.
+function writtenByHolder(record, startEpoch) {
+  if (typeof record.timestamp !== 'string') return false;
+  const written = Date.parse(record.timestamp);
+  if (!Number.isFinite(written)) return false;
+  return Math.floor(written / 1000) >= startEpoch;
+}
+
+const [path, startArg] = process.argv.slice(2);
+if (path === undefined || startArg === undefined) process.exit(1);
+// The start time is required, so a caller that could not read it cannot reach
+// the permitting path by omitting it.
+if (!/^[0-9]+$/.test(startArg)) process.exit(1);
+const startEpoch = Number(startArg);
 let stopped = false;
 try {
-  stopped = isLimitStop(lastConversationalRecord(path));
+  const record = lastConversationalRecord(path);
+  stopped = isLimitStop(record) && writtenByHolder(record, startEpoch);
 } catch {
   stopped = false; // Missing, unreadable, or truncated mid-read: refuse.
 }

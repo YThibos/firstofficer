@@ -222,13 +222,26 @@ fm_claude_transcript_dir() {
     "$(printf '%s' "$cwd" | tr '/.' '--')"
 }
 
+# Print the epoch second process $1 started at, or fail when it cannot be read.
+# Derived from the elapsed time ps reports for that pid, which is the process's
+# own age rather than anything about a file, so it stays clear of the transcript
+# mtime this decision must never depend on. A pid that is gone, or an elapsed
+# time that is not a plain number, fails rather than guessing.
+fm_process_start_epoch() {
+  local pid=$1 elapsed
+  elapsed=$(ps -o etimes= -p "$pid" 2>/dev/null) || return 1
+  elapsed=${elapsed//[[:space:]]/}
+  case "$elapsed" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$(( $(date -u +%s) - elapsed ))"
+}
+
 # True when the session behind lock-holder pid $1, running in home $2, is
 # stopped on a usage limit. Everything it needs comes from the holder's own
 # argv and its transcript; nothing is inferred from elapsed time or file
 # timestamps, because Claude rewrites trailing transcript metadata long after a
 # session stops and an mtime therefore says nothing about whether it is idle.
 fm_session_limit_stopped() {
-  local pid=$1 home=$2 args comm session_id transcript classifier
+  local pid=$1 home=$2 args comm session_id transcript classifier started
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   [ -n "$home" ] || return 1
   classifier="$FM_SESSION_LOCK_LIB_DIR/fm-transcript-limit-stop.mjs"
@@ -241,7 +254,12 @@ fm_session_limit_stopped() {
   session_id=$(fm_claude_session_id "$args") || return 1
   transcript="$(fm_claude_transcript_dir "$home")/$session_id.jsonl"
   [ -f "$transcript" ] && [ -r "$transcript" ] || return 1
-  node "$classifier" "$transcript" >/dev/null 2>&1
+  # Resuming a limit-stopped session reuses its session id and its transcript,
+  # so the tail alone would still read as stopped while the resumed session is
+  # live and holding the lock. The holder must have been running already when
+  # that last record was written; a start time that cannot be read refuses.
+  started=$(fm_process_start_epoch "$pid") || return 1
+  node "$classifier" "$transcript" "$started" >/dev/null 2>&1
 }
 
 # Print one stable token describing the session lock in state dir $1 for home
@@ -254,8 +272,8 @@ fm_session_limit_stopped() {
 #   limit-stopped <pid>        held by a live session stopped on a usage limit
 #   held <pid>                 held by another live session
 #   stale <pid>                held by a pid that is dead or not a harness
-# A takeover recorded for the current holder adds a second line,
-# "took-over-from <pid> <iso8601>".
+# A takeover recorded for THIS session adds a second line after "owned",
+# "took-over-from <pid> <iso8601>"; no other reader is told it took anything.
 fm_session_lock_report() {
   local state=$1 home=$2 lock="$1/.lock" holder marker
   if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
@@ -273,14 +291,21 @@ fm_session_lock_report() {
     echo "stale $holder"
     return 0
   fi
-  if fm_session_lock_owned_by_self "$state"; then
-    echo "owned $holder"
-  elif fm_session_limit_stopped "$holder" "$home"; then
-    echo "limit-stopped $holder"
-  else
-    echo "held $holder"
+  if ! fm_session_lock_owned_by_self "$state"; then
+    if fm_session_limit_stopped "$holder" "$home"; then
+      echo "limit-stopped $holder"
+    else
+      echo "held $holder"
+    fi
+    return 0
   fi
+  echo "owned $holder"
+  # Only the session that performed the takeover is told it did. The marker
+  # names that session, so a reader that merely sees its lock - and never took
+  # anything - is not handed a claim about itself that is not true.
   marker=$(cat "$state/.lock.takeover" 2>/dev/null) || return 0
-  [ "${marker%% *}" = "$holder" ] && printf 'took-over-from %s\n' "${marker#* }"
+  if [ "${marker%% *}" = "$holder" ]; then
+    printf 'took-over-from %s\n' "${marker#* }"
+  fi
   return 0
 }

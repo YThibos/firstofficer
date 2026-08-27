@@ -59,8 +59,10 @@ make_case() {
   printf '%s|%s|%s|%s\n' "$dir" "$dir/home" "$dir/fakebin" "$dir/ps-table"
 }
 
-# make_fake_ps <fakebin>: serve `ps -o comm=|args=|ppid= -p <pid>` from the tab
-# separated table in FM_TEST_PS_TABLE (pid, ppid, comm, args). A pid with no row
+# make_fake_ps <fakebin>: serve `ps -o comm=|args=|ppid=|etimes= -p <pid>` from
+# the tab separated table in FM_TEST_PS_TABLE (pid, ppid, comm, args, etimes).
+# etimes is the process's age in seconds, which is how a fixture places a
+# holder's start time relative to its transcript's last record. A pid with no row
 # answers as a plain foreground claude, which is what the transient process
 # running the command under test looks like from inside these fixtures. Its
 # parent is FM_TEST_PS_DEFAULT_PPID, so a fixture can put a live process there
@@ -80,6 +82,7 @@ for arg in "$@"; do
     comm=) field=comm ;;
     args=) field=args ;;
     ppid=) field=ppid ;;
+    etimes=) field=etimes ;;
   esac
   [ "$prev" = "-p" ] && pid=$arg
   prev=$arg
@@ -90,24 +93,26 @@ if [ -z "$row" ]; then
   case "$field" in
     comm|args) printf 'claude\n' ;;
     ppid) printf '%s\n' "${FM_TEST_PS_DEFAULT_PPID:-1}" ;;
+    etimes) printf '0\n' ;;
   esac
   exit 0
 fi
-IFS=$'\t' read -r _ row_ppid row_comm row_args <<EOF
+IFS=$'\t' read -r _ row_ppid row_comm row_args row_etimes <<EOF
 $row
 EOF
 case "$field" in
   comm) printf '%s\n' "$row_comm" ;;
   args) printf '%s\n' "$row_args" ;;
   ppid) printf '%s\n' "$row_ppid" ;;
+  etimes) printf '%s\n' "${row_etimes:-0}" ;;
 esac
 SH
   chmod +x "$fakebin/ps"
 }
 
-# add_process <table> <pid> <ppid> <comm> <args>
+# add_process <table> <pid> <ppid> <comm> <args> [age-seconds]
 add_process() {
-  printf '%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" >> "$1"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" "${6:-0}" >> "$1"
 }
 
 # The two Claude process shapes this suite depends on, observed verbatim on a
@@ -147,26 +152,35 @@ transcript_path() {
     "$CLAUDE_CONFIG_DIR" "$(printf '%s' "$1" | tr '/.' '--')" "$2"
 }
 
-write_transcript() {  # <path> <tail-kind>
-  local path=$1 kind=$2
+# write_transcript <path> <tail-kind> [last-record-timestamp]
+# The last record's instant matters as much as its shape: the takeover requires
+# the holder to have been running already when that record was written. It
+# defaults to now, so a fixture holder given an age is a session that hit the
+# limit while running, and a fixture passing an older instant is the resumed
+# session that must NOT be taken over.
+write_transcript() {
+  local path=$1 kind=$2 at=${3:-$(date -u +%Y-%m-%dT%H:%M:%S.000Z)}
   mkdir -p "$(dirname "$path")"
   {
     printf '%s\n' '{"type":"user","message":{"role":"user","content":"go"},"timestamp":"2026-08-20T07:39:46.497Z"}'
     case "$kind" in
       limit-stop)
-        printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved"}]},"timestamp":"2026-08-20T07:39:47.128Z"}'
+        printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved"}]},"timestamp":"'"$at"'"}'
         ;;
       working)
-        printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Captain, the fix is in."}]},"timestamp":"2026-08-20T07:39:47.128Z"}'
+        printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Captain, the fix is in."}]},"timestamp":"'"$at"'"}'
         ;;
       other-error)
-        printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary."}]},"timestamp":"2026-08-20T07:39:47.128Z"}'
+        printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary."}]},"timestamp":"'"$at"'"}'
         ;;
       quoted-limit-stop)
         # A live session whose last turn merely QUOTED a limit message, which is
         # what a session working on this mechanism produces. Text matching would
         # steal its lock; a real parse of the record type must not.
-        printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"You'"'"'ve hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved"}]},"timestamp":"2026-08-20T07:39:47.128Z"}'
+        printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"You'"'"'ve hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved"}]},"timestamp":"'"$at"'"}'
+        ;;
+      limit-stop-no-timestamp)
+        printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved"}]}}'
         ;;
       truncated)
         printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assis'
@@ -281,22 +295,32 @@ EOF
 
 # --- taking over a session stopped by a usage limit -------------------------
 
-# limit_stop_case <name> <tail-kind>: a home whose lock is held by a live
-# Claude session with a transcript of the given shape.
+# limit_stop_case <name> <tail-kind> [holder-age] [record-timestamp]: a home
+# whose lock is held by a live Claude session with a transcript of the given
+# shape. The holder defaults to an hour old against a record written now, which
+# is a session that hit the limit while running; a caller overrides both to
+# build the resumed session, whose process is younger than its own last record.
 # Echoes "<home>|<fakebin>|<table>|<holder-pid>|<transcript>".
 limit_stop_case() {
-  local name=$1 kind=$2 rec dir home fakebin table holder session_id transcript
+  local name=$1 kind=$2 age=${3:-3600} at=${4:-} rec dir home fakebin table
+  local holder session_id transcript
   rec=$(make_case "$name")
   IFS='|' read -r dir home fakebin table <<EOF
 $rec
 EOF
   session_id=dddddddd-4444-4444-4444-dddddddddddd
   holder=$(start_holder)
-  add_process "$table" "$holder" 1 2.1.235 "$(session_host_args 2.1.235 "$session_id")"
+  add_process "$table" "$holder" 1 2.1.235 "$(session_host_args 2.1.235 "$session_id")" "$age"
   printf '%s\n' "$holder" > "$home/state/.lock"
   transcript=$(transcript_path "$home" "$session_id")
-  [ "$kind" = none ] || write_transcript "$transcript" "$kind"
+  [ "$kind" = none ] || write_transcript "$transcript" "$kind" ${at:+"$at"}
   printf '%s|%s|%s|%s|%s\n' "$home" "$fakebin" "$table" "$holder" "$transcript"
+}
+
+# seconds_ago <n>: an ISO 8601 instant <n> seconds in the past, for a fixture
+# that needs a record demonstrably older than its holder process.
+seconds_ago() {
+  date -u -d "@$(( $(date -u +%s) - $1 ))" +%Y-%m-%dT%H:%M:%S.000Z
 }
 
 test_limit_stopped_holder_is_taken_over() {
@@ -388,6 +412,68 @@ EOF
   pass "a holder with no resolvable session id, and one that is not Claude, both keep refusing"
 }
 
+test_resumed_session_keeps_its_lock() {
+  local rec home fakebin table holder transcript status=0
+  # The reported defect: resuming a limit-stopped session reuses its session id
+  # and its transcript, so the tail still ends on the limit error while the
+  # session is live and working. Its process is younger than that record.
+  rec=$(limit_stop_case resumed limit-stop 60 "$(seconds_ago 7200)")
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a resumed limit-stopped session was taken over while live"
+  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a resumed session lost its lock"
+  pass "a resumed limit-stopped session keeps its lock, because its process is younger than its last record"
+}
+
+test_missing_record_instant_refuses() {
+  local rec home fakebin table holder transcript status=0
+  rec=$(limit_stop_case no-instant limit-stop-no-timestamp)
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a limit-stop record with no instant must keep refusing the claim"
+  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a timestamp-less record let the lock be taken"
+  pass "a limit-stop record carrying no instant refuses, rather than skipping the start-time test"
+}
+
+test_unreadable_start_time_refuses() {
+  local rec home fakebin table holder transcript status=0
+  # A holder whose age cannot be read at all: the start-time test has no value
+  # to compare, so the claim must refuse rather than fall back to the tail alone.
+  rec=$(limit_stop_case no-start limit-stop unreadable)
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "an unreadable holder start time must keep refusing the claim"
+  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "an unreadable start time let the lock be taken"
+  pass "a holder whose start time cannot be read refuses, never falling back to the transcript alone"
+}
+
+test_takeover_is_not_attributed_to_other_readers() {
+  local rec home fakebin table holder transcript out taker other
+  rec=$(limit_stop_case attribution limit-stop)
+  IFS='|' read -r home fakebin table holder transcript <<EOF
+$rec
+EOF
+  taker=$(add_session "$table")
+  claim "$home" "$fakebin" "$table" "$taker" >/dev/null 2>&1 \
+    || fail "the takeover that this case depends on did not happen"
+  out=$(lock_status "$home" "$fakebin" "$table" "$taker")
+  assert_contains "$out" "took over from" "the session that took over was not told so"
+
+  # A third session reads the same lock. It took nothing, so it must not be told
+  # that it did - the marker names the session that took over, not the reader.
+  other=$(add_session "$table")
+  out=$(lock_status "$home" "$fakebin" "$table" "$other")
+  assert_not_contains "$out" "took over" "a session that took nothing was told it took over"
+  assert_contains "$out" "held by live harness pid $taker" "the reading session lost sight of the real holder"
+  pass "only the session that took the lock over is told it did"
+}
+
 test_status_names_the_takeover_command() {
   local rec home fakebin table holder transcript out
   rec=$(limit_stop_case status-report limit-stop)
@@ -413,4 +499,8 @@ test_working_holder_still_refuses
 test_quoted_limit_message_does_not_steal_a_lock
 test_ambiguous_transcripts_refuse
 test_unresolvable_holders_refuse
+test_resumed_session_keeps_its_lock
+test_missing_record_instant_refuses
+test_unreadable_start_time_refuses
+test_takeover_is_not_attributed_to_other_readers
 test_status_names_the_takeover_command

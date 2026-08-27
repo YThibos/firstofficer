@@ -108,7 +108,10 @@ Re-run against the same live processes, the daemon is rejected while pids 3617, 
 On the same date, `bin/fm-lock.sh` gained the one takeover a live holder permits: a holder whose session is positively identified as stopped on a usage limit.
 The two verbatim messages `bin/fm-transcript-limit-stop.mjs` matches, `You've hit your session limit` and `You've hit your monthly spend limit`, were both read from real transcripts under `~/.claude/projects`, alongside transient `API Error:` records that must never authorise a takeover.
 Run over the 60 real transcripts on that machine containing the session-limit text, the classifier called 28 stopped and 32 still working, the latter being sessions that resumed after the limit cleared and therefore end on an ordinary record.
-`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins both halves deterministically.
+Review of that change found the transcript tail alone insufficient: resuming a limit-stopped session reuses its session id and its `.jsonl`, so until the resumed session writes a new conversational record the tail still ends on the limit error while that session is live and holding the lock.
+The same 60-transcript survey confirms resumed sessions continue in the same file rather than starting a new one, which is what makes that window reachable in normal use.
+The takeover therefore also requires the last record's own instant to be at or after the holder process's start time, read from that process's age via `ps -o etimes=` rather than from any file timestamp, and refuses when either value is missing or unparseable.
+`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins every half deterministically, including a resumed-session case that fails without that start-time condition.
 
 The Claude product live path ran with Claude Code 2.1.219 on 2026-07-24:
 

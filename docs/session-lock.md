@@ -26,7 +26,13 @@ Its host process stays alive for as long as its terminal or the daemon keeps it,
 Given the holder's pid it reads the holder's own argv for a session id, locates that session's transcript under the config root for the home's working directory, and asks `bin/fm-transcript-limit-stop.mjs` whether the last conversational record in that transcript is the usage-limit API error.
 Only that answer permits a takeover, and `bin/fm-lock.sh` always announces one on stdout, records it in `state/.lock.takeover`, and surfaces it through the session-start digest and the bearings snapshot, so a takeover is never silent.
 
-Two evidence rules matter enough to state here, because both were established against real transcripts and both are easy to get wrong.
+The transcript tail alone is not enough, because a stopped session is not the only thing that leaves one ending on that error.
+Resuming a limit-stopped session reuses its session id and its transcript, so between the resume and its first new conversational record the tail is unchanged while that session is live, working, and holding the lock.
+The holder's process start time separates the two: a session that hit the limit itself was already running when that record was written, while a resumed one started after it.
+So the takeover additionally requires the last record's own instant to be at or after the holder process's start, and a start time that cannot be read refuses like every other unavailable value.
+This compares two recorded instants rather than guessing at idleness, which is what keeps it clear of the timestamp rule below.
+
+Three evidence rules matter enough to state here, because each was established against real transcripts and each is easy to get wrong.
 
 The classification is a real JSON parse of the last `user` or `assistant` record, never a text match over the file.
 An ordinary tool result inside a live session's transcript can quote a past limit message verbatim - a session working on this very mechanism does exactly that - and a text match would hand a working session's lock away.
@@ -37,7 +43,7 @@ Claude rewrites trailing metadata records long after a session ends, so the file
 ## Why every other case refuses
 
 Taking the lock from a session that is genuinely working is far worse than refusing one that is finished, so the test is deliberately asymmetric: it returns true only for a positively identified limit stop and false for everything else.
-Refusal is the outcome when the holder is not Claude, when its session id never reaches its own argv, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, and when the last conversational record is anything other than the usage-limit error, including every other API error.
+Refusal is the outcome when the holder is not Claude, when its session id never reaches its own argv, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, when the last conversational record is anything other than the usage-limit error, including every other API error, when that record carries no instant or one that does not parse, when the holder's start time cannot be read, and when the holder started after that record was written.
 A session hosted without an explicit session id in its argv, such as a plain foreground `claude`, is therefore never taken over; nothing else can tie that process to a transcript, and inventing a link would be exactly the guess this contract exists to avoid.
 
 ## Where the condition is reported
@@ -46,12 +52,13 @@ A session hosted without an explicit session id in its argv, such as a plain for
 
 `bin/fm-bearings-snapshot.sh` projects the lib's report into its `session_lock` field, and the `bearings` skill renders it as a Charted Next line.
 Bearings reports the condition and names `bin/fm-lock.sh`; it never runs it.
+The `took-over-from` line is reported only to the session that actually performed the takeover, so a session merely reading a lock someone else took is never told it took anything.
 Claiming a lock is a fleet mutation, and taking one from a live process is precisely the kind of act the skill's read-only contract exists to keep out of a status read, so the claim stays with the normal lifecycle even though the report is what makes it discoverable.
 
 ## Verification
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.
-It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder, and the refusal of every missing, unparseable, non-limit, and non-Claude case.
+It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.
 
 ## Maintaining this file
 
