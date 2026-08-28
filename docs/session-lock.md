@@ -51,7 +51,7 @@ The classification is a real JSON parse of the last `user` or `assistant` record
 An ordinary tool result inside a live session's transcript can quote a past limit message verbatim - a session working on this very mechanism does exactly that - and a text match would hand a working session's lock away.
 
 The transcript directory is named after the home's absolute path with only `/` and `.` replaced by `-`.
-All 72 real project directories on the machine this was established on were checked against the working directory each transcript records internally, and 72 of 72 matched that rule exactly, the only special characters appearing in any recorded path being `-`, `.` and `/`.
+That mapping was checked against every real project directory on the machine this rule was established on, with no other special character appearing in any recorded path; [`verification/supervision.md`](verification/supervision.md) owns that evidence.
 Widening it to every non-alphanumeric character was rejected deliberately: if Claude Code really maps only these two, an all-punctuation rule would break a path holding an underscore that resolves correctly today.
 A path mangled differently simply yields no transcript, which refuses, so the narrow rule costs a missed takeover and never a wrong one.
 
@@ -61,7 +61,7 @@ Claude rewrites trailing metadata records long after a session ends, so the file
 The holder's session id is read from its discrete argv elements in `/proc/<pid>/cmdline`, never from the single space-joined string `ps` prints.
 Flattened, a real `--session-id <uuid>` pair is indistinguishable from that same text sitting inside one argument, and an argument holding it is not a contrived case: a session is routinely started with a prompt as one argument, and a session working on this very mechanism quotes a session id in it.
 Such a holder would resolve to a transcript belonging to another session entirely, and if that stranger's transcript ends on the limit error, a live and working session loses its lock on evidence that was never about it.
-This is the argv counterpart of the quoted-limit-message rule above, and it was observed rather than imagined: the session that implemented this change carried a quoted session id in its own argv, and the flattened parse resolved that id to a real limit-stopped transcript.
+This is the argv counterpart of the quoted-limit-message rule above, and it was observed on a real live session whose flattened argv resolved to a stranger's limit-stopped transcript, not imagined; [`verification/supervision.md`](verification/supervision.md) records that observation.
 Reading discrete elements removes the ambiguity, because the flag is an element of its own and the id is the element after it.
 `/proc` exists only on Linux and there is deliberately no fallback to the flattened string, since the fallback would restore exactly the ambiguity it closes, so on any other host the session id cannot be resolved and the takeover is unavailable there.
 That is the same trade every rule on this page makes: a missed takeover, never a wrong one.
