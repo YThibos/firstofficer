@@ -421,6 +421,13 @@ test_pipeline_liveness_reads_a_quoted_activity_containing_a_comma() {
     'quiet 11m: log: waiting, still waiting' "$$")"
   out=$(run_pipeline_liveness "$d" feat-comma)
   [ "$out" != alive ] || fail "a quiet step in the observed column layout reported alive"
+
+  # The encoder escapes an embedded quote as backslash-quote, so a backslash
+  # inside quotes must not be read as ending the field either.
+  FM_FAKE_AXI_STATUS="$(run_running_with_observed_active_step fm/feat-comma \
+    '0s ago: log: he said \"hi, there\" and carried on' "$$")"
+  out=$(run_pipeline_liveness "$d" feat-comma)
+  [ "$out" = alive ] || fail "an escaped quote beside a comma should not lose the row, got: '$out'"
   pass "the observed active_steps layout is read by name, commas inside quotes and all"
 }
 
