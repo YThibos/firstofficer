@@ -289,7 +289,9 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # A live pipeline restarts the timer instead of escalating, so the escalation
 # count is not advanced and the next window asks again - the moment the pipeline
 # stops being demonstrably alive, the ordinary escalation follows one window
-# later. A window whose task has no running pipeline never gets an `alive`
+# later. Either absorption also clears the count the way handle_paused_stale
+# does, because demand-deep-inspection means the same pane escalated that many
+# times in a row: a crew demonstrably working in between breaks the row. A window whose task has no running pipeline never gets an `alive`
 # answer at all and behaves exactly as it did before.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file>
   local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason task borrower
@@ -305,12 +307,14 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
         task=$(window_to_task "$win" "$STATE")
         if crew_pipeline_alive "$task"; then
           date +%s > "$since_file"
+          rm -f "$escalation_file"
           triage_log "absorbed $label (pipeline still working, escalation deferred): $win"
           return
         fi
         borrower=$(live_borrower_of "$task")
         if [ -n "$borrower" ]; then
           date +%s > "$since_file"
+          rm -f "$escalation_file"
           triage_log "absorbed $label (idle for live borrower $borrower, escalation deferred): $win"
           return
         fi

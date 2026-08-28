@@ -206,6 +206,26 @@ run:
 EOF
 }
 
+# The column layout `axi status` really emits, observed live: it carries a
+# status column the synthetic fixture above omits, and quotes last_activity
+# because its log excerpt may contain a comma.
+run_running_with_observed_active_step() {  # <branch> <last-activity> <agent-pid>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: running
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
+  findings: none
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    rebase,running,0s,"$2","$3",starting
+  steps[2]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    review,running,0,0
+EOF
+}
+
 run_fixing() {  # <branch>
   cat <<EOF
 run:
@@ -378,6 +398,30 @@ test_pipeline_liveness_reports_a_working_step_as_alive() {
   out=$(run_pipeline_liveness "$d" feat-live)
   [ "$out" = alive ] || fail "a running step with a live agent and recent activity should be alive, got: '$out'"
   pass "a running step with a live agent pid and recent activity reports alive"
+}
+
+# TOON quotes any field containing a comma, so a row split on every comma would
+# yield more fields than the header names and be dropped - silently disabling
+# the suppression in exactly the case it exists for.
+test_pipeline_liveness_reads_a_quoted_activity_containing_a_comma() {
+  reset_fakes
+  local d out; d=$(new_case liveness-comma)
+  make_repo_on_branch "$d/wt" fm/feat-comma
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-comma.meta" "window=fm:fm-feat-comma" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_running_with_observed_active_step fm/feat-comma \
+    '0s ago: log: fetching latest upstream state, then rebasing' "$$")"
+  out=$(run_pipeline_liveness "$d" feat-comma)
+  [ "$out" = alive ] || fail "a log excerpt containing a comma should not lose the row, got: '$out'"
+
+  # And the by-name lookup still reads the right columns of that same layout:
+  # no-mistakes' own quiet verdict is honoured where the shape has a status
+  # column between step and active_for.
+  FM_FAKE_AXI_STATUS="$(run_running_with_observed_active_step fm/feat-comma \
+    'quiet 11m: log: waiting, still waiting' "$$")"
+  out=$(run_pipeline_liveness "$d" feat-comma)
+  [ "$out" != alive ] || fail "a quiet step in the observed column layout reported alive"
+  pass "the observed active_steps layout is read by name, commas inside quotes and all"
 }
 
 test_pipeline_liveness_reports_a_quiet_step_as_stopped() {
@@ -1343,6 +1387,7 @@ test_missing_run_head_falls_back_to_current_state() {
 
 test_active_run_is_authoritative
 test_pipeline_liveness_reports_a_working_step_as_alive
+test_pipeline_liveness_reads_a_quoted_activity_containing_a_comma
 test_pipeline_liveness_reports_a_quiet_step_as_stopped
 test_pipeline_liveness_reports_a_dead_agent_as_stopped
 test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid

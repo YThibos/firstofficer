@@ -645,6 +645,62 @@ test_stopped_pipeline_still_escalates() {
   pass "a stale pane whose pipeline has stopped still wedge-escalates"
 }
 
+# --- a deferral breaks the escalation row ------------------------------------
+# demand-deep-inspection means the same pane has wedge-escalated that many times
+# IN A ROW. A crew demonstrably working in between breaks that row, so the
+# deferral clears the count the way handle_paused_stale already does; otherwise
+# the first escalation after a long run inherits the earlier count and reaches
+# the threshold on a crew that was never wedged three times.
+test_deferral_clears_the_escalation_count() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid
+  dir=$(make_case defer-clears-count); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-resumed"
+  printf 'no-mistakes axi run --intent ...' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/resumed.meta"
+  printf 'working: validating\n' > "$state/resumed.status"
+  sig=$(seen_sig "$state/resumed.status"); printf '%s' "$sig" > "$state/.seen-resumed_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "no-mistakes axi run --intent ...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  # The pane already wedge-escalated twice before the run started.
+  printf '2\n' > "$state/.wedge-escalations-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  export FM_FAKE_PIPELINE_LIVENESS=alive
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS
+    fail "watcher escalated a task whose pipeline is demonstrably still working: $(cat "$out")"
+  fi
+  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS; fail "a deferral left the earlier escalation count in place"; }
+  reap "$pid"
+
+  # The run finishes and the worker goes genuinely idle: this is the FIRST
+  # escalation since the crew was demonstrably working, so it must be n=1.
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  export FM_FAKE_PIPELINE_LIVENESS=stopped
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || { unset FM_FAKE_PIPELINE_LIVENESS; fail "watcher did not escalate once the pipeline had stopped"; }
+  grep -F "possible wedge" "$out" >/dev/null || { unset FM_FAKE_PIPELINE_LIVENESS; fail "a stopped pipeline did not flag a possible wedge after the deferral"; }
+  ! grep -F "demand-deep-inspection" "$out" >/dev/null \
+    || { unset FM_FAKE_PIPELINE_LIVENESS; fail "the first escalation after a demonstrably-working run demanded deep inspection: $(cat "$out")"; }
+  grep -F "escalation 1" "$out" >/dev/null || { unset FM_FAKE_PIPELINE_LIVENESS; fail "the escalation count was not restarted by the deferral: $(cat "$out")"; }
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || { unset FM_FAKE_PIPELINE_LIVENESS; fail "drain after the wedge escalation failed"; }
+  unset FM_FAKE_PIPELINE_LIVENESS
+  pass "a deferral clears the escalation count, so the row demand-deep-inspection counts is broken"
+}
+
 # --- an implementer borrowed by a live reviewer is expected to be idle -------
 # A craftsmanship review joins the implementing task's own copy and the two are
 # serialised, so the implementer is REQUIRED to be idle for the whole review.
@@ -1743,6 +1799,7 @@ test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_live_pipeline_defers_wedge_escalation
 test_stopped_pipeline_still_escalates
+test_deferral_clears_the_escalation_count
 test_live_borrower_of_suppresses_only_a_real_live_borrow
 test_live_borrower_defers_owner_wedge_escalation
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
