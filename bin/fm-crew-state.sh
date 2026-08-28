@@ -518,13 +518,20 @@ nm_table_rows() {  # <header-indent>
 # Split TOON row <1> into the array named <2>, honouring quotes: TOON quotes any
 # field containing a comma, and last_activity carries a log excerpt that can.
 # Splitting on every comma would over-count the fields of exactly those rows and
-# lose them to the caller's field-count guard.
+# lose them to the caller's field-count guard. A quoted field escapes an
+# embedded quote as backslash-quote, so inside quotes a backslash takes the next
+# character with it and neither of the two can end the field.
 toon_split_row() {  # <row> <array-name>
   local row=$1 name=$2 i c field="" inq=0
   local -a out=()
   for ((i = 0; i < ${#row}; i++)); do
     c=${row:i:1}
     case "$c" in
+      \\) if [ "$inq" -eq 1 ] && [ "$(( i + 1 ))" -lt "${#row}" ]; then
+             field+=$c${row:i+1:1}; i=$(( i + 1 ))
+           else
+             field+=$c
+           fi ;;
       '"') inq=$(( 1 - inq )); field+=$c ;;
       ,)   if [ "$inq" -eq 1 ]; then field+=$c; else out+=("$field"); field=""; fi ;;
       *)   field+=$c ;;
