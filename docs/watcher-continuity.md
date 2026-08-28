@@ -57,6 +57,7 @@ The same suite covers ordinary same-process session replacement for `/new`, `/re
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-subagent-pretool-check.test.sh` proves Claude retains only the non-status Bash seatbelts.
 `tests/fm-session-lock-identity.test.sh` covers the shared harness-identity rules behind `fm_harness_pid_alive`, including the versioned-launcher argv[0] match, the non-harness versioned process it must still reject, and dead or unrelated live pids.
+`tests/fm-session-lock-limit-stop.test.sh` covers the shared-service boundary that keeps that identity off the Claude background daemon every session shares, and the usage-limit takeover `bin/fm-lock.sh` allows on top of it.
 `tests/fm-claude-stop-autoarm.test.sh` covers the auto-arm's scope, stale and live session owners, unchanged AFK and need boundaries, single-flight, and exit-2 translation.
 `FM_CLAUDE_LIVE_E2E=1 tests/fm-claude-stop-autoarm-live-e2e.test.sh` starts with the reproduced stale-lock state, runs session start first, completes two tokenless cycles, and checks the competing-live-owner negative control.
 `tests/fm-turnend-guard.test.sh` covers the cooperative `--claude` guard.
