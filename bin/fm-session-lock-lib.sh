@@ -198,15 +198,39 @@ fm_session_lock_owned_by_self() {
 # unknown harness, unresolvable session id, missing, unreadable, or unparseable
 # transcript, or any other last record - returns false and keeps refusing.
 
-# Print the session id carried in command line $1, or fail when there is none.
-# Only a session hosted with an explicit --session-id can be traced back to its
-# transcript; a session whose id never reaches its own argv (a plain foreground
-# `claude`) is unresolvable and therefore never taken over.
+# Print the session id carried in the argv of process $1, or fail when there is
+# none that can be read UNAMBIGUOUSLY. Only a session hosted with an explicit
+# --session-id can be traced back to its transcript; a session whose id never
+# reaches its own argv (a plain foreground `claude`) is unresolvable and
+# therefore never taken over.
+#
+# It reads the discrete argv elements from /proc/<pid>/cmdline, where they are
+# NUL separated, and never the single space-joined string ps prints. Flattened,
+# there is no way to tell a real "--session-id <uuid>" pair from that same text
+# sitting INSIDE one argument - a prompt, a file path, a command a wrapper was
+# handed - so a live session merely carrying those words in an argument would
+# resolve to a transcript that is not its own and could then be taken over on a
+# stranger's evidence. As discrete elements the pair is unambiguous: the flag is
+# an element of its own and the id is the element that follows it.
+#
+# /proc is Linux-only and there is deliberately no fallback to the flattened
+# string, because such a fallback would reinstate exactly the ambiguity this
+# closes. Where discrete argv cannot be read, macOS included, this refuses and
+# the takeover is simply unavailable on that host. That is the intended trade,
+# and the same one the whole test makes: a missed takeover, never a wrong one.
 fm_claude_session_id() {
-  local args=$1 rest id
-  case "$args" in *' --session-id '*) ;; *) return 1 ;; esac
-  rest=${args#*' --session-id '}
-  id=${rest%% *}
+  local pid=$1 arg id='' next=0
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  while IFS= read -r -d '' arg; do
+    if [ "$next" -eq 1 ]; then
+      id=$arg
+      break
+    fi
+    if [ "$arg" = --session-id ]; then
+      next=1
+    fi
+  done < "/proc/$pid/cmdline"
   printf '%s' "$id" \
     | grep -qE '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$' || return 1
   printf '%s' "$id"
@@ -376,7 +400,7 @@ fm_session_limit_stopped() {
   args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
   # Claude is the only harness with a verified limit-stop transcript shape.
   fm_harness_is_claude "$comm" "$args" || return 1
-  session_id=$(fm_claude_session_id "$args") || return 1
+  session_id=$(fm_claude_session_id "$pid") || return 1
   # A holder that has since replaced its conversation in place is still working,
   # under a session id its argv cannot know about. This only ever refuses; where
   # no trusted record exists it adds nothing and the conditions below decide.
