@@ -294,6 +294,16 @@ test_a_malformed_scope_question_is_not_an_answer() {
   expect_code 2 "$CODE" "a malformed required call must not exit 1, which means not required"
   assert_contains "$ERR" "takes only a project name" \
     "the refusal should say what was wrong with the call"
+
+  run_gate "$case_dir" required
+  expect_code 2 "$CODE" "a required call with no project name must not exit 1"
+  assert_contains "$ERR" "takes a project name" \
+    "the refusal should say the project name was missing"
+
+  run_gate "$case_dir" required ""
+  expect_code 2 "$CODE" "a required call with an empty project name must not exit 1"
+  assert_contains "$ERR" "takes a project name" \
+    "the refusal should say the project name was missing"
   pass "a malformed scope question exits distinctly from the answer no"
 }
 

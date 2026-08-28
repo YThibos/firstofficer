@@ -249,18 +249,21 @@ esac
 
 ACTION=${1:-}
 ID=${2:-}
-[ -n "$ACTION" ] && [ -n "$ID" ] || { usage >&2; exit 1; }
-shift 2
 
 # `required` takes a project name rather than a task id and reads no task state,
-# so it answers before the task-shaped argument handling below.
-# Exit 1 is this action's answer "no", so a malformed call exits 2 instead: a
-# caller that reads a failed question as a no would drop the review on it.
+# so it answers before the task-shaped argument handling below - including that
+# handling's own exit 1, which is this action's answer "no". Every malformed
+# call exits 2 instead, a missing or empty project name among them: a caller
+# that read a failed question as a no would drop the review on it.
 if [ "$ACTION" = required ]; then
-  [ "$#" -eq 0 ] || { echo "error: required takes only a project name" >&2; exit 2; }
+  [ -n "$ID" ] || { echo "error: required takes a project name" >&2; exit 2; }
+  [ "$#" -le 2 ] || { echo "error: required takes only a project name" >&2; exit 2; }
   report_required "$ID"
   exit $?
 fi
+
+[ -n "$ACTION" ] && [ -n "$ID" ] || { usage >&2; exit 1; }
+shift 2
 
 REVIEWER=""
 VERDICT=""

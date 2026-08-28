@@ -383,12 +383,6 @@ crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
 }
 
-# Value of key <2> in durable record <1>, or nothing.
-meta_line() {  # <meta-path> <key>
-  [ -f "$1" ] || return 0
-  grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
-}
-
 # Print the task id of a LIVE borrower of <task>'s worktree, or nothing.
 #
 # A craftsmanship review joins the implementing task's own copy so one story
@@ -406,25 +400,26 @@ meta_line() {  # <meta-path> <key>
 # review that really has stopped surfaces. A task with no borrower yields
 # nothing here and is untouched.
 #
-# Backend liveness is read through bin/fm-backend.sh. A caller that has not
-# sourced it gets no borrower rather than an assumed one, because suppressing an
-# alarm on an unanswerable question is the one wrong direction to fail in.
+# Backend liveness and the metadata reads are both owned by bin/fm-backend.sh.
+# A caller that has not sourced it gets no borrower rather than an assumed one,
+# because suppressing an alarm on an unanswerable question is the one wrong
+# direction to fail in.
 live_borrower_of() {  # <task> [state-dir]
   local task=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt meta borrower bwt win backend alive
   [ -n "$task" ] && [ -n "$state" ] || return 0
   command -v fm_backend_agent_alive >/dev/null 2>&1 || return 0
-  wt=$(meta_line "$state/$task.meta" worktree)
+  wt=$(fm_meta_get "$state/$task.meta" worktree)
   [ -n "$wt" ] || return 0
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     borrower=$(basename "$meta"); borrower=${borrower%.meta}
     [ "$borrower" != "$task" ] || continue
-    [ "$(meta_line "$meta" borrowed_worktree)" = 1 ] || continue
-    bwt=$(meta_line "$meta" worktree)
+    [ "$(fm_meta_get "$meta" borrowed_worktree)" = 1 ] || continue
+    bwt=$(fm_meta_get "$meta" worktree)
     [ "$bwt" = "$wt" ] || continue
-    win=$(meta_line "$meta" window)
+    win=$(fm_meta_get "$meta" window)
     [ -n "$win" ] || continue
-    backend=$(meta_line "$meta" backend)
+    backend=$(fm_meta_get "$meta" backend)
     [ -n "$backend" ] || backend=tmux
     alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || alive=unknown
     [ "$alive" = dead ] && continue

@@ -515,6 +515,25 @@ nm_table_rows() {  # <header-indent>
   '
 }
 
+# Split TOON row <1> into the array named <2>, honouring quotes: TOON quotes any
+# field containing a comma, and last_activity carries a log excerpt that can.
+# Splitting on every comma would over-count the fields of exactly those rows and
+# lose them to the caller's field-count guard.
+toon_split_row() {  # <row> <array-name>
+  local row=$1 name=$2 i c field="" inq=0
+  local -a out=()
+  for ((i = 0; i < ${#row}; i++)); do
+    c=${row:i:1}
+    case "$c" in
+      '"') inq=$(( 1 - inq )); field+=$c ;;
+      ,)   if [ "$inq" -eq 1 ]; then field+=$c; else out+=("$field"); field=""; fi ;;
+      *)   field+=$c ;;
+    esac
+  done
+  out+=("$field")
+  eval "$name=(\"\${out[@]}\")"
+}
+
 # 0 when the attributed run has an active step that is demonstrably working.
 # The header names its own columns, so both fields are read by name: a table
 # whose shape changes underneath us yields no columns and therefore no liveness,
@@ -538,7 +557,7 @@ nm_active_step_alive() {
   done
   [ "$idx_activity" -ge 0 ] || return 1
   while IFS= read -r row; do
-    IFS=, read -r -a row_a <<< "$row"
+    toon_split_row "$row" row_a
     [ "${#row_a[@]}" -eq "$n" ] || continue
     activity=$(strip_quotes "$(trim "${row_a[$idx_activity]}")")
     [ -n "$activity" ] || continue
