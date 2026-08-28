@@ -356,11 +356,82 @@ crew_is_provably_working() {  # <id>
   [ "$(crew_absorb_class "$1")" = working ]
 }
 
+# 0 when crew <id>'s attributed no-mistakes pipeline is demonstrably doing work
+# right now, from the run's own active-step activity and agent pid rather than
+# from anything the pane renders.
+#
+# A worker blocked on one foreground `axi run` produces no output for as long as
+# the run takes, so its pane is legitimately static and indistinguishable from a
+# wedged one by pane state alone. This is the signal that tells them apart, and
+# it is deliberately narrow: only a positively alive step answers 0, so a
+# pipeline that has genuinely stopped - and a wedged agent whose activity has
+# gone quiet - still escalate on the ordinary path.
+#
+# bin/fm-crew-state.sh --pipeline-liveness owns the decision and the evidence;
+# a crew with no attributed run answers `none`, which is not `alive`, so a task
+# that is simply idle is untouched by this. Costly (a bounded no-mistakes call),
+# so callers ask only at the moment an escalation would otherwise fire.
+crew_pipeline_alive() {  # <id>
+  [ -n "$1" ] || return 1
+  [ "$("$FM_CREW_STATE_BIN" --pipeline-liveness "$1" 2>/dev/null || true)" = alive ]
+}
+
 # 0 if crew <id>'s authoritative current state is a declared external-wait pause.
 # The stale path absorbs such a crew (on a long re-surface cadence) instead of
 # escalating a possible wedge.
 crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
+}
+
+# Value of key <2> in durable record <1>, or nothing.
+meta_line() {  # <meta-path> <key>
+  [ -f "$1" ] || return 0
+  grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+# Print the task id of a LIVE borrower of <task>'s worktree, or nothing.
+#
+# A craftsmanship review joins the implementing task's own copy so one story
+# keeps one checkout, and the two are deliberately serialised: the implementer
+# is required to be idle for the whole review. Its pane therefore renders
+# nothing for many minutes by design, which is exactly the shape the wedge timer
+# exists to catch, so without this the reviewed task wedge-escalates every
+# window throughout its own review.
+#
+# The borrow is already recorded: bin/fm-spawn.sh writes borrowed_worktree=1
+# into the borrower's own metadata, beside the worktree it joined. A borrower
+# whose agent is confidently gone proves nothing about why the owner is quiet,
+# so only a live one counts - and the borrower is itself a watched window, so
+# its own liveness keeps being judged on the ordinary path, which is where a
+# review that really has stopped surfaces. A task with no borrower yields
+# nothing here and is untouched.
+#
+# Backend liveness is read through bin/fm-backend.sh. A caller that has not
+# sourced it gets no borrower rather than an assumed one, because suppressing an
+# alarm on an unanswerable question is the one wrong direction to fail in.
+live_borrower_of() {  # <task> [state-dir]
+  local task=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt meta borrower bwt win backend alive
+  [ -n "$task" ] && [ -n "$state" ] || return 0
+  command -v fm_backend_agent_alive >/dev/null 2>&1 || return 0
+  wt=$(meta_line "$state/$task.meta" worktree)
+  [ -n "$wt" ] || return 0
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || continue
+    borrower=$(basename "$meta"); borrower=${borrower%.meta}
+    [ "$borrower" != "$task" ] || continue
+    [ "$(meta_line "$meta" borrowed_worktree)" = 1 ] || continue
+    bwt=$(meta_line "$meta" worktree)
+    [ "$bwt" = "$wt" ] || continue
+    win=$(meta_line "$meta" window)
+    [ -n "$win" ] || continue
+    backend=$(meta_line "$meta" backend)
+    [ -n "$backend" ] || backend=tmux
+    alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || alive=unknown
+    [ "$alive" = dead ] && continue
+    printf '%s' "$borrower"
+    return 0
+  done
+  return 0
 }
 
 # 0 (benign/absorb) if EVERY task referenced by a no-verb "signal:" wake is provably

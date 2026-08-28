@@ -20,11 +20,27 @@
 # tree, which is the evidence that the reviewer only read and that the implementer
 # was idle rather than editing beside it.
 #
+# Which projects the review runs on is a per-home choice, because its cost falls
+# on one captain's usage window while its value depends on what the project is.
+# config/craft-review-projects (local, gitignored) enumerates the projects that
+# require it, one literal name per non-empty, non-comment line. The boundary is
+# by-project and hard-edged: a project is in the set or it is not, and there is
+# no per-change judgement of triviality, because the moment such a rule has
+# exceptions the exception becomes the path.
+#
+# The file being ABSENT means required everywhere, not nowhere. A home that has
+# never configured this is a home that has said nothing, and the safe reading of
+# silence about a safety step is that it still applies: absence must never be
+# what quietly switches a gate off on a project that expects it. Narrowing the
+# set is therefore always a deliberate, written act, and an empty file - all
+# comments, no names - is how a home says "nowhere" out loud.
+#
 # The reviewer's remit lives in .agents/skills/craftsmanship-review/SKILL.md.
-# This script owns only the record and the gate.
+# This script owns only the record, the gate, and which projects it applies to.
 #
 # Usage: fm-craft-review.sh record <task-id> --reviewer <id> --verdict pass|findings [--findings <path>]
 #        fm-craft-review.sh verify <task-id>
+#        fm-craft-review.sh required <project-name>
 #   record  writes state/<task-id>.craft-review for the commit currently on the
 #           task's branch. --reviewer names the reviewing task or agent and must
 #           differ from <task-id>, because a worker cannot review its own code.
@@ -32,13 +48,21 @@
 #           --findings points at the document holding them.
 #           It refuses while the worktree is dirty, whichever agent wrote there.
 #   verify  exits 0 only when a pass verdict is recorded for the commit the task
-#           branch currently points at. Every other state exits 1 and says why.
+#           branch currently points at, OR when this home does not require the
+#           review for that task's project. Every other state exits 1 and says why.
+#   required exits 0 when <project-name> requires the review and 1 when it does
+#           not, printing the reason either way; a malformed call exits 2, so
+#           only a real answer can ever read as "no". Firstmate and
+#           bin/fm-brief.sh ask this so a generated brief promises the stages
+#           that will actually run.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+SCOPE="$CONFIG/craft-review-projects"
 # shellcheck source=bin/fm-task-branch-lib.sh
 . "$SCRIPT_DIR/fm-task-branch-lib.sh"
 
@@ -48,6 +72,50 @@ usage() {
     /^#/ { sub(/^# ?/, ""); print; next }
     { exit }
   ' "$0"
+}
+
+# 0 when project $1 requires the craftsmanship review in this home.
+# Names are compared literally: no prefix, glob, or category rule, so a project
+# can never drift into or out of the set by being named like another one.
+# A name that could not be resolved at all is treated as required, for the same
+# reason an absent scope file is: not knowing is never a reason to drop a gate.
+review_required() {
+  local project=$1 line
+  [ -n "$project" ] || return 0
+  [ -f "$SCOPE" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%%#*}
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%"${line##*[![:space:]]}"}
+    [ -n "$line" ] || continue
+    [ "$line" = "$project" ] && return 0
+  done < "$SCOPE"
+  return 1
+}
+
+report_required() {
+  local project=$1
+  if review_required "$project"; then
+    if [ -f "$SCOPE" ]; then
+      echo "craftsmanship review is required for $project"
+    else
+      echo "craftsmanship review is required for $project (no $SCOPE, so it applies everywhere)"
+    fi
+    return 0
+  fi
+  echo "craftsmanship review is not required for $project (not listed in $SCOPE)"
+  return 1
+}
+
+# The project a task belongs to, by the name its registry and delivery mode use:
+# the basename of the project= path in its durable record.
+task_project() {
+  local id=$1 meta project
+  meta="$STATE/$id.meta"
+  [ -f "$meta" ] || { echo "error: no durable record for task $id at $meta" >&2; return 1; }
+  project=$(grep '^project=' "$meta" | tail -1 | cut -d= -f2-)
+  [ -n "$project" ] || { echo "error: durable record for task $id has no project=" >&2; return 1; }
+  basename "$project"
 }
 
 record_review() {
@@ -133,7 +201,16 @@ write_verdict() {
 }
 
 verify_review() {
-  local id=$1 wt commit record verdict passed_commit
+  local id=$1 wt commit record verdict passed_commit project
+
+  # A project this home does not review has no reviewer and no verdict to wait
+  # for, so the gate stands aside and publication proceeds. A record that cannot
+  # name its project is not evidence of that, and keeps the gate.
+  project=$(task_project "$id") || return 1
+  if ! review_required "$project"; then
+    echo "craftsmanship review is not required for $project; nothing gates publication of $id"
+    return 0
+  fi
 
   wt=$(task_worktree "$id") || return 1
   commit=$(reviewed_commit "$id" "$wt") || return 1
@@ -175,6 +252,16 @@ ID=${2:-}
 [ -n "$ACTION" ] && [ -n "$ID" ] || { usage >&2; exit 1; }
 shift 2
 
+# `required` takes a project name rather than a task id and reads no task state,
+# so it answers before the task-shaped argument handling below.
+# Exit 1 is this action's answer "no", so a malformed call exits 2 instead: a
+# caller that reads a failed question as a no would drop the review on it.
+if [ "$ACTION" = required ]; then
+  [ "$#" -eq 0 ] || { echo "error: required takes only a project name" >&2; exit 2; }
+  report_required "$ID"
+  exit $?
+fi
+
 REVIEWER=""
 VERDICT=""
 FINDINGS=""
@@ -201,7 +288,7 @@ case "$ACTION" in
     verify_review "$ID"
     ;;
   *)
-    echo "error: unknown action \"$ACTION\"; expected record or verify" >&2
+    echo "error: unknown action \"$ACTION\"; expected record, verify, or required" >&2
     exit 1
     ;;
 esac

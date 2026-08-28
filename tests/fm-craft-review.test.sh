@@ -17,6 +17,12 @@
 # worktree so one story keeps one checkout, and a clean tree at record time is the
 # evidence that the reviewer only read and that the implementer was idle rather than
 # editing beside it.
+#
+# Which projects the review runs on is a per-home choice, so the tests at the end
+# pin both sides of that boundary and its default: a project in the set is gated
+# exactly as above, a project outside it publishes with no reviewer and no gate,
+# and a home that has configured nothing is gated everywhere - absence must never
+# be what quietly switches the step off.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -31,7 +37,10 @@ TMP_ROOT=$(fm_test_tmproot fm-craft-review-tests)
 make_case() {
   local name=$1 case_dir
   case_dir="$TMP_ROOT/$name"
-  mkdir -p "$case_dir/state"
+  # An empty config dir, so a case says nothing about which projects are
+  # reviewed unless it writes the scope file itself - and never reads the
+  # developer's own home while doing it.
+  mkdir -p "$case_dir/state" "$case_dir/config"
 
   git init -q "$case_dir/project"
   git -C "$case_dir/project" symbolic-ref HEAD refs/heads/main
@@ -70,6 +79,7 @@ run_gate() {
   local case_dir=$1
   shift
   OUT=$(FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" \
     "$CRAFT_REVIEW" "$@" 2> "$case_dir/stderr"); CODE=$?
   ERR=$(cat "$case_dir/stderr")
 }
@@ -210,8 +220,101 @@ test_bad_arguments_refuse() {
 
   run_gate "$case_dir" publish task-x1
   expect_code 1 "$CODE" "bad-args: an unknown action must refuse"
-  assert_contains "$ERR" "expected record or verify" "bad-args: refusal should name the valid actions"
+  assert_contains "$ERR" "expected record, verify, or required" "bad-args: refusal should name the valid actions"
   pass "malformed invocations refuse instead of guessing"
+}
+
+# --- which projects the review runs on --------------------------------------
+
+# A project the home lists is gated exactly as it always was: an unreviewed
+# commit is refused, and only a pass verdict for that exact commit publishes.
+test_project_in_the_set_still_gates_publication() {
+  local case_dir tip
+  case_dir=$(make_case scoped-in)
+  printf '# projects this home reviews\nproject\n' > "$case_dir/config/craft-review-projects"
+
+  run_gate "$case_dir" verify task-x1
+  expect_code 1 "$CODE" "a listed project must still refuse an unreviewed commit"
+  assert_contains "$ERR" "has no craftsmanship review" \
+    "a listed project's refusal should name the missing review"
+
+  run_gate "$case_dir" record task-x1 --reviewer reviewer-y2 --verdict pass
+  expect_code 0 "$CODE" "recording a pass verdict on a listed project should succeed"
+  run_gate "$case_dir" verify task-x1
+  expect_code 0 "$CODE" "a pass verdict for the current commit should publish"
+  tip=$(branch_tip "$case_dir")
+  assert_contains "$OUT" "$tip" "the passing verdict should name the commit it covers"
+  pass "a project in the reviewed set still gates publication on a pass verdict for the exact commit"
+}
+
+# A project the home does not list has no reviewer to wait for, so the gate
+# stands aside and says so rather than refusing a verdict that will never exist.
+test_project_outside_the_set_publishes_with_no_reviewer() {
+  local case_dir
+  case_dir=$(make_case scoped-out)
+  printf '# projects this home reviews\nsomething-else\n' > "$case_dir/config/craft-review-projects"
+
+  run_gate "$case_dir" verify task-x1
+  expect_code 0 "$CODE" "a project outside the set must publish with no reviewer"
+  assert_contains "$OUT" "not required" \
+    "the gate should say the review is not required rather than passing silently"
+  [ ! -e "$case_dir/state/task-x1.craft-review" ] \
+    || fail "publishing outside the set should need no recorded verdict"
+  pass "a project outside the reviewed set publishes with no reviewer and no gate"
+}
+
+# The deliberate default: a home that has configured nothing has said nothing,
+# and silence about a safety step leaves it in force.
+test_absent_scope_configuration_keeps_the_gate_everywhere() {
+  local case_dir
+  case_dir=$(make_case scoped-absent)
+  [ ! -e "$case_dir/config/craft-review-projects" ] || fail "fixture should have no scope file"
+
+  run_gate "$case_dir" verify task-x1
+  expect_code 1 "$CODE" "an unconfigured home must still gate publication"
+  assert_contains "$ERR" "has no craftsmanship review" \
+    "an unconfigured home's refusal should name the missing review"
+
+  run_gate "$case_dir" required project
+  expect_code 0 "$CODE" "an unconfigured home should report the review as required"
+  assert_contains "$OUT" "applies everywhere" \
+    "the reason should say why an unconfigured home is gated"
+  pass "an absent scope configuration keeps the review required everywhere"
+}
+
+# The boundary is a list of literal names. A project must not drift into the set
+# by being named like one that is in it, in either direction.
+# Exit 1 is the answer "not required", so nothing else may produce it: a caller
+# that read a failed question as a no would silently drop the review.
+test_a_malformed_scope_question_is_not_an_answer() {
+  local case_dir
+  case_dir=$(make_case scoped-malformed)
+
+  run_gate "$case_dir" required project extra-argument
+  expect_code 2 "$CODE" "a malformed required call must not exit 1, which means not required"
+  assert_contains "$ERR" "takes only a project name" \
+    "the refusal should say what was wrong with the call"
+  pass "a malformed scope question exits distinctly from the answer no"
+}
+
+test_scope_membership_is_literal() {
+  local case_dir
+  case_dir=$(make_case scoped-literal)
+  printf 'project\n' > "$case_dir/config/craft-review-projects"
+
+  run_gate "$case_dir" required project
+  expect_code 0 "$CODE" "the listed name itself must be required"
+  run_gate "$case_dir" required projec
+  expect_code 1 "$CODE" "a prefix of a listed name must not be required"
+  run_gate "$case_dir" required project-two
+  expect_code 1 "$CODE" "a name extending a listed one must not be required"
+
+  # Comments and blank lines are not names, and a file holding only those is how
+  # a home says "nowhere" deliberately.
+  printf '\n# project\n\n' > "$case_dir/config/craft-review-projects"
+  run_gate "$case_dir" required project
+  expect_code 1 "$CODE" "a commented-out name must not be required"
+  pass "reviewed-set membership is a literal name match, never a prefix or a comment"
 }
 
 test_help_renders_the_complete_header() {
@@ -230,4 +333,9 @@ test_dirty_worktree_refuses_a_verdict
 test_self_review_is_refused
 test_unresolvable_task_refuses_rather_than_passing
 test_bad_arguments_refuse
+test_project_in_the_set_still_gates_publication
+test_project_outside_the_set_publishes_with_no_reviewer
+test_absent_scope_configuration_keeps_the_gate_everywhere
+test_a_malformed_scope_question_is_not_an_answer
+test_scope_membership_is_literal
 test_help_renders_the_complete_header

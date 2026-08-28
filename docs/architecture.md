@@ -196,10 +196,11 @@ The `data/secondmates.md` line contract is owned by the [`secondmate-provisionin
 ## Project modes are explicit
 
 `data/projects.md` records each project's delivery mode and optional `+yolo` autonomy flag.
-`no-mistakes` projects run the full validation pipeline, `direct-PR` projects open PRs without that pipeline, and `local-only` projects run that pipeline with its publication and merge-request steps skipped, pass an independent craftsmanship review, and then publish the branch without opening a merge request.
+`no-mistakes` projects run the full validation pipeline, `direct-PR` projects open PRs without that pipeline, and `local-only` projects run that pipeline with its publication and merge-request steps skipped, pass an independent craftsmanship review where the home requires one, and then publish the branch without opening a merge request.
 The `local-only` name is a deliberate historical mismatch: renaming a config enum written into every home's registry and into in-flight task metadata would need a migration and would conflict permanently with upstream merges, so `bin/fm-project-mode.sh` documents the mismatch instead.
 That name still describes the one project shape that stays unpublished, a project with no remote at all, which lands through the approved fast-forward merge in `bin/fm-merge-local.sh`.
 The reviewer is a separate crewmate that did not write the code, briefed by `bin/fm-brief.sh --craft-review` with its remit owned by the [`craftsmanship-review` skill](../.agents/skills/craftsmanship-review/SKILL.md), and `bin/fm-craft-review.sh` pins its verdict to the reviewed commit so publication is refused while any later commit is unreviewed.
+Which projects that stage runs on is a per-home choice owned by [`docs/configuration.md`](configuration.md); where it is not required the same path runs with no reviewer and no gate.
 When a selected delivery path calls for a diff, `bin/fm-review-diff.sh` refreshes the authoritative base and, when task meta records `pr=`, always fetches and compares against `refs/pull/<n>/head` by default (recorded `pr_head=` is only an offline fallback) before falling back to the local branch with a warning.
 For target project repos shipped through their own no-mistakes pipeline, commits under `.no-mistakes/evidence/` are the pipeline's PR-viewable validation evidence and are expected to stay in the crew branch until the evidence-hosting design changes.
 The firstmate repo itself is the exception: its `.no-mistakes/` directory is local state, stays gitignored, and is rejected by CI if tracked.

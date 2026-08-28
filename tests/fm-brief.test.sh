@@ -312,6 +312,90 @@ test_local_only_brief_gates_publication_on_the_independent_review() {
   pass "fm-brief.sh: local-only brief gates publication on the independent review"
 }
 
+# A brief that promises a stage which will not run is how a worker ends up
+# waiting for a reviewer nobody will send. On a project this home does not
+# review, the local-only brief must describe the delivery that actually happens:
+# implement, validate, publish - with no review stop and no publication gate.
+test_local_only_brief_omits_the_review_where_it_is_not_required() {
+  local home id brief
+  home="$TMP_ROOT/review-scope-home"
+  write_registry "$home"
+  mkdir -p "$home/config"
+  printf '# this home reviews only these projects\nsome-other-project\n' \
+    > "$home/config/craft-review-projects"
+  id="brief-local-unscoped-p9"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-11 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "does not run the independent craftsmanship review on this project" "$brief" \
+    "brief does not tell the worker there is no reviewer coming"
+  assert_grep "Do not wait for one" "$brief" \
+    "brief does not tell the worker not to wait for a reviewer"
+  assert_no_grep "fm-craft-review.sh' verify" "$brief" \
+    "brief still gates publication on a verdict no reviewer will record"
+  assert_no_grep "ready for craftsmanship review" "$brief" \
+    "brief still stops the worker for a review that will not happen"
+  # The rest of the delivery is unchanged: validate without publishing, then
+  # publish the branch and open nothing.
+  assert_grep "skip push,pr,ci" "$brief" \
+    "brief lost the validation run that skips publication"
+  assert_grep "skip review,test,document,lint,pr,ci" "$brief" \
+    "brief lost the publication step"
+  assert_grep "Do NOT open a PR or merge request" "$brief" \
+    "brief lost the merge-request boundary"
+  pass "fm-brief.sh: local-only brief omits the review where this home does not require it"
+}
+
+# A brief must never quietly omit a safety stage because a check failed to run.
+# Only the scope decision's own "no" drops the review; a question that could not
+# be asked keeps every stage.
+test_local_only_brief_keeps_the_review_when_the_scope_check_fails() {
+  local home root id brief
+  home="$TMP_ROOT/review-scope-broken-home"
+  root="$TMP_ROOT/review-scope-broken-root"
+  write_registry "$home"
+  mkdir -p "$home/config" "$root"
+  # This home would drop the review if the answer were readable at all.
+  printf 'some-other-project\n' > "$home/config/craft-review-projects"
+  cp -R "$ROOT/bin" "$root/bin"
+  cat > "$root/bin/fm-craft-review.sh" <<'SH'
+#!/usr/bin/env bash
+echo "error: cannot answer" >&2
+exit 2
+SH
+  chmod +x "$root/bin/fm-craft-review.sh"
+  id="brief-local-scope-broken-p11"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-13 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  [ -f "$brief" ] || fail "no brief was generated when the scope check could not answer"
+  assert_grep "reviewer that did not write this code" "$brief" \
+    "an unanswerable scope check dropped the review stage"
+  assert_no_grep "does not run the independent craftsmanship review" "$brief" \
+    "an unanswerable scope check was read as a no"
+  pass "fm-brief.sh: an unanswerable scope check keeps the review rather than dropping it"
+}
+
+# The same registry entry, with this home requiring the review, keeps every
+# stage - so the difference is the configuration and nothing else.
+test_local_only_brief_keeps_the_review_where_it_is_required() {
+  local home id brief
+  home="$TMP_ROOT/review-scope-in-home"
+  write_registry "$home"
+  mkdir -p "$home/config"
+  printf 'local-proj\n' > "$home/config/craft-review-projects"
+  id="brief-local-scoped-p10"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-12 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "fm-craft-review.sh' verify $id" "$brief" \
+    "a listed project's brief lost the publication gate"
+  assert_grep "reviewer that did not write this code" "$brief" \
+    "a listed project's brief lost the independent reviewer"
+  pass "fm-brief.sh: local-only brief keeps the review where this home requires it"
+}
+
 test_craft_review_brief_states_its_remit_and_boundaries() {
   local home id brief status
   home="$TMP_ROOT/craft-home"
@@ -862,6 +946,9 @@ test_faster_paths_use_configured_authority_without_stacked_review
 test_local_only_brief_publishes_and_stops_before_the_merge_request
 test_local_only_brief_runs_the_pipeline_stopping_before_publication
 test_local_only_brief_gates_publication_on_the_independent_review
+test_local_only_brief_omits_the_review_where_it_is_not_required
+test_local_only_brief_keeps_the_review_when_the_scope_check_fails
+test_local_only_brief_keeps_the_review_where_it_is_required
 test_craft_review_brief_states_its_remit_and_boundaries
 test_craft_review_brief_shares_the_implementers_worktree_read_only
 test_craft_review_refuses_to_review_its_own_task

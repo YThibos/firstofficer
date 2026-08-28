@@ -21,6 +21,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-classify-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-backend.sh"
 
 WATCH="$ROOT/bin/fm-watch.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
@@ -546,7 +548,9 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated() {
   reap "$pid"
 
   # Phase B: backdate the idle timer past the threshold; the next run escalates.
-  # (The subsequent-sight timer path does not re-read the crew state.)
+  # The timer path asks one question at the escalation moment - whether a
+  # pipeline is still demonstrably working - and this crew has no attributed run
+  # (the fixture's default `none`), so the escalation is unchanged.
   echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
@@ -560,6 +564,188 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the wedge escalation failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "wedge escalation was not queued"
   pass "provably-working non-terminal stale is absorbed on first sight, then wedge-escalated past the threshold"
+}
+
+# --- a demonstrably-live pipeline defers the wedge escalation ----------------
+# A worker blocked on one foreground `no-mistakes axi run` renders nothing for
+# the whole run, so its pane is legitimately static and the timer would escalate
+# it every window - three in a row reaching demand-deep-inspection, the one
+# signal that is supposed to mean "do not dismiss this". The run's own active
+# step answers what the pane cannot. The timer is restarted rather than cleared,
+# so the question is asked again next window and a pipeline that stops being
+# alive escalates one window later.
+test_live_pipeline_defers_wedge_escalation() {
+  local dir state fakebin out capture_file window key pane_hash sig pid since_before since_after
+  dir=$(make_case live-pipeline-defer); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-validating"
+  printf 'no-mistakes axi run --intent ...' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/validating.meta"
+  printf 'working: validating\n' > "$state/validating.status"
+  sig=$(seen_sig "$state/validating.status"); printf '%s' "$sig" > "$state/.seen-validating_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "no-mistakes axi run --intent ...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  since_before=$(( $(date +%s) - 500 ))
+  echo "$since_before" > "$state/.stale-since-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  export FM_FAKE_PIPELINE_LIVENESS=alive
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS
+    fail "watcher wedge-escalated a task whose pipeline is demonstrably still working: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS; fail "a live pipeline printed a wedge wake"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS; fail "a live pipeline enqueued a wedge wake"; }
+  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS; fail "a deferred escalation advanced the escalation count toward demand-deep-inspection"; }
+  since_after=$(cat "$state/.stale-since-$key" 2>/dev/null || echo 0)
+  [ "$since_after" -gt "$since_before" ] || { reap "$pid"; unset FM_FAKE_PIPELINE_LIVENESS; fail "the wedge timer was not restarted, so the deferral would never be re-examined"; }
+  reap "$pid"
+  unset FM_FAKE_PIPELINE_LIVENESS
+  pass "a demonstrably-live pipeline defers the wedge escalation and restarts the timer"
+}
+
+# --- a stopped pipeline on the same shape still escalates --------------------
+# The deferral must turn on the run being alive, not on there being a run: the
+# identical stale pane whose pipeline is no longer working escalates exactly as
+# it always did, so a genuinely frozen run is still caught.
+test_stopped_pipeline_still_escalates() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid
+  dir=$(make_case stopped-pipeline-escalates); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-frozen"
+  printf 'no-mistakes axi run --intent ...' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/frozen.meta"
+  printf 'working: validating\n' > "$state/frozen.status"
+  sig=$(seen_sig "$state/frozen.status"); printf '%s' "$sig" > "$state/.seen-frozen_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "no-mistakes axi run --intent ...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  export FM_FAKE_PIPELINE_LIVENESS=stopped
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || { unset FM_FAKE_PIPELINE_LIVENESS; fail "watcher did not escalate a stale pane whose pipeline has stopped"; }
+  grep -F "possible wedge" "$out" >/dev/null || { unset FM_FAKE_PIPELINE_LIVENESS; fail "a stopped pipeline did not flag a possible wedge"; }
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || { unset FM_FAKE_PIPELINE_LIVENESS; fail "drain after the wedge escalation failed"; }
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || { unset FM_FAKE_PIPELINE_LIVENESS; fail "the wedge escalation was not queued"; }
+  unset FM_FAKE_PIPELINE_LIVENESS
+  pass "a stale pane whose pipeline has stopped still wedge-escalates"
+}
+
+# --- an implementer borrowed by a live reviewer is expected to be idle -------
+# A craftsmanship review joins the implementing task's own copy and the two are
+# serialised, so the implementer is REQUIRED to be idle for the whole review.
+# Its pane escalated every window throughout. live_borrower_of is the decision
+# that tells that apart from a wedge; it is pinned here as a function because
+# the state it reads is metadata, not anything the watcher loop contributes.
+test_live_borrower_of_suppresses_only_a_real_live_borrow() {
+  local dir state fakebin owner_wt other_wt got
+  dir=$(make_case live-borrower); state="$dir/state"; fakebin="$dir/fakebin"
+  owner_wt="$dir/owner-copy"; other_wt="$dir/other-copy"
+  mkdir -p "$owner_wt" "$other_wt"
+  printf 'window=test:fm-impl\nkind=ship\nworktree=%s\n' "$owner_wt" > "$state/impl.meta"
+
+  # No borrower at all: the ordinary path must be untouched.
+  [ -z "$(live_borrower_of impl "$state")" ] || fail "a task with no borrower reported one"
+
+  # A reviewer that borrowed a DIFFERENT copy says nothing about this task.
+  printf 'window=test:fm-elsewhere\nkind=ship\nworktree=%s\nborrowed_worktree=1\n' \
+    "$other_wt" > "$state/elsewhere.meta"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-elsewhere" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state" | grep -q . \
+    && fail "a borrower of another worktree was reported as this task's borrower"
+
+  # A live reviewer holding THIS copy is the suppressing case.
+  printf 'window=test:fm-review\nkind=ship\nworktree=%s\nborrowed_worktree=1\n' \
+    "$owner_wt" > "$state/review.meta"
+  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-review" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ "$got" = review ] || fail "a live borrower of this task's own copy was not reported (got: '${got:-none}')"
+
+  # A borrower whose agent has confidently exited explains nothing, so the owner
+  # goes back to the ordinary path and a stalled review is still caught.
+  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-review" FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ -z "$got" ] || fail "a borrower whose agent had exited was still treated as live (got: '$got')"
+
+  # A borrow is only ever read from the borrower's own record: an ordinary task
+  # sharing the path without the flag is not one.
+  rm -f "$state/review.meta"
+  printf 'window=test:fm-sibling\nkind=ship\nworktree=%s\n' "$owner_wt" > "$state/sibling.meta"
+  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-sibling" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ -z "$got" ] || fail "a task with no borrowed_worktree flag was treated as a borrower (got: '$got')"
+
+  pass "live_borrower_of reports only a live borrower of this task's own copy"
+}
+
+# --- the watcher defers the owner's escalation while a borrower is live ------
+# The end-to-end half of the case above: the implementer's own window is stale
+# past the threshold with a reviewer live in its copy, and must not escalate.
+# The reviewer's own window is watched exactly as before, so a review that
+# really has stopped is still caught there.
+test_live_borrower_defers_owner_wedge_escalation() {
+  local dir state fakebin out owner_wt window rwindow key pane_hash sig pid since_before since_after
+  dir=$(make_case borrower-defer); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; owner_wt="$dir/owner-copy"
+  mkdir -p "$owner_wt"
+  window="test:fm-impl"; rwindow="test:fm-review"
+  printf 'waiting on the review' > "$dir/idle.txt"
+  printf 'reading files... esc to interrupt' > "$dir/busy.txt"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$owner_wt" > "$state/impl.meta"
+  printf 'window=%s\nkind=ship\nworktree=%s\nborrowed_worktree=1\n' \
+    "$rwindow" "$owner_wt" > "$state/review.meta"
+  printf 'done: validated, ready for craftsmanship review\n' > "$state/impl.status"
+  sig=$(seen_sig "$state/impl.status"); printf '%s' "$sig" > "$state/.seen-impl_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "waiting on the review")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  since_before=$(( $(date +%s) - 500 ))
+  echo "$since_before" > "$state/.stale-since-$key"
+  # The implementer looks finished and idle, which is exactly what it is meant
+  # to look like during the review, and no pipeline is running for it.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · idle'
+  export FM_FAKE_TMUX_WINDOWS="$window $rwindow"
+  export FM_FAKE_TMUX_CAPTURE_test_fm_impl="$dir/idle.txt"
+  export FM_FAKE_TMUX_CAPTURE_test_fm_review="$dir/busy.txt"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=claude
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"
+    unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND
+    fail "watcher wedge-escalated an implementer whose copy a live reviewer holds: $(cat "$out")"
+  fi
+  since_after=$(cat "$state/.stale-since-$key" 2>/dev/null || echo 0)
+  reap "$pid"
+  [ ! -e "$state/.wedge-escalations-$key" ] \
+    || { unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND; fail "a borrowed implementer advanced the escalation count toward demand-deep-inspection"; }
+  [ "$since_after" -gt "$since_before" ] \
+    || { unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND; fail "the wedge timer was not restarted, so the deferral would never be re-examined"; }
+  unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND
+  pass "an implementer whose copy a live reviewer holds does not wedge-escalate"
 }
 
 # --- non-terminal stale, crew NOT provably working: surfaced immediately ------
@@ -1555,6 +1741,10 @@ test_actionable_signal_surfaced
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
+test_live_pipeline_defers_wedge_escalation
+test_stopped_pipeline_still_escalates
+test_live_borrower_of_suppresses_only_a_real_live_borrow
+test_live_borrower_defers_owner_wedge_escalation
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
 test_busy_pane_below_turn_age_bound_is_absorbed

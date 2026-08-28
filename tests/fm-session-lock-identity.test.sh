@@ -183,3 +183,92 @@ if fm_harness_pid_alive 1; then
   fail "pid 1 was reported as a live harness"
 fi
 pass "an unrelated live process is not a live harness"
+
+# --- a Claude session host outranks every naming rule -----------------------
+#
+# Claude Code re-hosts a session it moves into a background job. The session's
+# own process tree changes under it while the `claude` client that launched it
+# stays alive in the terminal, so the ancestry walk answers with one pid before
+# the move and another after, and the pid it recorded first keeps reading back
+# as a live harness in a tree the session no longer belongs to. Every later
+# ownership check then concludes some OTHER session holds the home, and the
+# Stop-owned auto-arm stays inert for the rest of that session.
+#
+# The session host is the fixed point: one process for one session, the process
+# both a tool call and a Stop hook descend from. These pin that it wins over the
+# claude-named ancestor above it, that it counts as a live harness despite being
+# named after its release version, and that only a pid-reuse-verified record can
+# claim it.
+if [ ! -r /proc/$$/stat ]; then
+  pass "skip: /proc unavailable, Claude session-host records cannot be verified here"
+else
+  CFG="$TMP_ROOT/claude-config"
+  mkdir -p "$CFG/sessions"
+
+  # The inner process writes its own record, because its pid is not knowable
+  # until it runs. procStart comes from the lib's own reader, so the record is
+  # verified against exactly the field the lib checks.
+  INNER='
+. "$LIB"
+st=$(fm_proc_stat_field $$ 19) || exit 1
+printf "{\"pid\":%s,\"sessionId\":\"%s\",\"procStart\":\"%s\"}\n" \
+  "$$" "$SESSION_UUID" "${PROC_START_OVERRIDE:-$st}" > "$CFG/sessions/$$.json"
+printf "%s %s %s\n" "$PPID" "$$" "$(fm_harness_ancestry_pid || echo NONE)"
+'
+  # A subshell forks before it execs, so the leaf is a real child of the
+  # claude-named process rather than replacing it.
+  OUTER='( exec -a "$LEAF" "$LEAF" -c "$INNER" )'
+  SESSION_UUID=45d20461-bd73-4201-9442-480730901f20
+  export CFG INNER LEAF LIB SESSION_UUID
+  export CLAUDE_CONFIG_DIR="$CFG"
+
+  out=$(bash -c 'exec -a claude "$0" -c "$1"' "$VERSIONED" "$OUTER" 2>&1) || true
+  read -r outer_pid inner_pid walked _ <<< "$out"
+  case "$outer_pid$inner_pid$walked" in
+    ''|*[!0-9]*) fail "expected three bare pids from the nested probe, got: $out" ;;
+  esac
+  if [ "$walked" = "$outer_pid" ]; then
+    fail "ancestry walk climbed past the session host $inner_pid to the claude-named client $outer_pid; a background-job session would lose its own lock"
+  fi
+  if [ "$walked" != "$inner_pid" ]; then
+    fail "ancestry walk should resolve the verified session host $inner_pid, got: $walked"
+  fi
+  pass "ancestry walk resolves the verified Claude session host, not the claude-named client above it"
+
+  # The walk just recorded that pid, so liveness must agree - a session host is
+  # named after its release version and matches no naming rule on its own.
+  start_child "$LEAF" "$LEAF"
+  host_pid=$CHILD_PID
+  host_start=$(fm_proc_stat_field "$host_pid" 19)
+  printf '{"pid":%s,"sessionId":"%s","procStart":"%s"}\n' \
+    "$host_pid" "$SESSION_UUID" "$host_start" > "$CFG/sessions/$host_pid.json"
+  if fm_harness_pid_alive "$host_pid"; then
+    pass "a live verified Claude session host is a live harness"
+  else
+    stop_child "$host_pid"
+    fail "a live verified session host was reported as not a harness, so the lock it holds reads back as stale"
+  fi
+
+  # A record is only evidence while it still belongs to the live process: a
+  # recycled pid inheriting a leftover record must claim nothing.
+  printf '{"pid":%s,"sessionId":"%s","procStart":"%s"}\n' \
+    "$host_pid" "$SESSION_UUID" "$((host_start + 1))" > "$CFG/sessions/$host_pid.json"
+  if fm_harness_pid_alive "$host_pid"; then
+    stop_child "$host_pid"
+    fail "a session record whose procStart does not match the live process was treated as evidence"
+  fi
+  pass "a leftover session record from a recycled pid is not evidence of a harness"
+  stop_child "$host_pid"
+
+  # The same must hold for the walk: with the record unverifiable, resolution
+  # falls back to the naming rules exactly as it did before.
+  PROC_START_OVERRIDE=0
+  export PROC_START_OVERRIDE
+  out=$(bash -c 'exec -a claude "$0" -c "$1"' "$VERSIONED" "$OUTER" 2>&1) || true
+  read -r outer_pid _ walked _ <<< "$out"
+  if [ "$walked" != "$outer_pid" ]; then
+    fail "with no verifiable session record the walk should fall back to the claude-named ancestor $outer_pid, got: $walked"
+  fi
+  pass "an unverifiable session record leaves the naming rules deciding, unchanged"
+  unset PROC_START_OVERRIDE CLAUDE_CONFIG_DIR
+fi

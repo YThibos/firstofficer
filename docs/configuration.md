@@ -105,6 +105,18 @@ That keeps a tmux pane nested inside herdr on the tmux transport, matching the r
 Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the legacy `firstmate:0` tmux fallback with a warning.
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 
+## Craftsmanship-review scope (config/craft-review-projects)
+
+The independent craftsmanship review on the `local-only` delivery path runs on the projects this home lists in local, gitignored `config/craft-review-projects`, one literal project name per non-empty, non-comment line.
+Names are matched literally, so a project never drifts into or out of the set by resembling another one, and there is no per-change exemption: a project is in the set or it is not.
+
+An absent file means the review is required for every `local-only` project, not for none.
+A home that has never configured this has said nothing, and the safe reading of silence about a safety step is that it still applies, so narrowing the set is always a deliberate written act; a file holding only comments is how a home says "nowhere" out loud.
+
+`bin/fm-craft-review.sh required <project-name>` is the single owner of the decision and prints the reason either way.
+`bin/fm-craft-review.sh verify <task-id>` reads it before gating publication, and `bin/fm-brief.sh` reads it so a generated `local-only` brief promises only the stages that will actually run.
+Where the review is required nothing about it changes; where it is not, the delivery runs end to end with no reviewer and no gate.
+
 ## Away-mode wedge alarm channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.

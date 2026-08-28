@@ -12,8 +12,11 @@ metadata:
 # craftsmanship-review
 
 This skill is the single owner of the craftsmanship reviewer's remit.
-`bin/fm-brief.sh` generates the reviewer's instructions and points here for the remit; `bin/fm-craft-review.sh` owns the verdict record and the publication gate.
-`CLAUDE.md` section 7 owns where this stage sits in the delivery contract.
+`bin/fm-brief.sh` generates the reviewer's instructions and points here for the remit; `bin/fm-craft-review.sh` owns the verdict record, the publication gate, and which projects the stage runs on at all.
+`CLAUDE.md` section 7 owns where this stage sits in the delivery contract, and [`docs/configuration.md`](../../../docs/configuration.md) owns the per-home scope configuration.
+
+The stage does not run on every `local-only` project: `bin/fm-craft-review.sh required <project>` answers whether this home requires it, an unconfigured home requires it everywhere, and the boundary is by-project rather than a judgement about how small a particular change looks.
+Nothing in the remit below changes where the review does run.
 
 ## What this review is not
 

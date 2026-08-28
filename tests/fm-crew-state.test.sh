@@ -143,6 +143,10 @@ run_crew_state() {  # <case-dir> <id>
   PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" "$CREW_STATE" "$2"
 }
 
+run_pipeline_liveness() {  # <case-dir> <id>
+  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" "$CREW_STATE" --pipeline-liveness "$2"
+}
+
 new_case() {  # <name> -> echoes case dir with an empty state/
   local d="$TMP_ROOT/$1"
   mkdir -p "$d/state"
@@ -177,6 +181,25 @@ run:
   head: "${FM_FAKE_RUN_HEAD:-abc1234}"
   pr: ""
   findings: none
+  steps[2]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    review,running,0,0
+EOF
+}
+
+# A running run carrying the active_steps table `axi status` emits while a step
+# is running or fixing: <branch> <last_activity> <agent_pid>.
+run_running_with_active_step() {  # <branch> <last-activity> <agent-pid>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: running
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
+  findings: none
+  active_steps[1]{step,active_for,last_activity,agent_pid,round}:
+    review,7m12s,$2,$3,round 1
   steps[2]{step,status,findings,duration_ms}:
     intent,completed,0,0
     review,running,0,0
@@ -336,6 +359,92 @@ EOF
 
 # ---------------------------------------------------------------------------
 # (a) active run-step is authoritative
+# --- pipeline liveness ------------------------------------------------------
+#
+# A worker blocked on one foreground `no-mistakes axi run` renders nothing for
+# the whole run, so its pane is static and indistinguishable from a wedged one.
+# The run's own active step is what tells them apart, and the answer must be
+# narrow enough that a pipeline which has actually stopped still reads as
+# stopped - otherwise the wedge alarm is simply switched off rather than fixed.
+
+test_pipeline_liveness_reports_a_working_step_as_alive() {
+  reset_fakes
+  local d out; d=$(new_case liveness-alive)
+  make_repo_on_branch "$d/wt" fm/feat-live
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-live.meta" "window=fm:fm-feat-live" "worktree=$d/wt" "kind=ship"
+  # $$ is this test process: a pid that is certainly alive.
+  FM_FAKE_AXI_STATUS="$(run_running_with_active_step fm/feat-live '12s ago' "$$")"
+  out=$(run_pipeline_liveness "$d" feat-live)
+  [ "$out" = alive ] || fail "a running step with a live agent and recent activity should be alive, got: '$out'"
+  pass "a running step with a live agent pid and recent activity reports alive"
+}
+
+test_pipeline_liveness_reports_a_quiet_step_as_stopped() {
+  reset_fakes
+  local d out; d=$(new_case liveness-quiet)
+  make_repo_on_branch "$d/wt" fm/feat-quiet
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-quiet.meta" "window=fm:fm-feat-quiet" "worktree=$d/wt" "kind=ship"
+  # A wedged agent keeps its pid: no-mistakes marks the activity quiet, and
+  # quiet is not alive, so a genuinely frozen run still escalates.
+  FM_FAKE_AXI_STATUS="$(run_running_with_active_step fm/feat-quiet 'quiet 11m' "$$")"
+  out=$(run_pipeline_liveness "$d" feat-quiet)
+  [ "$out" = stopped ] || fail "a step no-mistakes marks quiet should not be alive, got: '$out'"
+  pass "a live agent whose activity has gone quiet does not report alive"
+}
+
+test_pipeline_liveness_reports_a_dead_agent_as_stopped() {
+  reset_fakes
+  local d out dead; d=$(new_case liveness-dead)
+  make_repo_on_branch "$d/wt" fm/feat-dead
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dead.meta" "window=fm:fm-feat-dead" "worktree=$d/wt" "kind=ship"
+  dead=$(bash -c 'echo $$')
+  while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+  FM_FAKE_AXI_STATUS="$(run_running_with_active_step fm/feat-dead '3s ago' "$dead")"
+  out=$(run_pipeline_liveness "$d" feat-dead)
+  [ "$out" = stopped ] || fail "a step whose reported agent pid is gone should not be alive, got: '$out'"
+  pass "a reported agent pid that has died does not report alive"
+}
+
+test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid() {
+  reset_fakes
+  local d out; d=$(new_case liveness-nopid)
+  make_repo_on_branch "$d/wt" fm/feat-nopid
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-nopid.meta" "window=fm:fm-feat-nopid" "worktree=$d/wt" "kind=ship"
+  # A step with no subprocess agent - a ci step polling for checks - reports "-"
+  # for the pid, and must not be penalised for it.
+  FM_FAKE_AXI_STATUS="$(run_running_with_active_step fm/feat-nopid '20s ago' -)"
+  out=$(run_pipeline_liveness "$d" feat-nopid)
+  [ "$out" = alive ] || fail "a working step reporting no agent pid should still be alive, got: '$out'"
+  pass "a working step that reports no agent pid still reports alive"
+}
+
+test_pipeline_liveness_reports_none_without_an_attributed_run() {
+  reset_fakes
+  local d out; d=$(new_case liveness-none)
+  make_repo_on_branch "$d/wt" fm/feat-norun
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-norun.meta" "window=fm:fm-feat-norun" "worktree=$d/wt" "kind=ship"
+  # No run at all: the caller must be told nothing, so its ordinary behaviour
+  # for an idle task is untouched.
+  out=$(run_pipeline_liveness "$d" feat-norun)
+  [ "$out" = none ] || fail "a crew with no attributed run should report none, got: '$out'"
+
+  # A run without an active_steps table - it is parked at a gate - is likewise
+  # not a working pipeline.
+  FM_FAKE_AXI_STATUS="$(run_parked fm/feat-norun)"
+  out=$(run_pipeline_liveness "$d" feat-norun)
+  [ "$out" != alive ] || fail "a parked run reported a working pipeline"
+
+  # And a task with no durable record at all answers the same way.
+  out=$(run_pipeline_liveness "$d" no-such-task)
+  [ "$out" = none ] || fail "an unresolvable task should report none, got: '$out'"
+  pass "no attributed working run reports none, leaving ordinary behaviour unchanged"
+}
+
 test_active_run_is_authoritative() {
   reset_fakes
   local d; d=$(new_case active)
@@ -1233,6 +1342,11 @@ test_missing_run_head_falls_back_to_current_state() {
 }
 
 test_active_run_is_authoritative
+test_pipeline_liveness_reports_a_working_step_as_alive
+test_pipeline_liveness_reports_a_quiet_step_as_stopped
+test_pipeline_liveness_reports_a_dead_agent_as_stopped
+test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid
+test_pipeline_liveness_reports_none_without_an_attributed_run
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
 test_genuine_parked_not_superseded

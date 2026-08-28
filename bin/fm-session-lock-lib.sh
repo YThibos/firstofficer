@@ -67,6 +67,77 @@ fm_harness_shared_service() {
   [ "${argv1%%[[:space:]]*}" = daemon ]
 }
 
+# Print field $2 of /proc/$1/stat, counted from 0 at the state field that
+# follows the process name, or fail when it cannot be read. The name is skipped
+# through its closing parenthesis, because a process may have spaces or
+# parentheses in it. /proc is Linux-only, so every caller of this treats a
+# failure as "cannot be verified here" rather than as evidence of anything.
+fm_proc_stat_field() {
+  local pid=$1 index=$2 line rest
+  local -a fields
+  { read -r line < "/proc/$pid/stat"; } 2>/dev/null || return 1
+  rest=${line#*') '}
+  [ "$rest" != "$line" ] || return 1
+  # shellcheck disable=SC2206
+  fields=($rest)
+  [ -n "${fields[$index]:-}" ] || return 1
+  printf '%s' "${fields[$index]}"
+}
+
+# Print the session id Claude Code currently records for pid $1, or fail when
+# there is no record that can be TRUSTED for that pid. Claude Code keeps one
+# such record per session process at <config-root>/sessions/<pid>.json, holding
+# that session's current sessionId and the procStart of the process it belongs
+# to.
+#
+# A pid is reused, so the record is only trusted when its procStart matches the
+# live process's own start value in /proc/<pid>/stat; anything else is a leftover
+# from a pid that has since been recycled. /proc exists only on Linux, so on any
+# other host that verification cannot be performed at all and every record is
+# therefore unverifiable, which every caller treats exactly like an absent one -
+# leaving existing behaviour untouched there.
+fm_claude_recorded_session_id() {
+  local pid=$1 record started recorded id
+  started=$(fm_proc_stat_field "$pid" 19) || return 1
+  record="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$pid.json"
+  [ -f "$record" ] && [ -r "$record" ] || return 1
+  recorded=$(sed -n \
+    's/.*"procStart"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\).*/\1/p' \
+    "$record" 2>/dev/null | head -n 1)
+  [ -n "$recorded" ] && [ "$recorded" = "$started" ] || return 1
+  id=$(sed -n \
+    's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
+    "$record" 2>/dev/null | head -n 1)
+  [ -n "$id" ] || return 1
+  printf '%s' "$id"
+}
+
+# True when pid $1 is a process Claude Code itself records as hosting a live
+# session: the SESSION HOST, the process a session's own tool calls and hooks
+# both run as children of.
+#
+# This is the only identity in a Claude session that is fixed for the whole of
+# it. The name-and-argv rules below resolve a process by how it was LAUNCHED,
+# and Claude Code re-hosts a session it moves into a background job: the
+# launching `claude` client stays alive in the terminal while the session itself
+# is handed to a daemon-spawned pty host that is then reparented to init. The
+# ancestry walk therefore answers with a different pid before and after that
+# move, and the pid it answered with first - a client in an unrelated process
+# tree - stays alive for the rest of the session, so it reads back as a live
+# harness holding the home and every later check concludes some OTHER session
+# owns it. The session host has neither problem: it is one process for one
+# session, it is what both a tool call and a Stop hook descend from, and it is
+# gone the moment the session is.
+#
+# Verification is Claude Code's own per-pid record, pid-reuse checked, so this
+# only ever answers yes for a process Claude currently calls a session. Where it
+# cannot be verified at all - any non-Linux host, an older Claude Code, a
+# session with no record yet - it answers no and the rules below decide exactly
+# as they did before.
+fm_claude_session_host() {
+  fm_claude_recorded_session_id "$1" >/dev/null 2>&1
+}
+
 # Decide whether one process is a verified harness, from its name ($1, ps comm)
 # and its command line ($2, ps args). Echoes the string that identified it, so
 # a caller can tell WHICH harness matched, and returns non-zero when none did.
@@ -140,9 +211,20 @@ fm_harness_identity() {
 # and the extension stops one hop below it, keeping this session's own host.
 # The harness pid lives as long as the session, unlike the transient subshell
 # pid of any one tool call.
+#
+# A verified Claude session host short-circuits all of that and wins on sight,
+# innermost first, because it answers the question the walk is only ever
+# approximating: which process IS this session. Taking it also stops the
+# claude-extension above from climbing out of the session into the client that
+# launched it, whose pid the session loses the moment Claude re-hosts it as a
+# background job (see fm_claude_session_host).
 fm_harness_ancestry_pid() {
   local pid=$$ comm args ident best='' extending=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+    if fm_claude_session_host "$pid"; then
+      echo "$pid"
+      return 0
+    fi
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
     if ident=$(fm_harness_identity "$comm" "$args"); then
@@ -162,9 +244,13 @@ fm_harness_ancestry_pid() {
 }
 
 # True if $1 is a live process that looks like a verified harness.
+# A verified Claude session host counts, because the walk above records one and
+# a holder it just recorded must not read back as stale to every guard: a
+# session host is named after its release version, so no naming rule matches it.
 fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
+  fm_claude_session_host "$pid" && return 0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)
   fm_harness_identity "$comm" "$args" >/dev/null
@@ -285,23 +371,6 @@ fm_process_start_epoch() {
     - (10#$days * 86400 + 10#$hours * 3600 + 10#$mins * 60 + 10#$secs) ))"
 }
 
-# Print field $2 of /proc/$1/stat, counted from 0 at the state field that
-# follows the process name, or fail when it cannot be read. The name is skipped
-# through its closing parenthesis, because a process may have spaces or
-# parentheses in it. /proc is Linux-only, so every caller of this treats a
-# failure as "cannot be verified here" rather than as evidence of anything.
-fm_proc_stat_field() {
-  local pid=$1 index=$2 line rest
-  local -a fields
-  { read -r line < "/proc/$pid/stat"; } 2>/dev/null || return 1
-  rest=${line#*') '}
-  [ "$rest" != "$line" ] || return 1
-  # shellcheck disable=SC2206
-  fields=($rest)
-  [ -n "${fields[$index]:-}" ] || return 1
-  printf '%s' "${fields[$index]}"
-}
-
 # True when pid $1 is pid $2 or one of its descendants, walking up to 16 hops of
 # real parent links. Bounded in both directions: the hop count caps the walk,
 # and reaching pid 1 or an unreadable process ends it, so a process outside the
@@ -316,34 +385,6 @@ fm_pid_in_tree() {
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   done
   return 1
-}
-
-# Print the session id Claude Code currently records for pid $1, or fail when
-# there is no record that can be TRUSTED for that pid. Claude Code keeps one
-# such record per session process at <config-root>/sessions/<pid>.json, holding
-# that session's current sessionId and the procStart of the process it belongs
-# to.
-#
-# A pid is reused, so the record is only trusted when its procStart matches the
-# live process's own start value in /proc/<pid>/stat; anything else is a leftover
-# from a pid that has since been recycled. /proc exists only on Linux, so on any
-# other host that verification cannot be performed at all and every record is
-# therefore unverifiable, which the single caller below treats exactly like an
-# absent one - leaving existing behaviour untouched there.
-fm_claude_recorded_session_id() {
-  local pid=$1 record started recorded id
-  started=$(fm_proc_stat_field "$pid" 19) || return 1
-  record="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$pid.json"
-  [ -f "$record" ] && [ -r "$record" ] || return 1
-  recorded=$(sed -n \
-    's/.*"procStart"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\).*/\1/p' \
-    "$record" 2>/dev/null | head -n 1)
-  [ -n "$recorded" ] && [ "$recorded" = "$started" ] || return 1
-  id=$(sed -n \
-    's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
-    "$record" 2>/dev/null | head -n 1)
-  [ -n "$id" ] || return 1
-  printf '%s' "$id"
 }
 
 # True when the session lock holder $1 is demonstrably NOT working on session id

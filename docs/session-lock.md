@@ -17,6 +17,17 @@ Claude Code's background sessions all descend from `claude daemon run`, a superv
 It is claude-named, so a walk that keeps extending through claude-named ancestors reaches it and stops there, which breaks ownership twice over: the daemon never exits, so a lock recording it reads as live forever and refuses every later session; and every concurrent background session in the home resolves to that same pid, so no two of them can tell each other apart and each believes it owns the lock.
 `fm_harness_shared_service` is the boundary that stops the walk one hop below such a process, and the same predicate rejects a shared service in the liveness test, so a lock already recording one is reclaimable instead of pinning the home read-only for as long as that service runs.
 
+It must also be the same pid for the whole session, and a name-and-argv rule alone cannot promise that.
+Claude Code re-hosts a session that is moved into a background job: the `claude` the captain launched stays alive as the client in the terminal, while the session itself is handed to a daemon-spawned pty host that is reparented to init.
+The two live in disjoint process trees, so the walk answers with the client before the move and with the pty host after it, and the client - still alive, still claude-named - keeps reading back as a live harness.
+Every ownership check in that session then concludes another live session holds the home, which leaves the Stop-owned auto-arm (`bin/fm-claude-stop-autoarm.sh`) inert for the rest of it and every turn end reporting blind supervision.
+
+The session host is the pid that has all three properties at once.
+Claude Code records one per live session at `<config root>/sessions/<pid>.json`, it is the process a session's own tool calls and Stop hooks are both children of, and it exists for exactly as long as that session.
+`fm_claude_session_host` answers for it, and a verified host wins over every naming rule: the walk returns the innermost one on sight rather than extending past it, and the liveness test accepts it, because a session host is named after its release version and no naming rule would match it on its own.
+Verification is the record's `procStart` against the live process, so a leftover record from a recycled pid claims nothing.
+Where no record can be verified - any non-Linux host, an older Claude Code, a session that has not written one yet - the naming rules decide exactly as they did before.
+
 ## Taking over from a session stopped by a usage limit
 
 A Claude session that stops because a usage limit was reached does not exit.
@@ -82,6 +93,8 @@ The `took-over-from` line is reported only to the session that actually performe
 Claiming a lock is a fleet mutation, and taking one from a live process is precisely the kind of act the skill's read-only contract exists to keep out of a status read, so the claim stays with the normal lifecycle even though the report is what makes it discoverable.
 
 ## Verification
+
+`tests/fm-session-lock-identity.test.sh` pins which pid a running session resolves to, including that a verified Claude session host wins over the claude-named client above it, that such a host counts as a live harness, and that an unverifiable record leaves the naming rules deciding.
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.
 It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.

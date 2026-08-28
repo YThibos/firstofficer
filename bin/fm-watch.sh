@@ -273,13 +273,26 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # Repeat-poll wedge-timer bookkeeping for an already-classified stale hash
 # absorbed as provably-working - repairs a missing/corrupt timer (self-heals a
 # watcher restart between recording the hash and recording the timer), or
-# escalates once STALE_ESCALATE_SECS have elapsed. Never re-reads the crew
-# state (the costly check already ran once, at classification time). Shared by
-# both places a hash can be absorbed this way: the plain non-terminal path,
-# and the stale_is_terminal-overridden path (a captain-relevant status-log
-# line that an active run/busy pane outranked).
+# escalates once STALE_ESCALATE_SECS have elapsed. Shared by both places a hash
+# can be absorbed this way: the plain non-terminal path, and the
+# stale_is_terminal-overridden path (a captain-relevant status-log line that an
+# active run/busy pane outranked).
+#
+# The poll itself stays free of crew-state reads. ONE read happens at the moment
+# an escalation would otherwise fire, and only there: a worker blocked on a
+# foreground `no-mistakes axi run` sits on a legitimately static pane for many
+# minutes, so a timer paced purely on pane age escalates it every window and
+# reaches demand-deep-inspection on a crew that was working the whole time.
+# Asking whether the pipeline is alive is what tells that apart from a wedge,
+# and it costs at most one bounded call per window per STALE_ESCALATE_SECS.
+#
+# A live pipeline restarts the timer instead of escalating, so the escalation
+# count is not advanced and the next window asks again - the moment the pipeline
+# stops being demonstrably alive, the ordinary escalation follows one window
+# later. A window whose task has no running pipeline never gets an `alive`
+# answer at all and behaves exactly as it did before.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason task borrower
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -289,6 +302,18 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
     *)
       age=$(( $(date +%s) - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
+        task=$(window_to_task "$win" "$STATE")
+        if crew_pipeline_alive "$task"; then
+          date +%s > "$since_file"
+          triage_log "absorbed $label (pipeline still working, escalation deferred): $win"
+          return
+        fi
+        borrower=$(live_borrower_of "$task")
+        if [ -n "$borrower" ]; then
+          date +%s > "$since_file"
+          triage_log "absorbed $label (idle for live borrower $borrower, escalation deferred): $win"
+          return
+        fi
         n=$(( $(cat "$escalation_file" 2>/dev/null || echo 0) + 1 ))
         echo "$n" > "$escalation_file"
         reason="stale: $win (idle ${age}s, possible wedge, escalation $n)"

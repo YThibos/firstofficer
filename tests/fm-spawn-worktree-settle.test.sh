@@ -159,6 +159,34 @@ test_already_settled_pane_costs_one_confirm_sleep() {
   pass "an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle"
 }
 
+# --- a respawn does not inherit the previous session's idle clock ------------
+# state/<id>.turn-ended is the harness-neutral "this task completed a turn"
+# marker, and the watcher ages it to bound how long a busy pane may run with no
+# completed turn. Nothing else clears it, so a task relaunched under the same id
+# used to start life carrying the marker of the session it replaced: a
+# relaunched task was observed reporting nearly six days idle within an hour of
+# starting, while demonstrably working. Publishing new metadata is the moment
+# the previous session stops being this task, so the marker goes with it.
+test_respawn_does_not_inherit_the_previous_idle_clock() {
+  local rec id out status
+  id=respawn-idle-clock-z9
+  rec=$(make_settle_case respawn-idle-clock "$id" 0)
+  read_settle_record "$rec"
+
+  # A marker left behind by a session that is long gone.
+  printf 'x\n' > "$HOME_DIR/state/$id.turn-ended"
+  touch -d '2026-08-20 09:00:00' "$HOME_DIR/state/$id.turn-ended"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "respawn should succeed"
+  assert_contains "$out" "spawned $id" "respawn did not report success"
+  [ -f "$HOME_DIR/state/$id.meta" ] || fail "respawn published no durable record"
+  [ ! -e "$HOME_DIR/state/$id.turn-ended" ] \
+    || fail "the previous session's completed-turn marker survived the respawn, so the new session inherits its idle age"
+  pass "a respawn does not inherit the previous session's idle clock"
+}
+
 # --borrow-worktree joins a worktree another live task owns, so one story keeps one
 # checkout. It skips the settle loop entirely - there is no treehouse get and no
 # pane to wait on - and the recorded worktree must be exactly the borrowed path,
@@ -354,6 +382,7 @@ test_borrow_refuses_the_orca_backend() {
 
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
+test_respawn_does_not_inherit_the_previous_idle_clock
 test_borrowed_worktree_is_joined_and_marked
 test_claude_spawn_keeps_its_hook_out_of_the_worktree
 test_raw_claude_launch_without_the_placeholder_warns

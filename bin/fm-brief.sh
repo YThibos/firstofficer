@@ -45,7 +45,11 @@
 #   no-mistakes  implement -> /no-mistakes pipeline -> PR -> captain merge (default)
 #   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> captain merge
 #   local-only   implement -> pipeline with push/pr/ci skipped -> independent
-#                craftsmanship review -> publish the branch, no merge request;
+#                craftsmanship review, on the projects this home requires it for
+#                (bin/fm-craft-review.sh required) -> publish the branch, no
+#                merge request. Where it is not required the brief promises no
+#                review and no gate, because a brief that describes a stage that
+#                will not run is how a worker ends up waiting for one;
 #                the captain's separate "ship it" word authorises the PR later
 # The local-only name no longer describes that mode's delivery step, and is kept
 # deliberately; bin/fm-project-mode.sh's header owns why. A project with no remote
@@ -480,9 +484,22 @@ EOF
   local-only)
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`.
-   If this project has no \`origin\` remote at all, the pipeline has nowhere to push: skip stage 2's validation run and take stage 5's no-remote outcome instead."
-    RULE1="1. Never push to the default branch (publish only your \`$BRANCH_NAME\` branch, and only at stage 5 below). Never open a PR or merge request, and never merge."
-    IFS= read -r -d '' DOD <<EOF || true
+   If this project has no \`origin\` remote at all, the pipeline has nowhere to push: skip stage 2's validation run and take the no-remote outcome at the publish stage instead."
+    RULE1="1. Never push to the default branch (publish only your \`$BRANCH_NAME\` branch, and only at the publish stage below). Never open a PR or merge request, and never merge."
+    # The stages a local-only worker is given depend on whether this home
+    # requires the craftsmanship review for this project, so the brief promises
+    # only what will actually happen. Both shapes end the same way: publish the
+    # branch, open nothing.
+    #
+    # Only a definite "no" - exit 1, the answer the scope decision itself
+    # returns - drops the review. Anything else is a question that could not be
+    # asked, and a brief must never quietly omit a safety stage because a check
+    # failed to run.
+    CRAFT_REVIEW_SCOPE=0
+    "$FM_ROOT/bin/fm-craft-review.sh" required "$REPO" >/dev/null 2>&1 \
+      || CRAFT_REVIEW_SCOPE=$?
+    if [ "$CRAFT_REVIEW_SCOPE" -ne 1 ]; then
+      IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 This project ships **local-only**: you validate, an independent reviewer checks craftsmanship, then you publish your branch so the captain can look at it on the real repository.
 That mode name is kept for compatibility and no longer means unpublished - publishing IS the delivery.
@@ -510,6 +527,30 @@ Work these stages in order on your branch \`$BRANCH_NAME\`.
 
 $PIPELINE_GATES
 EOF
+    else
+      IFS= read -r -d '' DOD <<EOF || true
+# Definition of done
+This project ships **local-only**: you validate, then you publish your branch so the captain can look at it on the real repository.
+That mode name is kept for compatibility and no longer means unpublished - publishing IS the delivery.
+What you must NOT do is open the merge request: the captain gives a separate "ship it" word for that later.
+
+This home does not run the independent craftsmanship review on this project, so there is no reviewer to wait for and nothing gates your publish. Do not wait for one.
+
+Work these stages in order on your branch \`$BRANCH_NAME\`.
+
+1. Implement and commit.
+   Keep the branch a clean fast-forward onto the current default branch - if the default branch has advanced, rebase onto it.
+2. Validate without publishing. Confirm the flag spelling against \`no-mistakes axi run --help\`, then run the pipeline with its publication and merge-request steps skipped:
+   \`no-mistakes axi run --intent '{what you set out to accomplish}' --skip push,pr,ci\`
+   It stops after the lint step, having pushed nothing.
+3. Publish the branch with the pipeline's own push step and nothing beyond it - every step that can commit a fix is skipped too, because stage 2 already ran them:
+   \`no-mistakes axi run --intent '{what you set out to accomplish}' --skip review,test,document,lint,pr,ci\`
+   Then append \`done: branch $BRANCH_NAME published\` and stop. Do NOT open a PR or merge request.
+   If this project has no remote at all, publication does not apply: append \`done: ready in branch $BRANCH_NAME\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
+
+$PIPELINE_GATES
+EOF
+    fi
     ;;
   *)  # no-mistakes (default)
     SETUP2="
