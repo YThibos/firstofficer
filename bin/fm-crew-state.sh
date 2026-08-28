@@ -47,6 +47,12 @@
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log.
 #
+# --pipeline-liveness answers a different, narrower question over the same
+# resolution: is this crew's attributed pipeline demonstrably doing work right
+# now? It prints one token - alive, stopped, or none - and is what lets a
+# supervisor tell a worker blocked on a long foreground `axi run` apart from a
+# wedged one, which a static pane cannot. See the pipeline-liveness block below.
+#
 # Read-only and side-effect free. Always exits 0 on a successful read regardless
 # of state; exit 2 only on a usage error (no id).
 set -u
@@ -63,8 +69,17 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 
+MODE=state
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --pipeline-liveness) MODE=pipeline-liveness; shift ;;
+    --) shift; break ;;
+    -*) echo "usage: fm-crew-state.sh [--pipeline-liveness] <id>" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
 ID=${1:-}
-[ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
+[ -n "$ID" ] || { echo "usage: fm-crew-state.sh [--pipeline-liveness] <id>" >&2; exit 2; }
 
 META="$STATE/$ID.meta"
 LOG="$STATE/$ID.status"
@@ -79,8 +94,19 @@ case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;;
 SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.
+#
+# In --pipeline-liveness mode every path that would emit a state line instead
+# answers the one question that mode asks, so the two modes share this script's
+# whole resolution - metadata, worktree, branch, and run attribution - rather
+# than re-deriving any of it. Anything short of a positively alive step answers
+# with a token the caller treats exactly as it treated no answer at all.
 emit() {  # <state> <source> [detail]
-  local line="state: $1${SEP}source: $2"
+  local line
+  if [ "$MODE" = pipeline-liveness ]; then
+    printf 'none\n'
+    exit 0
+  fi
+  line="state: $1${SEP}source: $2"
   [ -n "${3:-}" ] && line="$line${SEP}$3"
   printf '%s\n' "$line"
   exit 0
@@ -476,6 +502,92 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
       fi
     fi
   fi
+fi
+
+# Print the rows of the active_steps table: every line after its header that is
+# indented deeper than the header itself, stopping at the first line that is
+# not. Reading the block by its own indentation is what keeps a neighbouring
+# table's rows - which can carry the same column count - out of the answer.
+nm_table_rows() {  # <header-indent>
+  printf '%s\n' "$RUN_OUT" | awk -v ind="${#1}" '
+    !seen { if ($0 ~ /active_steps\[[0-9]*\]\{/) seen = 1; next }
+    { line = $0; sub(/[^ \t].*$/, "", line); if (length(line) <= ind) exit; print }
+  '
+}
+
+# 0 when the attributed run has an active step that is demonstrably working.
+# The header names its own columns, so both fields are read by name: a table
+# whose shape changes underneath us yields no columns and therefore no liveness,
+# rather than a confident answer read out of the wrong field.
+nm_active_step_alive() {
+  local header indent cols row n i idx_activity=-1 idx_pid=-1 activity pid
+  local -a cols_a row_a
+  header=$(printf '%s\n' "$RUN_OUT" | grep -m1 'active_steps\[[0-9]*\]{') || return 1
+  [ -n "$header" ] || return 1
+  indent=${header%%[![:space:]]*}
+  cols=${header#*\{}
+  cols=${cols%%\}*}
+  IFS=, read -r -a cols_a <<< "$cols"
+  n=${#cols_a[@]}
+  [ "$n" -gt 0 ] || return 1
+  for ((i = 0; i < n; i++)); do
+    case "$(trim "${cols_a[$i]}")" in
+      last_activity) idx_activity=$i ;;
+      agent_pid)     idx_pid=$i ;;
+    esac
+  done
+  [ "$idx_activity" -ge 0 ] || return 1
+  while IFS= read -r row; do
+    IFS=, read -r -a row_a <<< "$row"
+    [ "${#row_a[@]}" -eq "$n" ] || continue
+    activity=$(strip_quotes "$(trim "${row_a[$idx_activity]}")")
+    [ -n "$activity" ] || continue
+    # no-mistakes' own staleness verdict, not a second one of ours.
+    case "$activity" in quiet*) continue ;; esac
+    if [ "$idx_pid" -ge 0 ]; then
+      pid=$(strip_quotes "$(trim "${row_a[$idx_pid]}")")
+      case "$pid" in
+        ''|-|*[!0-9]*) ;;                      # not reported for this step
+        *) kill -0 "$pid" 2>/dev/null || continue ;;
+      esac
+    fi
+    return 0
+  done < <(nm_table_rows "$indent")
+  return 1
+}
+
+# --- pipeline liveness ------------------------------------------------------
+#
+# `axi status` carries an `active_steps` table while a step is running or
+# fixing, with that step's `last_activity` and, when the step drives a
+# subprocess agent, its `agent_pid`. Together they answer whether a pipeline is
+# doing work right now, which a static pane cannot: a worker blocked on one
+# foreground `axi run` renders nothing for many minutes and looks identical to a
+# wedged one.
+#
+# `alive` requires positive evidence on both counts, so this can only ever say
+# "leave it alone" about a pipeline that is demonstrably moving:
+#   - activity must be recent, which no-mistakes itself decides by prefixing
+#     `last_activity` with `quiet` once nothing has arrived for longer than its
+#     own `step_quiet_warning`. Reading its verdict rather than re-deriving one
+#     keeps this free of a second, competing staleness threshold;
+#   - and where an agent pid IS reported, that process must still exist. A step
+#     that reports none - a ci step polling for checks, say - is not penalised
+#     for it, but a reported pid that has died is not liveness.
+# A wedged agent therefore still escalates: its pid stays alive while its
+# activity goes quiet, and quiet is not alive.
+#
+# Anything else answers `stopped` (a run is attributed but nothing in it is
+# demonstrably working) or `none` (no attributed run, or only the coarse
+# runs-list fallback, which carries no step detail at all). Both leave the
+# caller's ordinary behaviour exactly as it was.
+if [ "$MODE" = pipeline-liveness ]; then
+  if [ "$HAVE_RUN" != 1 ] || [ "$RUN_SOURCE" != full ]; then
+    printf 'none\n'
+    exit 0
+  fi
+  nm_active_step_alive && printf 'alive\n' || printf 'stopped\n'
+  exit 0
 fi
 
 # --- run-step authoritative path -------------------------------------------

@@ -12,8 +12,10 @@
 #   no-mistakes  full pipeline -> PR -> captain merge (default)
 #   direct-PR    push + PR via gh-axi, no pipeline -> captain merge
 #   local-only   pipeline with push/pr/ci skipped -> independent craftsmanship
-#                review -> publish the branch, no merge request -> the captain's
-#                separate "ship it" word -> PR -> captain merge
+#                review where this home requires it for the project
+#                (bin/fm-craft-review.sh required) -> publish the branch, no
+#                merge request -> the captain's separate "ship it" word -> PR ->
+#                captain merge
 #
 # The local-only name is a historical mismatch, kept deliberately. Its delivery
 # step is now publication, but the name is a config enum: it is written into every

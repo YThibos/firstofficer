@@ -1621,6 +1621,15 @@ META_WINDOW=$T
     echo "projects=$SECONDMATE_PROJECTS"
   fi
 } > "$STATE/$ID.meta"
+# The idle clock belongs to the session the metadata above describes, and this
+# task now has a new one. state/<id>.turn-ended is written by the harness
+# turn-end hook and never cleared anywhere else, so a respawn that left it in
+# place would inherit the age of the session it replaced: a relaunched task has
+# been observed reporting nearly six days idle within an hour of starting, while
+# demonstrably working. Removing it here is the truth - this session has
+# completed no turn yet - and busy_turn_over_age then ages the fresh record
+# above, exactly as it does for a task that has never run.
+rm -f "$STATE/$ID.turn-ended"
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")

@@ -128,10 +128,11 @@ If fast-path risk needs more rigour, escalate whether to use no-mistakes instead
 
 - **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
 - **direct-PR** has the worker push and open a PR without the pipeline, then waits for the configured merge authority.
-- **local-only** keeps that registry name but no longer means unpublished: the worker validates, passes an independent craftsmanship review, then publishes its branch and opens no merge request.
+- **local-only** keeps that registry name but no longer means unpublished: the worker validates, passes an independent craftsmanship review where this home requires one, then publishes its branch and opens no merge request.
 
-That craftsmanship review is the one contract-defined independent reviewer, so it is mandatory rather than invented rigour.
-On that path the worker runs the pipeline with its publication and merge-request steps skipped, stops so you dispatch a reviewer that did not write the code, and fixes its findings before publishing.
+`bin/fm-craft-review.sh required <project>` answers whether that review applies, from this home's private configuration; an unconfigured home requires it everywhere, and the boundary is by-project, never a per-change judgement.
+Where it applies it is the one contract-defined independent reviewer, so it is mandatory rather than invented rigour: the worker runs the pipeline with its publication and merge-request steps skipped, stops so you dispatch a reviewer that did not write the code, and fixes its findings before publishing.
+Where it does not, that delivery runs end to end with no reviewer and no gate.
 The captain's separate "ship it" word is what authorises the merge request afterwards, and a project with no remote at all instead ends at the guarded local merge path.
 `bin/fm-brief.sh --craft-review` generates that reviewer's instructions and the `craftsmanship-review` skill owns its remit; publication is refused while `bin/fm-craft-review.sh verify` has no pass verdict for the exact commit.
 One story keeps one local copy: spawn the reviewer into the implementing task's own copy with `--borrow-worktree`, only once that worker has stopped, because the two are serialised and never both active there.

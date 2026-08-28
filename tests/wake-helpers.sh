@@ -67,21 +67,49 @@ make_case() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+# Per-target overrides let one case hold several windows in different states -
+# a reviewer working beside the idle implementer whose copy it borrowed, say.
+# The bare FM_FAKE_TMUX_* variables remain the answer for every window that has
+# no override, so every existing single-window case is unaffected.
+target_key() {
+  printf 'FM_FAKE_TMUX_%s_%s' "$1" "$(printf '%s' "${2:-}" | tr -c 'A-Za-z0-9' '_')"
+}
+per_target() {  # <suffix> <target>; echoes the override value, if any
+  local name
+  name=$(target_key "$1" "$2")
+  printf '%s' "${!name:-}"
+}
 if [ "${1:-}" = "list-windows" ]; then
-  if [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
+  if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
+    for w in $FM_FAKE_TMUX_WINDOWS; do printf '%s\n' "${w#*:}"; done
+  elif [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
     printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}"
   fi
   exit 0
 fi
+target_of() {  # echo the value following -t in the argument list
+  local prev="" a t=""
+  for a in "$@"; do
+    [ "$prev" = "-t" ] && t=$a
+    prev=$a
+  done
+  printf '%s' "$t"
+}
 if [ "${1:-}" = "capture-pane" ]; then
-  if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ]; then
-    cat "$FM_FAKE_TMUX_CAPTURE"
-  fi
+  t=$(target_of "$@")
+  f=$(per_target CAPTURE "$t")
+  [ -n "$f" ] || f=${FM_FAKE_TMUX_CAPTURE:-}
+  [ -z "$f" ] || cat "$f"
   exit 0
 fi
 if [ "${1:-}" = "display-message" ]; then
   case "$*" in
-    *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
+    *pane_current_command*)
+      c=$(per_target CURRENT_COMMAND "$(target_of "$@")")
+      [ -n "$c" ] || c=${FM_FAKE_TMUX_CURRENT_COMMAND:-}
+      printf '%s\n' "$c"
+      exit 0
+      ;;
   esac
 fi
 exit 1
@@ -100,13 +128,26 @@ SH
 # A per-id override FM_FAKE_CREW_STATE_<sanitized-id> wins; otherwise the shared
 # FM_FAKE_CREW_STATE; otherwise an unknown verdict (NOT provably working), the
 # safe default so a test that forgets to set one surfaces rather than absorbs.
+#
+# --pipeline-liveness is answered the same way from FM_FAKE_PIPELINE_LIVENESS
+# (or its per-id override), defaulting to `none` - no attributed run - which is
+# the answer that leaves every escalation path behaving exactly as it did before
+# the probe existed.
 make_fake_crew_state() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
+mode=state
+if [ "${1:-}" = --pipeline-liveness ]; then mode=liveness; shift; fi
 id=${1:-}
 key=$(printf '%s' "$id" | tr -c 'A-Za-z0-9' '_')
+if [ "$mode" = liveness ]; then
+  var="FM_FAKE_PIPELINE_LIVENESS_$key"
+  val=${!var:-${FM_FAKE_PIPELINE_LIVENESS:-}}
+  printf '%s\n' "${val:-none}"
+  exit 0
+fi
 var="FM_FAKE_CREW_STATE_$key"
 val=${!var:-${FM_FAKE_CREW_STATE:-}}
 printf '%s\n' "${val:-state: unknown · source: none · fake default}"
