@@ -112,6 +112,7 @@ if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
 else
   STATE="$FM_HOME/state"
 fi
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
@@ -179,8 +180,12 @@ shell_quote() {
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 # Every command a brief hands a crewmate resolves this home explicitly, because
 # the crewmate runs outside it and its own FM_HOME would otherwise pick the code
-# root's state dir instead of the home that dispatched the task.
-STATE_ENV="FM_STATE_OVERRIDE=$(shell_quote "$STATE")"
+# root's state and config dirs instead of the home that dispatched the task. The
+# scope file matters as much as the state dir here: the brief decides which
+# stages to promise from this home's craft-review-projects, so the gate the
+# crewmate runs must read that same file rather than whatever sits in the code
+# root.
+STATE_ENV="FM_STATE_OVERRIDE=$(shell_quote "$STATE") FM_CONFIG_OVERRIDE=$(shell_quote "$CONFIG")"
 CRAFT_REVIEW_BIN=$(shell_quote "$FM_ROOT/bin/fm-craft-review.sh")
 REVIEW_DIFF_BIN=$(shell_quote "$FM_ROOT/bin/fm-review-diff.sh")
 

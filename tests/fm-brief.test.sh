@@ -396,6 +396,52 @@ test_local_only_brief_keeps_the_review_where_it_is_required() {
   pass "fm-brief.sh: local-only brief keeps the review where this home requires it"
 }
 
+# The brief decides which stages to promise from the DISPATCHING home's scope
+# file, but the gate it hands the worker runs as a crewmate outside that home,
+# where FM_HOME resolves to the code root instead. Unless the generated command
+# pins the config home the way it already pins the state dir, a code-root scope
+# file that omits the project makes `verify` stand aside on a home that requires
+# the review, and an unreviewed commit publishes.
+test_local_only_publication_gate_reads_the_dispatching_homes_scope() {
+  local home root id brief cmd out status
+  home="$TMP_ROOT/review-scope-crewmate-home"
+  root="$TMP_ROOT/review-scope-crewmate-root"
+  write_registry "$home"
+  mkdir -p "$home/config" "$home/state" "$root/config"
+  # This home requires the review; the code root the crewmate would otherwise
+  # resolve says the opposite.
+  printf 'local-proj\n' > "$home/config/craft-review-projects"
+  printf 'some-other-project\n' > "$root/config/craft-review-projects"
+  cp -R "$ROOT/bin" "$root/bin"
+
+  fm_git_worktree "$home/local-proj" "$home/wt" feature/JUSTMD-14
+  id="brief-local-crewmate-p12"
+  fm_write_meta "$home/state/$id.meta" \
+    "worktree=$home/wt" \
+    "project=$home/local-proj" \
+    "mode=local-only" \
+    "kind=ship"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    "$ROOT/bin/fm-brief.sh" "$id" local-proj --branch feature/JUSTMD-14 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  cmd=$(grep -o "FM_STATE_OVERRIDE=[^\`]*verify $id" "$brief" | head -1)
+  [ -n "$cmd" ] || fail "the brief promised no publication gate for a home that requires the review"
+  # Exactly how a crewmate runs it: outside the dispatching home, with none of
+  # this home's environment inherited.
+  out=$(env -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE \
+    bash -c "$cmd" 2>&1); status=$?
+  expect_code 1 "$status" "the gate let an unreviewed commit publish from outside the dispatching home"
+  assert_contains "$out" "has no craftsmanship review" \
+    "the gate did not refuse the unreviewed commit it was pointed at"
+  case "$out" in
+    *"not required"*)
+      fail "the gate read the code root's scope file instead of the dispatching home's" ;;
+  esac
+  pass "fm-brief.sh: the publication gate resolves the dispatching home's scope file, not the code root's"
+}
+
 test_craft_review_brief_states_its_remit_and_boundaries() {
   local home id brief status
   home="$TMP_ROOT/craft-home"
@@ -949,6 +995,7 @@ test_local_only_brief_gates_publication_on_the_independent_review
 test_local_only_brief_omits_the_review_where_it_is_not_required
 test_local_only_brief_keeps_the_review_when_the_scope_check_fails
 test_local_only_brief_keeps_the_review_where_it_is_required
+test_local_only_publication_gate_reads_the_dispatching_homes_scope
 test_craft_review_brief_states_its_remit_and_boundaries
 test_craft_review_brief_shares_the_implementers_worktree_read_only
 test_craft_review_refuses_to_review_its_own_task
