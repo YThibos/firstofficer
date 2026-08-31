@@ -439,9 +439,20 @@ fm_session_limit_stopped() {
   command -v node >/dev/null 2>&1 || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
-  # Claude is the only harness with a verified limit-stop transcript shape.
-  fm_harness_is_claude "$comm" "$args" || return 1
-  session_id=$(fm_claude_session_id "$pid") || return 1
+  # Claude is the only harness with a verified limit-stop transcript shape. A
+  # verified session host is one by the same evidence fm_harness_pid_alive
+  # accepts it on, and is the shape the lock now records; without it the
+  # takeover this whole path exists for is unreachable for every holder whose
+  # name is its release version.
+  fm_harness_is_claude "$comm" "$args" || fm_claude_session_host "$pid" || return 1
+  # Argv first, unchanged. A verified host that carries no --session-id falls
+  # back to the per-pid record Claude Code keeps for it, which is a stronger
+  # link than argv rather than a looser one: it is that process's own current
+  # session, pid-reuse checked against /proc. A record that cannot be trusted
+  # yields nothing and the refusal stands.
+  session_id=$(fm_claude_session_id "$pid") \
+    || session_id=$(fm_claude_recorded_session_id "$pid") \
+    || return 1
   # A holder that has since replaced its conversation in place is still working,
   # under a session id its argv cannot know about. This only ever refuses; where
   # no trusted record exists it adds nothing and the conditions below decide.

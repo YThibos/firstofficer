@@ -77,11 +77,15 @@ Reading discrete elements removes the ambiguity, because the flag is an element 
 `/proc` exists only on Linux and there is deliberately no fallback to the flattened string, since the fallback would restore exactly the ambiguity it closes, so on any other host the session id cannot be resolved and the takeover is unavailable there.
 That is the same trade every rule on this page makes: a missed takeover, never a wrong one.
 
+A verified session host that carries no `--session-id` in its argv resolves its id from the per-pid record instead, the same pid-reuse checked record `fm_claude_session_host` is verified by.
+That is a stronger link than argv rather than a looser one: the record names the session that process is hosting right now, where argv only names the one it was launched with.
+A record that cannot be trusted yields nothing, so the holder is refused exactly as before.
+
 ## Why every other case refuses
 
 Taking the lock from a session that is genuinely working is far worse than refusing one that is finished, so the test is deliberately asymmetric: it returns true only for a positively identified limit stop and false for everything else.
-Refusal is the outcome when the holder is not Claude, when its discrete argv cannot be read at all, as on any host without `/proc`, when its session id never reaches its own argv, when a trusted per-pid record shows it working under a session other than the one its argv names, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, when the last conversational record is anything other than the usage-limit error, including every other API error, when that record carries no instant or one that does not parse, when the holder's start time cannot be read, and when the holder started after that record was written.
-A session hosted without an explicit session id in its argv, such as a plain foreground `claude`, is therefore never taken over; nothing else can tie that process to a transcript, and inventing a link would be exactly the guess this contract exists to avoid.
+Refusal is the outcome when the holder is neither Claude-named nor a verified Claude session host, when its discrete argv cannot be read at all, as on any host without `/proc`, when its session id reaches neither its own argv nor a trusted per-pid record, when a trusted per-pid record shows it working under a session other than the one its argv names, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, when the last conversational record is anything other than the usage-limit error, including every other API error, when that record carries no instant or one that does not parse, when the holder's start time cannot be read, and when the holder started after that record was written.
+A session whose id reaches neither its argv nor a trusted record, such as a plain foreground `claude` on a host where no record can be verified, is therefore never taken over; nothing else can tie that process to a transcript, and inventing a link would be exactly the guess this contract exists to avoid.
 
 ## Where the condition is reported
 
@@ -97,7 +101,7 @@ Claiming a lock is a fleet mutation, and taking one from a live process is preci
 `tests/fm-session-lock-identity.test.sh` pins which pid a running session resolves to, including that a verified Claude session host wins over the claude-named client above it, that such a host counts as a live harness, and that an unverifiable record leaves the naming rules deciding.
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.
-It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.
+It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the takeover of a limit-stopped holder in the session-host shape, whose name is its release version and whose id comes from its verified per-pid record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.
 It also pins the per-pid cross-check in all three directions: a holder whose record names a different session keeps its lock, a holder with no record at all is still taken over, and a record whose `procStart` belongs to a since-recycled pid changes nothing.
 Its fixture holders are real processes started with the observed argv, so the session id under test is read from a live process exactly as it is in production, and one case gives a holder a session id quoted inside a single argument and requires that it keep its lock.
 
