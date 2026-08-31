@@ -393,16 +393,17 @@ crew_is_paused() {  # <id>
 # window throughout its own review.
 #
 # The borrow is already recorded: bin/fm-spawn.sh writes borrowed_worktree=1
-# into the borrower's own metadata, beside the worktree it joined. A borrower
-# whose agent is confidently gone proves nothing about why the owner is quiet,
-# so only a live one counts - and the borrower is itself a watched window, so
-# its own liveness keeps being judged on the ordinary path, which is where a
-# review that really has stopped surfaces. A task with no borrower yields
-# nothing here and is untouched.
+# into the borrower's own metadata, beside the worktree it joined. Only a
+# confidently alive borrower counts: a borrower whose agent is gone, and equally
+# one whose liveness cannot be read at all, proves nothing about why the owner
+# is quiet. The borrower is itself a watched window, so its own liveness keeps
+# being judged on the ordinary path, which is where a review that really has
+# stopped surfaces. A task with no borrower yields nothing here and is untouched.
 #
 # Backend liveness and the metadata reads are both owned by bin/fm-backend.sh.
-# A caller that has not sourced it gets no borrower rather than an assumed one,
-# because suppressing an alarm on an unanswerable question is the one wrong
+# Every unanswerable question therefore lands the same way - a caller that has
+# not sourced it, a backend that cannot say - because this suppresses an alarm,
+# and suppressing one on a question nobody could answer is the single wrong
 # direction to fail in.
 live_borrower_of() {  # <task> [state-dir]
   local task=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt meta borrower bwt win backend alive
@@ -422,7 +423,7 @@ live_borrower_of() {  # <task> [state-dir]
     backend=$(fm_meta_get "$meta" backend)
     [ -n "$backend" ] || backend=tmux
     alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || alive=unknown
-    [ "$alive" = dead ] && continue
+    [ "$alive" = alive ] || continue
     printf '%s' "$borrower"
     return 0
   done

@@ -39,7 +39,8 @@ Choose the delivery mode when adding or creating the project:
 
 - `no-mistakes` runs the full validation pipeline before a PR and is the default when the captain does not specify a mode.
 - `direct-PR` pushes and opens a PR without the no-mistakes pipeline.
-- `local-only` runs that pipeline with its publication and merge-request steps skipped, passes an independent craftsmanship review, then publishes the branch and leaves the merge request to the captain's separate "ship it" word.
+- `local-only` runs that pipeline with its publication and merge-request steps skipped, passes an independent craftsmanship review where this home requires one for the project, then publishes the branch and leaves the merge request to the captain's separate "ship it" word.
+  `bin/fm-craft-review.sh required <project>` is the answer, and its header owns the scope rule; adding a project never sets that scope as a side effect.
 
 The `local-only` name no longer describes its delivery step, and that mismatch is deliberate: `bin/fm-project-mode.sh`'s header owns why the enum value is kept.
 It still describes the one shape that stays unpublished, a project with no remote at all, which lands through the approved local fast-forward path instead.
