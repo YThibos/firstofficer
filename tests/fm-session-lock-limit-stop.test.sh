@@ -685,6 +685,101 @@ EOF
   pass "a per-pid record whose procStart does not match the live process is ignored"
 }
 
+# --- the session host shape -------------------------------------------------
+#
+# The lock records the verified session host, a process named after its release
+# version that no naming rule matches on its own - which is why the liveness
+# test accepts one on the record alone. The limit-stop path has to reach the
+# same holder, or the takeover is unreachable for every lock the walk records
+# and a limit-stopped session holds its home read-only until its process exits.
+# The fixtures above are claude-named, so they cannot see that; these are not.
+
+# session_host_case <name> <tail-kind>: a home whose lock is held by a live
+# holder in the session host shape - named after its release version, with no
+# --session-id anywhere in its own argv - identifiable only through Claude
+# Code's verified per-pid record. Echoes "<home>|<fakebin>|<table>|<holder-pid>".
+session_host_case() {
+  local name=$1 kind=$2 rec dir home fakebin table holder session_id
+  local -a argv
+  rec=$(make_case "$name")
+  IFS='|' read -r dir home fakebin table <<EOF
+$rec
+EOF
+  session_id=ffffffff-7777-7777-7777-ffffffffffff
+  argv=(/opt/claude/versions/2.1.235 --agent claude)
+  holder=$(start_argv_holder "$dir" "${argv[@]}")
+  add_process "$table" "$holder" 1 2.1.235 "${argv[*]}" 3600
+  printf '%s\n' "$holder" > "$home/state/.lock"
+  write_session_record "$holder" "$session_id"
+  write_transcript "$(transcript_path "$home" "$session_id")" "$kind"
+  printf '%s|%s|%s|%s\n' "$home" "$fakebin" "$table" "$holder"
+}
+
+test_limit_stopped_session_host_is_taken_over() {
+  local rec home fakebin table holder session out status=0
+  if ! proc_supported; then
+    pass "the session-host takeover needs a verified per-pid record and is not evaluated on this host"
+    return 0
+  fi
+  rec=$(session_host_case host-takeover limit-stop)
+  IFS='|' read -r home fakebin table holder <<EOF
+$rec
+EOF
+  out=$(lock_status "$home" "$fakebin" "$table")
+  assert_contains "$out" "held by a session stopped by a usage limit" \
+    "a limit-stopped session host was reported as another live session holding the lock"
+
+  session=$(add_session "$table")
+  out=$(claim "$home" "$fakebin" "$table" "$session") || status=$?
+  expect_code 0 "$status" "a limit-stopped session host must not refuse the claim"
+  assert_contains "$out" "stopped by a usage limit" "the takeover did not say why it was allowed"
+  [ "$(cat "$home/state/.lock")" = "$session" ] \
+    || fail "the lock was not handed to the session that took it over"
+  pass "a limit-stopped holder in the session host shape is identified and taken over"
+}
+
+test_working_session_host_still_refuses() {
+  local rec home fakebin table holder status=0 out
+  if ! proc_supported; then
+    pass "the working session-host case needs a verified per-pid record and is not evaluated on this host"
+    return 0
+  fi
+  rec=$(session_host_case host-working working)
+  IFS='|' read -r home fakebin table holder <<EOF
+$rec
+EOF
+  out=$(claim "$home" "$fakebin" "$table" 2>&1) || status=$?
+  expect_code 1 "$status" "a working session host must still refuse the claim"
+  assert_contains "$out" "another live firstmate session holds the lock" "the refusal lost its own explanation"
+  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a working session host lost its lock"
+  pass "a session host that is still working keeps its lock"
+}
+
+test_unverifiable_session_host_record_is_never_a_takeover() {
+  local rec home fakebin table holder out
+  if ! proc_supported; then
+    pass "the unverifiable-record case needs /proc and is not evaluated on this host"
+    return 0
+  fi
+  rec=$(session_host_case host-stale-record limit-stop)
+  IFS='|' read -r home fakebin table holder <<EOF
+$rec
+EOF
+  # The only thing tying this holder to a transcript is its record, and its
+  # procStart now belongs to a process that once had this pid. Nothing about it
+  # can be trusted, so it is not a session at all here: the lock reads stale,
+  # and the limit-stop path never speaks for it.
+  write_session_record "$holder" ffffffff-7777-7777-7777-ffffffffffff 1
+  out=$(lock_status "$home" "$fakebin" "$table")
+  assert_contains "$out" "lock: stale" "an untrustworthy record still identified a live session"
+  out=$(claim "$home" "$fakebin" "$table" 2>&1)
+  assert_not_contains "$out" "stopped by a usage limit" \
+    "a holder identified only by an untrustworthy record was taken over as limit-stopped"
+  assert_not_contains "$out" "takeover" \
+    "a holder identified only by an untrustworthy record was announced as a takeover"
+  pass "a session host whose per-pid record cannot be trusted is never taken over"
+}
+
 test_status_names_the_takeover_command() {
   local rec home fakebin table holder transcript out
   if ! proc_supported; then
@@ -721,5 +816,8 @@ test_unreadable_start_time_refuses
 test_replaced_session_keeps_its_lock
 test_absent_session_record_still_takes_over
 test_stale_session_record_is_ignored
+test_limit_stopped_session_host_is_taken_over
+test_working_session_host_still_refuses
+test_unverifiable_session_host_record_is_never_a_takeover
 test_takeover_is_not_attributed_to_other_readers
 test_status_names_the_takeover_command
