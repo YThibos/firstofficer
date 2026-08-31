@@ -740,6 +740,18 @@ test_live_borrower_of_suppresses_only_a_real_live_borrow() {
     "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
   [ -z "$got" ] || fail "a borrower whose agent had exited was still treated as live (got: '$got')"
 
+  # A borrower whose backend cannot answer the liveness question at all explains
+  # nothing either. zellij has no recovery classifier, so it is the reachable
+  # shape of that: an unreadable answer must leave the owner on the ordinary
+  # path, because suppressing an alarm is the one direction an unanswerable
+  # question may never decide.
+  printf 'window=test:fm-review\nkind=ship\nworktree=%s\nborrowed_worktree=1\nbackend=zellij\n' \
+    "$owner_wt" > "$state/review.meta"
+  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-review" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ -z "$got" ] || fail "a borrower whose liveness could not be read was treated as live (got: '$got')"
+
   # A borrow is only ever read from the borrower's own record: an ordinary task
   # sharing the path without the flag is not one.
   rm -f "$state/review.meta"
