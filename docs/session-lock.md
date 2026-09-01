@@ -48,10 +48,13 @@ The takeover as a whole is Linux-only for a separate reason given below, so this
 A resumed session is not the only way a holder can outlive the session its argv names.
 A holder's argv is fixed at exec, so a live session that replaces its conversation in place, through `/clear`, `/new`, or `/fork`, still points at the transcript of the session it replaced, whose tail is the limit record that same process wrote before the replacement.
 `fm_claude_session_replaced` closes that window by cross-checking the per-pid session record Claude Code keeps at `<config-root>/sessions/<pid>.json`, which names that process's CURRENT session id.
-The lock records the outermost pid of a run while those records are keyed on an inner pid, so the search covers the holder and its own descendants and never a record belonging to an unrelated process tree.
+The lock records the verified Claude session host whenever there is one, and Claude keys `sessions/<pid>.json` on exactly that one-process-per-session host, so the search matches the holder's own record immediately and still covers the record that matters.
+Only where no host can be verified does the lock fall back to recording the outermost pid of a run while those records are keyed on an inner pid, and there the search covers the holder and its own descendants.
+Either way it walks the recorded pids inside the holder's own tree, so a record belonging to an unrelated process tree is never consulted.
 
 That cross-check may only ever refuse.
-It is never an alternative way to resolve the session id, which still comes from argv alone, and it can never permit a takeover that would otherwise refuse.
+Inside `fm_claude_session_replaced` the record is purely restrictive and can never permit a takeover that would otherwise refuse.
+Resolving the session id is a separate step with its own order, argv first and the per-pid record only as a fallback, described below.
 A record is trusted only when its `procStart` matches the live process's own start value in `/proc/<pid>/stat`, so a record left behind by a since-recycled pid is not mistaken for the holder's.
 That verification needs `/proc` and therefore exists only on Linux; on any other host every record is unverifiable and is treated exactly like an absent one.
 A missing, unreadable, unparseable, or unverifiable record adds no restriction whatsoever, so every other condition still decides the outcome on its own, and absence is never read as permission either.
@@ -80,6 +83,11 @@ That is the same trade every rule on this page makes: a missed takeover, never a
 A verified session host that carries no `--session-id` in its argv resolves its id from the per-pid record instead, the same pid-reuse checked record `fm_claude_session_host` is verified by.
 That is a stronger link than argv rather than a looser one: the record names the session that process is hosting right now, where argv only names the one it was launched with.
 A record that cannot be trusted yields nothing, so the holder is refused exactly as before.
+
+This deliberately widens the takeover contract, and it is captain-approved rather than incidental.
+A plain foreground `claude` with no `--session-id` was previously never taken over at all; on Linux it now can be, because it is a verified session host whose id comes from its own per-pid record.
+Three unchanged guards are what keep that safe: the transcript classification must still positively identify a usage-limit stop as the last conversational record, the record is trusted only when its `procStart` matches the live process so a recycled pid claims nothing, and the holder must have been running already when that last record was written.
+Non-Linux hosts are unaffected, because no record is verifiable there and such a holder is refused exactly as before.
 
 ## Why every other case refuses
 

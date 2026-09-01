@@ -397,14 +397,21 @@ fm_pid_in_tree() {
 # process wrote before the replacement. Without this the holder would be taken
 # over while actively working.
 #
-# This is a purely restrictive cross-check and never an alternative way to
-# resolve the session id: resolution still comes from argv alone. A missing,
-# unreadable, unparseable, or unverifiable record adds no restriction at all, so
-# every existing condition still decides the outcome on its own.
+# Inside this function the record is purely restrictive and may only ever
+# refuse. Resolution itself is argv first and the per-pid record only as a
+# fallback (fm_session_limit_stopped), but that order is decided before this
+# call and nothing here ever widens it. A missing, unreadable, unparseable, or
+# unverifiable record adds no restriction at all, so every existing condition
+# still decides the outcome on its own.
 #
-# The lock deliberately records the OUTERMOST pid of a run while these records
-# are keyed on an inner pid, so the search covers the holder and its own
-# descendants. It walks the recorded pids rather than the process table, and
+# The lock records the verified Claude session host whenever there is one, and
+# Claude keys sessions/<pid>.json on exactly that one-process-per-session host,
+# so fm_pid_in_tree matches the holder's own record immediately and the
+# cross-check still covers the record that matters. Only where no host can be
+# verified does the lock fall back to recording the outermost pid of a run
+# while these records are keyed on an inner pid, and there the search covers
+# the holder and its own descendants. It walks the recorded pids rather than
+# the process table, and
 # confines itself to the holder's tree, so a record belonging to an unrelated
 # process is never consulted. A record that names the expected session wins over
 # one that does not, because corroboration may only ever permit.
@@ -450,6 +457,16 @@ fm_session_limit_stopped() {
   # link than argv rather than a looser one: it is that process's own current
   # session, pid-reuse checked against /proc. A record that cannot be trusted
   # yields nothing and the refusal stands.
+  #
+  # This deliberately widens the takeover contract, and the captain approved
+  # it: a plain foreground claude with no --session-id was previously never
+  # taken over, and on Linux it now can be, because it is a verified session
+  # host whose id comes from its own record. What keeps that safe is unchanged
+  # - the transcript classification below still has to positively identify a
+  # usage-limit stop, the record is trusted only when its procStart matches the
+  # live process, and the holder must have been running when that last record
+  # was written. Non-Linux hosts are unaffected: no record is verifiable there,
+  # so such a holder is refused exactly as before.
   session_id=$(fm_claude_session_id "$pid") \
     || session_id=$(fm_claude_recorded_session_id "$pid") \
     || return 1
