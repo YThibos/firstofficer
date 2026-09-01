@@ -327,6 +327,34 @@ test_scope_membership_is_literal() {
   pass "reviewed-set membership is a literal name match, never a prefix or a comment"
 }
 
+# A scope file that exists but cannot be read answers nothing, so it must be read
+# as the absent file is: required. Anything else lets a wrong mode or owner drop
+# the gate on every project at once.
+test_unreadable_scope_configuration_keeps_the_gate_everywhere() {
+  local case_dir
+  case_dir=$(make_case scoped-unreadable)
+  printf '# projects this home reviews\nsomething-else\n' > "$case_dir/config/craft-review-projects"
+  chmod 000 "$case_dir/config/craft-review-projects"
+  if [ -r "$case_dir/config/craft-review-projects" ]; then
+    chmod 644 "$case_dir/config/craft-review-projects"
+    pass "unreadable scope configuration not exercised: this user can read a mode-000 file"
+    return 0
+  fi
+
+  run_gate "$case_dir" required project
+  expect_code 0 "$CODE" "an unreadable scope file must report the review as required"
+
+  run_gate "$case_dir" verify task-x1
+  expect_code 1 "$CODE" "an unreadable scope file must still gate publication"
+  assert_contains "$ERR" "has no craftsmanship review" \
+    "the refusal should name the missing review"
+
+  chmod 644 "$case_dir/config/craft-review-projects"
+  run_gate "$case_dir" required project
+  expect_code 1 "$CODE" "the same file, once readable, should answer not required"
+  pass "an unreadable scope configuration keeps the review required everywhere"
+}
+
 test_help_renders_the_complete_header() {
   local help
   help=$("$CRAFT_REVIEW" --help)
@@ -346,6 +374,7 @@ test_bad_arguments_refuse
 test_project_in_the_set_still_gates_publication
 test_project_outside_the_set_publishes_with_no_reviewer
 test_absent_scope_configuration_keeps_the_gate_everywhere
+test_unreadable_scope_configuration_keeps_the_gate_everywhere
 test_a_malformed_scope_question_is_not_an_answer
 test_scope_membership_is_literal
 test_help_renders_the_complete_header
