@@ -78,11 +78,12 @@ usage() {
 # Names are compared literally: no prefix, glob, or category rule, so a project
 # can never drift into or out of the set by being named like another one.
 # A name that could not be resolved at all is treated as required, for the same
-# reason an absent scope file is: not knowing is never a reason to drop a gate.
+# reason an absent or unreadable scope file is: not knowing is never a reason to
+# drop a gate.
 review_required() {
   local project=$1 line
   [ -n "$project" ] || return 0
-  [ -f "$SCOPE" ] || return 0
+  { [ -f "$SCOPE" ] && [ -r "$SCOPE" ]; } || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}
     line=${line#"${line%%[![:space:]]*}"}
@@ -96,10 +97,10 @@ review_required() {
 report_required() {
   local project=$1
   if review_required "$project"; then
-    if [ -f "$SCOPE" ]; then
+    if [ -f "$SCOPE" ] && [ -r "$SCOPE" ]; then
       echo "craftsmanship review is required for $project"
     else
-      echo "craftsmanship review is required for $project (no $SCOPE, so it applies everywhere)"
+      echo "craftsmanship review is required for $project (no readable $SCOPE, so it applies everywhere)"
     fi
     return 0
   fi

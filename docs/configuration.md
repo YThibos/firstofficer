@@ -111,6 +111,7 @@ The independent craftsmanship review on the `local-only` delivery path runs on t
 Names are matched literally, so a project never drifts into or out of the set by resembling another one, and there is no per-change exemption: a project is in the set or it is not.
 
 An absent file means the review is required for every `local-only` project, not for none.
+A file that exists but cannot be read is treated exactly like an absent one, so a wrong mode or owner can never read as "not required".
 A home that has never configured this has said nothing, and the safe reading of silence about a safety step is that it still applies, so narrowing the set is always a deliberate written act; a file holding only comments is how a home says "nowhere" out loud.
 
 `bin/fm-craft-review.sh required <project-name>` is the single owner of the decision and prints the reason either way.
