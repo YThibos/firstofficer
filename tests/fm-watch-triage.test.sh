@@ -761,6 +761,31 @@ test_live_borrower_of_suppresses_only_a_real_live_borrow() {
     "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
   [ -z "$got" ] || fail "a task with no borrowed_worktree flag was treated as a borrower (got: '$got')"
 
+  # The liveness target is not always the `window` field: orca records its own
+  # terminal, which is why the derivation belongs to fm-backend.sh rather than
+  # being re-rolled here. The backend adapter is stubbed so the target actually
+  # asked about is observable; orca's real classifier answers `unverified` for
+  # every target and could never tell the two fields apart.
+  rm -f "$state/sibling.meta"
+  printf 'window=test:fm-review\nterminal=orca-term-7\nkind=ship\nworktree=%s\nborrowed_worktree=1\nbackend=orca\n' \
+    "$owner_wt" > "$state/review.meta"
+  got=$(FM_TEST_TARGET_LOG="$dir/asked-target" bash -c '. "$1"; . "$2"
+    fm_backend_agent_alive() { printf "%s" "$2" > "$FM_TEST_TARGET_LOG"
+      [ "$2" = orca-term-7 ] && printf alive || printf dead; }
+    live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ "$(cat "$dir/asked-target" 2>/dev/null)" = orca-term-7 ] \
+    || fail "an orca borrower's liveness was asked about the wrong target (got: '$(cat "$dir/asked-target" 2>/dev/null)')"
+  [ "$got" = review ] || fail "a live orca borrower of this task's own copy was not reported (got: '${got:-none}')"
+
+  # An unresolvable target still fails safe: no borrower, so the owner alarm fires.
+  printf 'kind=ship\nworktree=%s\nborrowed_worktree=1\nbackend=orca\n' "$owner_wt" > "$state/review.meta"
+  got=$(bash -c '. "$1"; . "$2"
+    fm_backend_agent_alive() { printf alive; }
+    live_borrower_of impl "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ -z "$got" ] || fail "a borrower with no resolvable liveness target was reported (got: '$got')"
+
   pass "live_borrower_of reports only a live borrower of this task's own copy"
 }
 

@@ -406,7 +406,7 @@ crew_is_paused() {  # <id>
 # and suppressing one on a question nobody could answer is the single wrong
 # direction to fail in.
 live_borrower_of() {  # <task> [state-dir]
-  local task=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt meta borrower bwt win backend alive
+  local task=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt meta borrower bwt target backend alive
   [ -n "$task" ] && [ -n "$state" ] || return 0
   command -v fm_backend_agent_alive >/dev/null 2>&1 || return 0
   wt=$(fm_meta_get "$state/$task.meta" worktree)
@@ -418,11 +418,10 @@ live_borrower_of() {  # <task> [state-dir]
     [ "$(fm_meta_get "$meta" borrowed_worktree)" = 1 ] || continue
     bwt=$(fm_meta_get "$meta" worktree)
     [ "$bwt" = "$wt" ] || continue
-    win=$(fm_meta_get "$meta" window)
-    [ -n "$win" ] || continue
-    backend=$(fm_meta_get "$meta" backend)
-    [ -n "$backend" ] || backend=tmux
-    alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || alive=unknown
+    backend=$(fm_backend_of_meta "$meta")
+    target=$(fm_backend_target_of_meta "$meta")
+    [ -n "$target" ] || continue
+    alive=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || alive=unknown
     [ "$alive" = alive ] || continue
     printf '%s' "$borrower"
     return 0
