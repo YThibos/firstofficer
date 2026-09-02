@@ -469,7 +469,8 @@ fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
 
 # The verified launch command per adapter. The knowledge half of each adapter
-# (busy signature, exit command, dialogs, quirks) lives in the harness-adapters skill.
+# (busy signature, exit command, dialogs, quirks) lives in that adapter's own
+# reference under .agents/skills/harness-adapters/references/<harness>.md.
 launch_template() {
   local harness=$1 kind=${2:-ship}
   # shellcheck disable=SC2016  # single quotes are deliberate: $(cat ...) expands in the crewmate pane, not here
@@ -477,7 +478,8 @@ launch_template() {
     # CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false disables claude's interactive
     # predicted-next-prompt ghost text, which renders as dim/faint text inside an
     # otherwise-empty composer and would otherwise read like real typed input when
-    # firstmate captures the pane (see the harness-adapters skill). It is a per-launch env
+    # firstmate captures the pane (see references/claude.md in the harness-adapters
+    # skill). It is a per-launch env
     # prefix scoped to this firstmate-launched agent; it never touches the captain's
     # global config. The CLI's --prompt-suggestions flag is print/SDK-mode only and
     # does NOT suppress the interactive ghost text (verified empirically), so the env
