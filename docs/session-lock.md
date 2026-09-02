@@ -28,6 +28,18 @@ Claude Code records one per live session at `<config root>/sessions/<pid>.json`,
 Verification is the record's `procStart` against the live process, so a leftover record from a recycled pid claims nothing.
 Where no record can be verified - any non-Linux host, an older Claude Code, a session that has not written one yet - the naming rules decide exactly as they did before.
 
+Resolving the host fixes which pid a claim records, and that is the whole answer only when the claim happens after the re-host.
+Firstmate bootstraps from a session-start hook, so a claim routinely lands before the captain moves the session into a background job, and the lock then records the client.
+That client stays alive, stays claude-named, and keeps a verified record of its own, so the liveness test alone would answer "another live session holds this home" for the rest of the session and leave the auto-arm just as inert.
+`fm_claude_superseded_own_host` closes that side: a holder whose trusted per-pid record names the SAME session id as this session's own host is positive proof of a superseded host of this very session, because Claude Code keeps one record per host process and only a re-host leaves two live pids naming one session.
+Such a holder is not a live harness, so the home reads as reclaimable and the Stop-owned auto-arm can claim it.
+
+That refusal is the positive match and nothing else.
+A holder whose record names a different session id is another live session and keeps its lock exactly as before, and a holder with no record, an unverifiable one, or one whose `procStart` does not match the live process adds no evidence at all and is decided by the rules above unchanged.
+Where this session's own host or its session id cannot be resolved, the existing rules decide with nothing added; there is no fallback that guesses the link.
+The holder that IS this session's current host is excluded, since nothing has superseded it and a session must never read its own live lock as reclaimable.
+This is a session reclaiming a home it already owns across a re-host, not a takeover of a working session, so it is independent of the usage-limit takeover below and does not widen it.
+
 ## Taking over from a session stopped by a usage limit
 
 A Claude session that stops because a usage limit was reached does not exit.
@@ -95,6 +107,10 @@ Taking the lock from a session that is genuinely working is far worse than refus
 Refusal is the outcome when the holder is neither Claude-named nor a verified Claude session host, when its discrete argv cannot be read at all, as on any host without `/proc`, when its session id reaches neither its own argv nor a trusted per-pid record, when a trusted per-pid record shows it working under a session other than the one its argv names, when the transcript is missing, unreadable, or unparseable, when the tail holds no conversational record at all, when the last conversational record is anything other than the usage-limit error, including every other API error, when that record carries no instant or one that does not parse, when the holder's start time cannot be read, and when the holder started after that record was written.
 A session whose id reaches neither its argv nor a trusted record, such as a plain foreground `claude` on a host where no record can be verified, is therefore never taken over; nothing else can tie that process to a transcript, and inventing a link would be exactly the guess this contract exists to avoid.
 
+Reclaiming a home from a superseded host of this same session is not one of the cases this test decides, and it never reaches it.
+Such a holder is refused by the liveness test above, on the identity of the two records alone, so the lock reads as stale and is claimed through the ordinary path with no transcript, no classification, and no takeover announced.
+The asymmetry is unaffected, because that refusal needs positive proof that the holder is this session's own former host rather than anyone else's working session.
+
 ## Where the condition is reported
 
 `bin/fm-session-start.sh` prints one `TAKEOVER:` line in its digest when the claim took the lock, so a fresh session knows why it is in control.
@@ -107,6 +123,7 @@ Claiming a lock is a fleet mutation, and taking one from a live process is preci
 ## Verification
 
 `tests/fm-session-lock-identity.test.sh` pins which pid a running session resolves to, including that a verified Claude session host wins over the claude-named client above it, that such a host counts as a live harness, and that an unverifiable record leaves the naming rules deciding.
+It also pins the claim-before-re-host ordering end to end: a lock recording a still-alive, claude-named client whose verified record names this session's own session id is reclaimable, while the same shape with a different session id, with an unverifiable record, and with no record at all each keep their lock, and this session's own current host is never read as superseded.
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.
 It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the takeover of a limit-stopped holder in the session-host shape, whose name is its release version and whose id comes from its verified per-pid record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.
