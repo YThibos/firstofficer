@@ -138,6 +138,57 @@ fm_claude_session_host() {
   fm_claude_recorded_session_id "$1" >/dev/null 2>&1
 }
 
+# Print the pid of the CURRENT process's own verified Claude session host, by
+# walking real parent links (up to 16 hops) until one of them is a host. It
+# answers the same question fm_harness_ancestry_pid short-circuits on, and only
+# that question: where no record can be verified anywhere in the ancestry it
+# fails, and every caller then leaves the existing rules deciding.
+fm_claude_own_session_host_pid() {
+  local pid=$$
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+    if fm_claude_session_host "$pid"; then
+      printf '%s' "$pid"
+      return 0
+    fi
+    [ "$pid" -gt 1 ] || return 1
+    pid=$(fm_proc_stat_field "$pid" 1) || return 1
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  done
+  return 1
+}
+
+# True when lock holder $1 is a SUPERSEDED host of the session this call runs
+# in, because its own trusted per-pid record names the very same session id as
+# this session's current host.
+#
+# That identity is positive proof rather than an inference. Claude Code keeps
+# one record per host process and re-hosts a session it moves into a background
+# job, so two live pids naming one session id are the client the captain
+# launched and the pty host the session was handed to, in that order. A lock
+# claimed BEFORE that move records the client, which stays alive and
+# claude-named for the rest of the session, and without this the home would read
+# as held by another live session forever and the Stop-owned auto-arm could
+# never claim it.
+#
+# Only that positive match ever refuses. A holder whose record names a DIFFERENT
+# session id is another live session and keeps its lock; a holder with no record,
+# an unverifiable one, or one whose procStart does not match the live process
+# adds no evidence at all and is decided exactly as before; and where this
+# session's own host cannot be resolved - any host without /proc, an older Claude
+# Code, a session that has not written its record yet - nothing here applies.
+# The holder that IS this session's current host is not superseded by anything
+# and is deliberately excluded, so a session never reads its own live lock as
+# reclaimable.
+fm_claude_superseded_own_host() {
+  local holder=$1 holder_id own_pid own_id
+  case "$holder" in ''|*[!0-9]*) return 1 ;; esac
+  holder_id=$(fm_claude_recorded_session_id "$holder") || return 1
+  own_pid=$(fm_claude_own_session_host_pid) || return 1
+  [ "$own_pid" != "$holder" ] || return 1
+  own_id=$(fm_claude_recorded_session_id "$own_pid") || return 1
+  [ "$holder_id" = "$own_id" ]
+}
+
 # Decide whether one process is a verified harness, from its name ($1, ps comm)
 # and its command line ($2, ps args). Echoes the string that identified it, so
 # a caller can tell WHICH harness matched, and returns non-zero when none did.
@@ -247,9 +298,13 @@ fm_harness_ancestry_pid() {
 # A verified Claude session host counts, because the walk above records one and
 # a holder it just recorded must not read back as stale to every guard: a
 # session host is named after its release version, so no naming rule matches it.
+# A superseded host of THIS session is the one live process that never counts,
+# whatever its name: the home it holds is this session's own across a re-host,
+# so it is reclaimable rather than held by someone else.
 fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
+  fm_claude_superseded_own_host "$pid" && return 1
   fm_claude_session_host "$pid" && return 0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)

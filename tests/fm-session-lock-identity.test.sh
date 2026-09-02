@@ -270,5 +270,88 @@ printf "%s %s %s\n" "$PPID" "$$" "$(fm_harness_ancestry_pid || echo NONE)"
     fail "with no verifiable session record the walk should fall back to the claude-named ancestor $outer_pid, got: $walked"
   fi
   pass "an unverifiable session record leaves the naming rules deciding, unchanged"
-  unset PROC_START_OVERRIDE CLAUDE_CONFIG_DIR
+  unset PROC_START_OVERRIDE
+
+  # --- a superseded host of THIS session does not hold the home -------------
+  #
+  # The claim can land on either side of the re-host. Claimed AFTER it, the lock
+  # already records the pty host and the walk above is the whole fix. Claimed
+  # BEFORE it - firstmate bootstraps from a session-start hook, and the captain
+  # only backgrounds the session afterwards - the lock records the CLIENT, which
+  # stays alive, stays claude-named, and keeps its own record, so liveness would
+  # answer "another live session holds this home" for the rest of the session and
+  # the Stop-owned auto-arm would stay inert exactly as before.
+  #
+  # The two records naming ONE session id is the positive proof that separates
+  # that case from a genuine second session, so these pin the liveness test on
+  # the identity alone: same id is reclaimable, and a different, unverifiable, or
+  # absent record all keep the lock exactly as they do today.
+  REHOST_PROBE='
+. "$LIB"
+st=$(fm_proc_stat_field $$ 19) || exit 1
+printf "{\"pid\":%s,\"sessionId\":\"%s\",\"procStart\":\"%s\"}\n" \
+  "$$" "$OWN_UUID" "$st" > "$CFG/sessions/$$.json"
+[ "$HOLDER_PID" = SELF ] && HOLDER_PID=$$
+if fm_harness_pid_alive "$HOLDER_PID"; then echo ALIVE; else echo RECLAIMABLE; fi
+'
+  export REHOST_PROBE
+
+  # rehost_verdict <holder pid or SELF> <this session host's id>: run the probe
+  # as a process that IS a verified session host and echo how it reads <holder>.
+  rehost_verdict() {
+    OWN_UUID=$2 HOLDER_PID=$1 bash -c "$REHOST_PROBE" 2>&1
+  }
+
+  # The client the captain launched: still alive, still claude-named, and its
+  # record still verifies - every reason liveness had to call it live.
+  start_child claude "$VERSIONED"
+  client_pid=$CHILD_PID
+  client_start=$(fm_proc_stat_field "$client_pid" 19)
+  write_client_record() {
+    printf '{"pid":%s,"sessionId":"%s","procStart":"%s"}\n' \
+      "$client_pid" "$1" "$2" > "$CFG/sessions/$client_pid.json"
+  }
+  OTHER_UUID=7c1f0f4a-2b6d-4f3e-8a11-0c9d5e2b7431
+
+  write_client_record "$SESSION_UUID" "$client_start"
+  verdict=$(rehost_verdict "$client_pid" "$SESSION_UUID")
+  if [ "$verdict" != RECLAIMABLE ]; then
+    stop_child "$client_pid"
+    fail "a live claude-named client whose record names this session's own id should be a superseded host, got: $verdict"
+  fi
+  pass "a lock claimed before the re-host reads as reclaimable, not as another live session"
+
+  verdict=$(rehost_verdict "$client_pid" "$OTHER_UUID")
+  if [ "$verdict" != ALIVE ]; then
+    stop_child "$client_pid"
+    fail "a holder whose record names a DIFFERENT session id must keep its lock, got: $verdict"
+  fi
+  pass "another live session's host keeps its lock"
+
+  write_client_record "$SESSION_UUID" "$((client_start + 1))"
+  verdict=$(rehost_verdict "$client_pid" "$SESSION_UUID")
+  if [ "$verdict" != ALIVE ]; then
+    stop_child "$client_pid"
+    fail "an unverifiable holder record must add no evidence, so the holder keeps its lock, got: $verdict"
+  fi
+  pass "a holder record whose procStart does not match the live process reclaims nothing"
+
+  rm -f "$CFG/sessions/$client_pid.json"
+  verdict=$(rehost_verdict "$client_pid" "$SESSION_UUID")
+  if [ "$verdict" != ALIVE ]; then
+    stop_child "$client_pid"
+    fail "a holder with no record at all must keep its lock, got: $verdict"
+  fi
+  pass "a holder with no session record keeps its lock"
+  stop_child "$client_pid"
+
+  # The current host is not superseded by anything, so a session must never read
+  # its own live lock as reclaimable.
+  verdict=$(rehost_verdict SELF "$SESSION_UUID")
+  if [ "$verdict" != ALIVE ]; then
+    fail "this session's own current host must still read as a live harness, got: $verdict"
+  fi
+  pass "this session's own current host is not treated as superseded"
+
+  unset CLAUDE_CONFIG_DIR
 fi
