@@ -41,6 +41,9 @@ The turn-end guard remains the final backstop rather than the normal continuity 
 An actionable child output returns that reason normally.
 A zero/empty child return rechecks the home lock and beacon, attaches to a verified healthy successor when one exists, or emits `watcher: FAILED - cycle ended without an actionable reason` and exits nonzero.
 An attached arm follows verified identity-matched successors and reports the same typed failure if that chain ends without one.
+The one exception is a handoff: two arms follow one watcher whenever a manual repair overlaps the Stop-owned auto-arm, and only the arm that owns the watcher reads the reason it printed.
+When the cycle ledger already records that same watcher closing on an actionable reason at or after this attachment began, the attached arm emits `watcher: cycle ended on an actionable wake reported by its owning arm` and returns zero, leaving the owner's own completion as the single notification for that event.
+The time bound is what keeps a recycled PID from speaking for a watcher it is not, so a watcher that really ended without a wake still produces the typed failure.
 
 The arm layer appends one tab-separated record per observed cycle to `state/.watch-cycle-exits.log`.
 Each record includes arm and watcher PIDs, start and end timestamps, exit code and signal, classified reason, beacon age, lock identity before and after close, and successor disposition.

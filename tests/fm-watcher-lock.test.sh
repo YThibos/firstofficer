@@ -575,6 +575,69 @@ test_arm_attaches_and_waits_for_live_fresh_watcher() {
   pass "arm attaches to a live fresh watcher and fails loudly when that cycle has no successor"
 }
 
+# --- an attached cycle that another arm reported is a handoff, not a failure --
+#
+# Two arms follow one watcher whenever a manual repair overlaps the Stop-owned
+# auto-arm, and only the arm that OWNS the watcher ever sees the reason it
+# printed. When that owner consumes an actionable wake and exits, the attached
+# arm finds no successor and used to call that "supervision is down" - which
+# told the model to repair, which started another competing arm, which failed
+# the same way on the next wake. Four consecutive false failures were observed
+# in one session on 2026-09-03. The wake itself was delivered correctly every
+# time, by the owner.
+test_attached_arm_reports_a_handoff_not_a_failure() {
+  local dir state fakebin ownerout attachout i wpid ownerpid attachpid owner_status attach_status
+  dir=$(make_case arm-handoff)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  ownerout="$dir/owner-arm.out"
+  attachout="$dir/attached-arm.out"
+  mark_pr_check_migration_complete "$state"
+
+  # The owning arm forks the watcher and waits on it, exactly as a model-driven
+  # background repair does.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$ownerout" &
+  ownerpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$ownerout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  wpid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  grep -qF "watcher: started pid=$wpid" "$ownerout" || fail "the owning arm did not start a watcher"
+
+  # The second arm attaches to that same watcher instead of starting another.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 \
+    "$WATCH_ARM" > "$attachout" &
+  attachpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$wpid" "$attachout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$wpid" "$attachout" || fail "the second arm did not attach to the live watcher"
+
+  # A captain-relevant status: the watcher surfaces it and exits, and its reason
+  # reaches the owning arm alone.
+  printf 'done: handed off\n' > "$state/handoff.status"
+  wait_for_exit "$ownerpid" 200
+  owner_status=$?
+  [ "$owner_status" -eq 0 ] || fail "the owning arm did not close cleanly on its actionable wake (status $owner_status)"
+  grep -q '^signal:' "$ownerout" || fail "the owning arm did not report the actionable wake: $(cat "$ownerout")"
+
+  wait_for_exit "$attachpid" 200
+  attach_status=$?
+  ! grep -qF 'watcher: FAILED' "$attachout" \
+    || fail "the attached arm reported supervision as failed for a wake another arm delivered: $(cat "$attachout")"
+  [ "$attach_status" -eq 0 ] || fail "the attached arm exited nonzero for a handed-off cycle (status $attach_status)"
+  grep -q 'reason=attached-cycle-handed-off' "$state/.watch-cycle-exits.log" \
+    || fail "the handoff was not classified in the lifecycle ledger"
+  pass "an attached cycle whose wake another arm delivered closes as a handoff, not a failure"
+}
+
 test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   local dir state fakebin out armout i wpid armpid status
   dir=$(make_case attached-arm-signal-ledger)
@@ -1031,6 +1094,7 @@ test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover
 test_arm_self_eviction_is_loud_without_successor
 test_arm_attaches_and_waits_for_live_fresh_watcher
+test_attached_arm_reports_a_handoff_not_a_failure
 test_attached_arm_signal_is_recorded_in_cycle_ledger
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
