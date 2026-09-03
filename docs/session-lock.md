@@ -25,6 +25,8 @@ Every ownership check in that session then concludes another live session holds 
 The session host is the pid that has all three properties at once.
 Claude Code records one per live session at `<config root>/sessions/<pid>.json`, it is the process a session's own tool calls and Stop hooks are both children of, and it exists for exactly as long as that session.
 `fm_claude_session_host` answers for it, and a verified host wins over every naming rule: the walk returns the innermost one on sight rather than extending past it, and the liveness test accepts it, because a session host is named after its release version and no naming rule would match it on its own.
+The shared-service boundary above is the one test that still comes first, in both the walk and the liveness test, so a process serving many sessions is rejected before any rule and before the host short-circuit alike and can never be selected by either route.
+That costs the host nothing, because a session host's own argv is not `daemon ...`, and it keeps the boundary absolute rather than conditional on whether a shared service happens to carry a per-pid record of its own.
 Verification is the record's `procStart` against the live process, so a leftover record from a recycled pid claims nothing.
 Where no record can be verified - any non-Linux host, an older Claude Code, a session that has not written one yet - the naming rules decide exactly as they did before.
 
@@ -123,6 +125,7 @@ Claiming a lock is a fleet mutation, and taking one from a live process is preci
 ## Verification
 
 `tests/fm-session-lock-identity.test.sh` pins which pid a running session resolves to, including that a verified Claude session host wins over the claude-named client above it, that such a host counts as a live harness, and that an unverifiable record leaves the naming rules deciding.
+It also pins that the shared-service boundary outranks that short-circuit: a live `claude daemon run` carrying a verifiable per-pid record of its own is selected neither by the ancestry walk nor by the liveness test, so no home can be pinned read-only by a process every session shares.
 It also pins the claim-before-re-host ordering end to end: a lock recording a still-alive, claude-named client whose verified record names this session's own session id is reclaimable, while the same shape with a different session id, with an unverifiable record, and with no record at all each keep their lock, and this session's own current host is never read as superseded.
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.

@@ -217,10 +217,11 @@ fm_claude_superseded_own_host() {
 #     the argv[0]-named launcher above it.
 #
 # A process shared across sessions is rejected before any of the three rules,
-# so no caller can select one: the walk stops one hop below it and keeps this
-# session's own host, and a lock already recording one reads back as stale and
-# reclaimable instead of pinning the home read-only for as long as that
-# service runs.
+# and both callers below apply the same rejection ahead of the verified
+# session-host short-circuit as well, so no caller can select one by any route:
+# the walk stops one hop below it and keeps this session's own host, and a lock
+# already recording one reads back as stale and reclaimable instead of pinning
+# the home read-only for as long as that service runs.
 fm_harness_identity() {
   local comm=$1 args=$2 candidate
   fm_harness_shared_service "$comm" "$args" && return 1
@@ -263,21 +264,23 @@ fm_harness_identity() {
 # The harness pid lives as long as the session, unlike the transient subshell
 # pid of any one tool call.
 #
-# A verified Claude session host short-circuits all of that and wins on sight,
-# innermost first, because it answers the question the walk is only ever
+# A verified Claude session host short-circuits every NAMING rule and wins on
+# sight, innermost first, because it answers the question the walk is only ever
 # approximating: which process IS this session. Taking it also stops the
 # claude-extension above from climbing out of the session into the client that
 # launched it, whose pid the session loses the moment Claude re-hosts it as a
-# background job (see fm_claude_session_host).
+# background job (see fm_claude_session_host). The shared-service rejection is
+# the one test that still precedes it, so a process serving many sessions is
+# never selected even if it should ever carry a verifiable per-pid record.
 fm_harness_ancestry_pid() {
   local pid=$$ comm args ident best='' extending=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
-    if fm_claude_session_host "$pid"; then
+    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
+    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    if ! fm_harness_shared_service "$comm" "$args" && fm_claude_session_host "$pid"; then
       echo "$pid"
       return 0
     fi
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
     if ident=$(fm_harness_identity "$comm" "$args"); then
       best="$pid"
       case "$ident" in
@@ -301,13 +304,17 @@ fm_harness_ancestry_pid() {
 # A superseded host of THIS session is the one live process that never counts,
 # whatever its name: the home it holds is this session's own across a re-host,
 # so it is reclaimable rather than held by someone else.
+# A process shared across sessions is rejected before the host check as well as
+# before the naming rules, so a lock recording one stays reclaimable by every
+# route.
 fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
   fm_claude_superseded_own_host "$pid" && return 1
-  fm_claude_session_host "$pid" && return 0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)
+  fm_harness_shared_service "$comm" "$args" && return 1
+  fm_claude_session_host "$pid" && return 0
   fm_harness_identity "$comm" "$args" >/dev/null
 }
 

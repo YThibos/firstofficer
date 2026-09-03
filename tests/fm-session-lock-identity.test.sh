@@ -353,5 +353,72 @@ if fm_harness_pid_alive "$HOLDER_PID"; then echo ALIVE; else echo RECLAIMABLE; f
   fi
   pass "this session's own current host is not treated as superseded"
 
+  # --- the shared-service boundary outranks the host short-circuit ----------
+  #
+  # A process shared by every session in the machine must never be selected by
+  # either caller, whatever else is true of it: it never exits, so a lock
+  # recording it pins the home read-only forever, and every concurrent
+  # background session resolves to that one pid. The verified-host short-circuit
+  # is the only thing that could reach past that boundary, so these give a
+  # shared-service argv a verifiable per-pid record of its own - the one shape
+  # where the boundary and the short-circuit disagree - and require the boundary
+  # to win in the walk and in the liveness test alike. The ordinary host, whose
+  # argv is not a shared service, still wins over the naming rules exactly as
+  # the cases above pin.
+  DAEMON_HOLD="$TMP_ROOT/daemon-hold.fifo"
+  mkfifo "$DAEMON_HOLD"
+  # The supervisor's argv is `claude daemon run ...`, and only a real one will
+  # do: the boundary matches argv[1] exactly, so the fixture's own script has to
+  # BE argv[1]. A shell script named "daemon", run from its own directory under
+  # argv[0] "claude", is the one shape that gives a live process that command
+  # line while still being this suite's code.
+  DAEMON_DIR="$TMP_ROOT/shared-service"
+  mkdir -p "$DAEMON_DIR"
+  cat > "$DAEMON_DIR/daemon" <<'SH'
+set -u
+# shellcheck source=/dev/null
+. "$LIB"
+st=$(fm_proc_stat_field $$ 19) || exit 1
+printf '{"pid":%s,"sessionId":"%s","procStart":"%s"}\n' \
+  "$$" "$SESSION_UUID" "$st" > "$CFG/sessions/$$.json"
+if [ "${DAEMON_MODE:-hold}" = walk ]; then
+  # A plain, unrecognised child, so the walk has to climb into the shared
+  # service to reach it at all.
+  ( exec bash -c 'printf "%s %s\n" "$PPID" "$(. "$LIB"; fm_harness_ancestry_pid || echo NONE)"' )
+else
+  read -r _ < "$DAEMON_HOLD"
+fi
+SH
+  export DAEMON_HOLD DAEMON_DIR
+  DAEMON_RUN='cd "$DAEMON_DIR" && exec -a claude bash daemon run'
+
+  out=$(DAEMON_MODE=walk bash -c "$DAEMON_RUN" 2>&1) || true
+  read -r daemon_pid walked _ <<< "$out"
+  case "$daemon_pid" in
+    ''|*[!0-9]*) fail "expected the shared-service pid and a walk result, got: $out" ;;
+  esac
+  if [ "$walked" = "$daemon_pid" ]; then
+    fail "the ancestry walk selected the shared service $daemon_pid because it carried a verified session record; every background session in the home would resolve to that one pid"
+  fi
+  pass "a shared service carrying a verified session record is still not selected by the ancestry walk"
+
+  DAEMON_MODE=hold bash -c "$DAEMON_RUN" &
+  daemon_pid=$!
+  tries=0
+  while [ "$tries" -lt 100 ] && [ ! -f "$CFG/sessions/$daemon_pid.json" ]; do
+    tries=$((tries + 1))
+    sleep 0.02
+  done
+  if [ ! -f "$CFG/sessions/$daemon_pid.json" ]; then
+    stop_child "$daemon_pid"
+    fail "fixture shared service never wrote its own session record"
+  fi
+  if fm_harness_pid_alive "$daemon_pid"; then
+    stop_child "$daemon_pid"
+    fail "a shared service carrying a verified session record was read as a live harness; a lock recording it would pin the home read-only for as long as it runs"
+  fi
+  pass "a shared service carrying a verified session record is not a live harness"
+  stop_child "$daemon_pid"
+
   unset CLAUDE_CONFIG_DIR
 fi
