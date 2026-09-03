@@ -226,6 +226,27 @@ run:
 EOF
 }
 
+# The CI-monitor phase, as `axi status` emits it: the ci step is the only active
+# one, it drives no subprocess agent (the daemon owns the monitor), and its
+# activity goes `quiet` because the step log is written only at transitions.
+run_ci_monitor_active() {  # <branch> <last-activity> [agent-pid] [round]
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: ci
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/example/repo/pull/12"
+  findings: none
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    ci,running,18m3s,"$2","${3:--}",${4:-monitoring}
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    push,completed,0,0
+    ci,running,0,0
+EOF
+}
+
 run_fixing() {  # <branch>
   cat <<EOF
 run:
@@ -471,6 +492,122 @@ test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid() {
   out=$(run_pipeline_liveness "$d" feat-nopid)
   [ "$out" = alive ] || fail "a working step reporting no agent pid should still be alive, got: '$out'"
   pass "a working step that reports no agent pid still reports alive"
+}
+
+# An empty last_activity is not evidence of work. It also sits between the two
+# fields this decision turns on, so a reader that collapses it would shift the
+# agent pid into the activity slot and answer alive off a step that reported
+# nothing at all - the one direction this must never fail in.
+test_pipeline_liveness_reports_an_empty_activity_as_stopped() {
+  reset_fakes
+  local d out dead; d=$(new_case liveness-empty-activity)
+  make_repo_on_branch "$d/wt" fm/feat-empty
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-empty.meta" "window=fm:fm-feat-empty" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_CI_LOGS='log[1]{line}:
+  "CI checks running, waiting for results..."'
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-empty '' "$$" 'fix 1')"
+  out=$(run_pipeline_liveness "$d" feat-empty)
+  [ "$out" != alive ] || fail "a step reporting no activity at all reported alive"
+  dead=$(bash -c 'echo $$')
+  while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-empty '' "$dead" 'fix 1')"
+  out=$(run_pipeline_liveness "$d" feat-empty)
+  [ "$out" != alive ] || fail "a step with no activity and a dead agent pid reported alive"
+  pass "an empty last_activity is not liveness, whatever the agent pid says"
+}
+
+# --- the CI-monitor phase is not a stopped pipeline --------------------------
+#
+# Reproduces the 2026-09-03 false alarm directly. `ci_timeout` defaults to 168h
+# and the CI monitor writes to its step log only when something changes, while
+# `step_quiet_warning` defaults to 10m, so `last_activity` reads `quiet ...` for
+# nearly the whole wait. Reading that as a stopped pipeline is what wedge-
+# escalated a healthy worker every FM_STALE_ESCALATE_SECS for half an hour.
+test_pipeline_liveness_reports_a_waiting_ci_monitor_as_alive() {
+  reset_fakes
+  local d out; d=$(new_case liveness-ci-waiting)
+  make_repo_on_branch "$d/wt" fm/feat-ci
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci.meta" "window=fm:fm-feat-ci" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-ci 'quiet 14m ago')"
+  FM_FAKE_CI_LOGS='log[2]{line}:
+  "monitoring CI for PR #12 (timeout: 168h0m0s)..."
+  "CI checks running, waiting for results..."'
+  out=$(run_pipeline_liveness "$d" feat-ci)
+  [ "$out" = alive ] || fail "a ci monitor still waiting on checks should be alive, got: '$out'"
+  pass "a quiet ci step whose checks are still running reports alive"
+}
+
+# The suppression stops exactly where the monitor's own job does. Once the
+# checks are green the run is only waiting on a merge, the worker has been
+# handed back its CI-ready return point, and an idle pane past that is a real
+# thing to look at - so the ordinary escalation resumes.
+test_pipeline_liveness_reports_a_green_ci_monitor_as_stopped() {
+  reset_fakes
+  local d out; d=$(new_case liveness-ci-green)
+  make_repo_on_branch "$d/wt" fm/feat-ci-green
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci-green.meta" "window=fm:fm-feat-ci-green" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-ci-green 'quiet 22m ago')"
+  FM_FAKE_CI_LOGS='log[2]{line}:
+  "CI checks running, waiting for results..."
+  all CI checks passed - still monitoring until merged or closed'
+  out=$(run_pipeline_liveness "$d" feat-ci-green)
+  [ "$out" != alive ] || fail "a ci monitor whose checks are already green reported alive"
+  pass "a quiet ci step whose checks are green does not report alive"
+}
+
+# Suppressing an alarm on a question nobody could answer is the one wrong
+# direction to fail in, so an unreadable or unrecognised ci log keeps escalating.
+test_pipeline_liveness_keeps_escalating_an_unreadable_ci_log() {
+  reset_fakes
+  local d out; d=$(new_case liveness-ci-unknown)
+  make_repo_on_branch "$d/wt" fm/feat-ci-unknown
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci-unknown.meta" "window=fm:fm-feat-ci-unknown" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-ci-unknown 'quiet 14m ago')"
+  FM_FAKE_CI_LOGS=""
+  out=$(run_pipeline_liveness "$d" feat-ci-unknown)
+  [ "$out" != alive ] || fail "an unreadable ci log reported alive"
+  pass "a quiet ci step whose log cannot be read does not report alive"
+}
+
+# The narrowness that keeps this from switching the wedge alarm off: only the
+# daemon's own monitor is exempt. A ci step that drives a subprocess agent (a
+# ci fix round) is judged on its activity exactly as every other step is.
+test_pipeline_liveness_does_not_exempt_a_ci_step_running_an_agent() {
+  reset_fakes
+  local d out; d=$(new_case liveness-ci-agent)
+  make_repo_on_branch "$d/wt" fm/feat-ci-agent
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci-agent.meta" "window=fm:fm-feat-ci-agent" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-ci-agent 'quiet 14m ago' "$$" 'fix 1')"
+  FM_FAKE_CI_LOGS='log[1]{line}:
+  "CI checks running, waiting for results..."'
+  out=$(run_pipeline_liveness "$d" feat-ci-agent)
+  [ "$out" != alive ] || fail "a quiet ci step driving a live agent reported alive"
+  pass "a quiet ci step that drives a subprocess agent still reports stopped"
+}
+
+# The exemption is only as safe as its reading of the table. A layout that does
+# not name the columns this decision turns on is not one this can answer from,
+# so it yields no rows at all rather than reading an absent column as "no agent
+# pid reported" and exempting a step it never actually identified.
+test_pipeline_liveness_ignores_an_unrecognised_active_steps_layout() {
+  reset_fakes
+  local d out; d=$(new_case liveness-ci-shape)
+  make_repo_on_branch "$d/wt" fm/feat-ci-shape
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ci-shape.meta" "window=fm:fm-feat-ci-shape" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-ci-shape 'quiet 14m ago')"
+  FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//,agent_pid,/,}
+  FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//\",\"-\",/\",}
+  FM_FAKE_CI_LOGS='log[1]{line}:
+  "CI checks running, waiting for results..."'
+  out=$(run_pipeline_liveness "$d" feat-ci-shape)
+  [ "$out" != alive ] || fail "an active_steps table with no agent_pid column reported alive"
+  pass "an active_steps layout missing a column this decision needs yields no liveness"
 }
 
 test_pipeline_liveness_reports_none_without_an_attributed_run() {
@@ -1398,6 +1535,12 @@ test_pipeline_liveness_reads_a_quoted_activity_containing_a_comma
 test_pipeline_liveness_reports_a_quiet_step_as_stopped
 test_pipeline_liveness_reports_a_dead_agent_as_stopped
 test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid
+test_pipeline_liveness_reports_an_empty_activity_as_stopped
+test_pipeline_liveness_reports_a_waiting_ci_monitor_as_alive
+test_pipeline_liveness_reports_a_green_ci_monitor_as_stopped
+test_pipeline_liveness_keeps_escalating_an_unreadable_ci_log
+test_pipeline_liveness_does_not_exempt_a_ci_step_running_an_agent
+test_pipeline_liveness_ignores_an_unrecognised_active_steps_layout
 test_pipeline_liveness_reports_none_without_an_attributed_run
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded

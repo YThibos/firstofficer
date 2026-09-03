@@ -32,15 +32,26 @@
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
+#   watcher: cycle ended on an actionable wake reported by its owning arm
+#                                                        - an ATTACHED cycle ended because the arm
+#                                                          that owns the watcher consumed its wake
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
 # returns the FAILED line. On started it waits the child and propagates the wake
 # reason; on attached it stays live across identity-matched successors. An
 # attached cycle that ends without a healthy successor is a typed nonzero failure,
-# never a clean empty completion. On FAILED it exits non-zero so the failure is
-# loud. A live cycle already present means re-arm attaches - do not start a second
-# watcher.
+# never a clean empty completion - unless the cycle-exit ledger already records
+# that same watcher closing on an actionable wake, which means the arm that owns
+# it consumed and reported that wake. Two arms follow one watcher whenever a
+# manual repair overlaps the Stop-owned auto-arm, and only the owner ever sees
+# the reason; calling that "supervision is down" told the model to repair, which
+# started another competing arm, which failed the same way on the next wake
+# (four consecutive false failures in one session, 2026-09-03). A handoff closes
+# clean instead, so the owner's own completion stays the single notification for
+# that event.
+# On FAILED it exits non-zero so the failure is loud. A live cycle already
+# present means re-arm attaches - do not start a second watcher.
 #
 # Every observed watcher cycle appends one tab-separated lifecycle record to
 # state/.watch-cycle-exits.log. The arm layer owns that bounded ledger; it records
@@ -261,6 +272,38 @@ fail_unexplained_cycle() {
   return 1
 }
 
+# 0 when the cycle of watcher <1> is already recorded as having ended on an
+# actionable wake, at or after epoch second <2>. Only the arm that OWNS a
+# watcher reads its output, so an attached arm cannot see the reason its cycle
+# ended on; the ledger row that owner writes is the one place that answer is
+# visible to anyone else.
+#
+# The lower time bound is what keeps a pid from speaking for a process it is not:
+# the ledger holds up to a thousand rows, so an old row for a since-recycled pid
+# would otherwise read as this cycle's close and turn a genuine failure into a
+# silent handoff. Passing the moment this attachment began confines the answer
+# to rows that could only have been written by the watcher actually followed.
+cycle_ended_actionably() {  # <watcher-pid> <since-epoch>
+  local pid=$1 since=$2
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  case "$since" in ''|*[!0-9]*) return 1 ;; esac
+  [ -f "$CYCLE_LOG" ] || return 1
+  awk -v want="watcher_pid=$pid" -v since="$since" '
+    {
+      n = split($0, f, "\t")
+      owned = 0
+      ended = -1
+      for (i = 1; i <= n; i += 1) {
+        if (f[i] == want) owned = 1
+        if (f[i] ~ /^ended_at=[0-9]+$/) { split(f[i], kv, "="); ended = kv[2] + 0 }
+      }
+      if (!owned || ended < since) next
+      for (i = 1; i <= n; i += 1) if (f[i] ~ /^reason=actionable-/) found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$CYCLE_LOG" 2>/dev/null
+}
+
 # Stay alive across identity-matched healthy holders. If one cycle ends, attach
 # to a verified successor. With no successor, fail loudly instead of returning a
 # clean empty completion that an adapter could mistake for a no-op.
@@ -283,6 +326,11 @@ attach_and_wait() {
       cycle_begin "$attached_pid" attached
       report_attached
       continue
+    fi
+    if cycle_ended_actionably "$attached_pid" "$cycle_started_at"; then
+      cycle_log_append unknown unknown attached-cycle-handed-off "owner:$attached_pid"
+      echo "watcher: cycle ended on an actionable wake reported by its owning arm"
+      return 0
     fi
     cycle_log_append unknown unknown attached-cycle-ended none
     fail_unexplained_cycle

@@ -213,6 +213,27 @@ tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
 ```
 
+## Wedge escalation liveness evidence
+
+The CI-monitor exemption in `bin/fm-crew-state.sh --pipeline-liveness` rests on the installed validator's own quiet threshold and CI-monitor bound, checked on 2026-09-03 against no-mistakes v1.41.2.
+
+```sh
+no-mistakes axi status
+no-mistakes axi logs --step ci --run 01M1K1E6GJE46J39EYS36T3Q7P
+```
+
+Observed: the completed run reported `ci,completed,0,1796271`, a CI step of 29m56s, whose entire step log held five entries - monitoring start, checks running, checks passed, one base-branch re-arm, and the merge.
+The installed defaults are `step_quiet_warning: "10m"` and `ci_timeout: "168h"`, so `last_activity` carries the `quiet` prefix for most of any real CI phase while the run is healthy.
+`axi status` builds `active_steps` from the running and fixing steps alone, so a row's presence is itself the evidence that its step is active.
+
+Deterministic entry points:
+
+```sh
+tests/fm-crew-state.test.sh
+tests/fm-watch-triage.test.sh
+tests/fm-watcher-lock.test.sh
+```
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

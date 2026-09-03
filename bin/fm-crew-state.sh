@@ -541,12 +541,18 @@ toon_split_row() {  # <row> <array-name>
   eval "$name=(\"\${out[@]}\")"
 }
 
-# 0 when the attributed run has an active step that is demonstrably working.
-# The header names its own columns, so both fields are read by name: a table
-# whose shape changes underneath us yields no columns and therefore no liveness,
-# rather than a confident answer read out of the wrong field.
-nm_active_step_alive() {
-  local header indent cols row n i idx_activity=-1 idx_pid=-1 activity pid
+# Print one line per active_steps row, tab separated, as
+# "<step>\t<last_activity>\t<agent_pid>", with a field left empty where the
+# table does not name that column.
+#
+# The header names its own columns, so every field is read by name, and a table
+# that does not name all three yields no rows at all - a shape that changed
+# underneath us must never become a confident answer read out of the wrong
+# field, nor an absent column mistaken for a reported value. `axi status` builds
+# this table from the running and fixing steps alone, so a row's presence is
+# itself the evidence that its step is active.
+nm_active_step_rows() {
+  local header indent cols n i idx_step=-1 idx_activity=-1 idx_pid=-1 row col field
   local -a cols_a row_a
   header=$(printf '%s\n' "$RUN_OUT" | grep -m1 'active_steps\[[0-9]*\]{') || return 1
   [ -n "$header" ] || return 1
@@ -558,27 +564,80 @@ nm_active_step_alive() {
   [ "$n" -gt 0 ] || return 1
   for ((i = 0; i < n; i++)); do
     case "$(trim "${cols_a[$i]}")" in
+      step)          idx_step=$i ;;
       last_activity) idx_activity=$i ;;
       agent_pid)     idx_pid=$i ;;
     esac
   done
-  [ "$idx_activity" -ge 0 ] || return 1
+  [ "$idx_step" -ge 0 ] && [ "$idx_activity" -ge 0 ] && [ "$idx_pid" -ge 0 ] || return 1
   while IFS= read -r row; do
     toon_split_row "$row" row_a
     [ "${#row_a[@]}" -eq "$n" ] || continue
-    activity=$(strip_quotes "$(trim "${row_a[$idx_activity]}")")
+    for col in "$idx_step" "$idx_activity" "$idx_pid"; do
+      field=$(strip_quotes "$(trim "${row_a[$col]}")")
+      printf '%s\t' "$field"
+    done
+    printf '\n'
+  done < <(nm_table_rows "$indent")
+}
+
+# 0 when the attributed run has an active step that is demonstrably working.
+nm_active_step_alive() {
+  local step activity pid row rest
+  while IFS= read -r row; do
+    step=${row%%$'\t'*}; rest=${row#*$'\t'}
+    activity=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    pid=${rest%%$'\t'*}
     [ -n "$activity" ] || continue
     # no-mistakes' own staleness verdict, not a second one of ours.
     case "$activity" in quiet*) continue ;; esac
-    if [ "$idx_pid" -ge 0 ]; then
-      pid=$(strip_quotes "$(trim "${row_a[$idx_pid]}")")
-      case "$pid" in
-        ''|-|*[!0-9]*) ;;                      # not reported for this step
-        *) kill -0 "$pid" 2>/dev/null || continue ;;
-      esac
-    fi
+    case "$pid" in
+      ''|-|*[!0-9]*) ;;                      # not reported for this step
+      *) kill -0 "$pid" 2>/dev/null || continue ;;
+    esac
     return 0
-  done < <(nm_table_rows "$indent")
+  done < <(nm_active_step_rows)
+  return 1
+}
+
+# 0 when the one active step is the daemon's own CI monitor, still waiting for
+# GitHub to report.
+#
+# Every other step earns its liveness from activity, because something is
+# supposed to be producing some. The CI monitor is the one step where nothing
+# is: it is a daemon-side wait with no subprocess agent, `ci_timeout` defaults
+# to 168h, and it writes to its step log only when the checks change state.
+# `step_quiet_warning` defaults to 10m, so `last_activity` reads `quiet ...` for
+# nearly the whole phase and the activity test alone reports a perfectly healthy
+# run as stopped - which wedge-escalated a validating worker every
+# FM_STALE_ESCALATE_SECS for the entire CI wait (2026-09-03; a 29m56s ci step
+# that logged five lines in total). no-mistakes says the same thing about its
+# own verdict: a quiet step is "a liveness clue, not permission to cancel,
+# rerun, or edit the worktree yourself".
+#
+# Two boundaries keep this from switching the wedge alarm off rather than
+# fixing it. A ci step that reports an agent pid is a fix round, not the
+# monitor, and is judged on its activity like every other step. And the exemption
+# ends where the monitor's own job does: once the checks are green the run is
+# only waiting on a merge, the worker has had its CI-ready return point back,
+# and an idle pane past that is a real thing to look at. A log that cannot be
+# read, or says nothing recognised, answers no - suppressing an alarm on a
+# question nobody could answer is the one wrong direction to fail in.
+#
+# Reading that log costs one more bounded call, and only where the activity test
+# has already failed on a ci step: at most one per window per task, on the same
+# budget the wedge timer's single crew-state read already spends.
+nm_ci_monitor_waiting() {
+  local step activity pid row rest
+  while IFS= read -r row; do
+    step=${row%%$'\t'*}; rest=${row#*$'\t'}
+    activity=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    pid=${rest%%$'\t'*}
+    [ "$step" = ci ] || continue
+    case "$pid" in ''|-) ;; *) continue ;; esac
+    [ "$(nm_ci_checks_state)" = not-ready ]
+    return
+  done < <(nm_active_step_rows)
   return 1
 }
 
@@ -603,6 +662,10 @@ nm_active_step_alive() {
 # A wedged agent therefore still escalates: its pid stays alive while its
 # activity goes quiet, and quiet is not alive.
 #
+# The daemon's own CI monitor is the single exemption, because it is the one
+# step where nothing is supposed to be producing activity; nm_ci_monitor_waiting
+# owns that test and its two boundaries.
+#
 # Anything else answers `stopped` (a run is attributed but nothing in it is
 # demonstrably working) or `none` (no attributed run, or only the coarse
 # runs-list fallback, which carries no step detail at all). Both leave the
@@ -612,7 +675,11 @@ if [ "$MODE" = pipeline-liveness ]; then
     printf 'none\n'
     exit 0
   fi
-  nm_active_step_alive && printf 'alive\n' || printf 'stopped\n'
+  if nm_active_step_alive || nm_ci_monitor_waiting; then
+    printf 'alive\n'
+  else
+    printf 'stopped\n'
+  fi
   exit 0
 fi
 
