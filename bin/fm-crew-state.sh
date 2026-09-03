@@ -583,8 +583,11 @@ nm_active_step_rows() {
 
 # 0 when the attributed run has an active step that is demonstrably working.
 nm_active_step_alive() {
-  local step activity pid
-  while IFS=$'\t' read -r step activity pid; do
+  local step activity pid row rest
+  while IFS= read -r row; do
+    step=${row%%$'\t'*}; rest=${row#*$'\t'}
+    activity=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    pid=${rest%%$'\t'*}
     [ -n "$activity" ] || continue
     # no-mistakes' own staleness verdict, not a second one of ours.
     case "$activity" in quiet*) continue ;; esac
@@ -625,8 +628,11 @@ nm_active_step_alive() {
 # has already failed on a ci step: at most one per window per task, on the same
 # budget the wedge timer's single crew-state read already spends.
 nm_ci_monitor_waiting() {
-  local step activity pid
-  while IFS=$'\t' read -r step activity pid; do
+  local step activity pid row rest
+  while IFS= read -r row; do
+    step=${row%%$'\t'*}; rest=${row#*$'\t'}
+    activity=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    pid=${rest%%$'\t'*}
     [ "$step" = ci ] || continue
     case "$pid" in ''|-) ;; *) continue ;; esac
     [ "$(nm_ci_checks_state)" = not-ready ]

@@ -494,6 +494,29 @@ test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid() {
   pass "a working step that reports no agent pid still reports alive"
 }
 
+# An empty last_activity is not evidence of work. It also sits between the two
+# fields this decision turns on, so a reader that collapses it would shift the
+# agent pid into the activity slot and answer alive off a step that reported
+# nothing at all - the one direction this must never fail in.
+test_pipeline_liveness_reports_an_empty_activity_as_stopped() {
+  reset_fakes
+  local d out dead; d=$(new_case liveness-empty-activity)
+  make_repo_on_branch "$d/wt" fm/feat-empty
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-empty.meta" "window=fm:fm-feat-empty" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_CI_LOGS='log[1]{line}:
+  "CI checks running, waiting for results..."'
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-empty '' "$$" 'fix 1')"
+  out=$(run_pipeline_liveness "$d" feat-empty)
+  [ "$out" != alive ] || fail "a step reporting no activity at all reported alive"
+  dead=$(bash -c 'echo $$')
+  while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+  FM_FAKE_AXI_STATUS="$(run_ci_monitor_active fm/feat-empty '' "$dead" 'fix 1')"
+  out=$(run_pipeline_liveness "$d" feat-empty)
+  [ "$out" != alive ] || fail "a step with no activity and a dead agent pid reported alive"
+  pass "an empty last_activity is not liveness, whatever the agent pid says"
+}
+
 # --- the CI-monitor phase is not a stopped pipeline --------------------------
 #
 # Reproduces the 2026-09-03 false alarm directly. `ci_timeout` defaults to 168h
@@ -1512,6 +1535,7 @@ test_pipeline_liveness_reads_a_quoted_activity_containing_a_comma
 test_pipeline_liveness_reports_a_quiet_step_as_stopped
 test_pipeline_liveness_reports_a_dead_agent_as_stopped
 test_pipeline_liveness_accepts_a_step_reporting_no_agent_pid
+test_pipeline_liveness_reports_an_empty_activity_as_stopped
 test_pipeline_liveness_reports_a_waiting_ci_monitor_as_alive
 test_pipeline_liveness_reports_a_green_ci_monitor_as_stopped
 test_pipeline_liveness_keeps_escalating_an_unreadable_ci_log
