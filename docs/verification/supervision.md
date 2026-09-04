@@ -234,6 +234,41 @@ tests/fm-watch-triage.test.sh
 tests/fm-watcher-lock.test.sh
 ```
 
+## Parked-by-usage-limit footers
+
+The footers `bin/fm-limit-park-lib.sh` matches for the `claude` harness were read on 2026-09-03 out of the shipped Claude Code binary, version 2.1.259, rather than transcribed from a screenshot.
+
+```sh
+strings -n 6 ~/.local/share/claude/versions/2.1.259 | grep -nE 'resets|usage limit|session limit'
+```
+
+Observed, as the separate message fragments that component assembles with a middle dot:
+
+```
+Usage limit reached · continuing automatically · esc or type to cancel
+Usage limit reached · continuing automatically at <time> · esc to cancel
+Usage limit reached · continuing automatically when it resets · esc to cancel
+Usage limit reached · continuing shortly · esc to cancel
+Usage limit reached again after you continued · continuing automatically · …
+Your usage limit has reset · press enter to continue
+Usage limit available again · continuing now
+Automatic continue was turned off · this task will not resume on its own
+Automatic continue did not run · … · send a prompt to continue
+Automatic continue stopped after repeated usage-limit hits · …
+You've hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved
+```
+
+The same read is what bounds the scope: the binary's spend, weekly, and credit-exhaustion messages (`You've hit your monthly spend limit`, `you have reached your weekly usage limit`, `You're out of usage credits`) are deliberately unmatched, because no prompt clears them and an auto-resume would spend attempts on a worker only a human can free.
+
+That a resume must be a real message and not a keystroke was verified on 2026-08-20 on the `fo-session-lock-versioned-harness` worker: a bare Enter left it parked, a message resumed it.
+This is why `bin/fm-limit-resume.sh` never uses the `--key` path and reads the pane back afterwards instead of trusting the send's exit status.
+
+Deterministic entry points:
+
+```sh
+tests/fm-watch-triage.test.sh
+```
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

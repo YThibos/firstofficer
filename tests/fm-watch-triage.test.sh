@@ -23,6 +23,8 @@ set -u
 . "$ROOT/bin/fm-classify-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-limit-park-lib.sh"
 
 WATCH="$ROOT/bin/fm-watch.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
@@ -1818,6 +1820,373 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   pass "AFK changed paused panes hand off plain stale identities for daemon-owned pause triage"
 }
 
+# --- a worker parked by its own usage limit ---------------------------------
+# The 2026-09-03 fleet losses: a worker hit its usage limit at 08:28 with a
+# reset at 11:10 and was still idle at 12:44. Its pane is stable and idle with
+# no busy signature and no running pipeline, so the stale path reads it exactly
+# like a stopped or wedged worker: it is surfaced (or wedge-escalated) over and
+# over while nothing ever restarts it. The parked footer names both the state
+# and the reset time, so the watcher can wait for that reset and resume instead.
+
+# The parked footer Claude Code renders while it waits out a usage limit,
+# rendered underneath ordinary transcript output as it is in a real pane.
+limit_parked_pane() {  # <footer>
+  printf '\xe2\x8f\xba Read(bin/fm-watch.sh)\n  \xe2\x8e\xbf  Read 1097 lines\n\n\xe2\x8f\xba Now wiring the handler into the poll loop.\n\n  %s\n' "$1"
+}
+
+# A parked footer whose named reset falls at <epoch>.
+reset_footer_at() {  # <epoch>
+  local at
+  at=$(date -d "@$1" +%H:%M 2>/dev/null || date -r "$1" +%H:%M)
+  printf 'Usage limit reached · continuing automatically at %s · esc to cancel' "$at"
+}
+
+# The parked-footer reader itself: which footers count, where in the pane they
+# have to appear, which harnesses have a registered signature at all, and when
+# the named reset has passed.
+test_limit_park_classifier() {
+  local now future
+  now=$(date +%s)
+
+  limit_parked_pane 'Usage limit reached · continuing automatically at 12:40pm · esc to cancel' | fm_limit_park_match claude >/dev/null \
+    || fail "the parked footer Claude renders while it waits out a usage limit was not recognised"
+  limit_parked_pane "You've hit your session limit · resets 12:40pm (Europe/Brussels) · progress saved" | fm_limit_park_match claude >/dev/null \
+    || fail "the session-limit footer was not recognised"
+  limit_parked_pane 'Your usage limit has reset · press enter to continue' | fm_limit_park_match claude >/dev/null \
+    || fail "the after-the-reset footer was not recognised"
+
+  # A spend or credit limit no prompt can clear is deliberately left on the
+  # ordinary path, where a human sees it.
+  limit_parked_pane "You've hit your monthly spend limit. Run /usage-credits to manage your limit" | fm_limit_park_match claude \
+    && fail "a monthly spend limit was claimed as an auto-resumable usage-limit park"
+  limit_parked_pane 'esc to interrupt' | fm_limit_park_match claude \
+    && fail "an ordinary busy footer was classified as parked"
+
+  # No shared default: a harness with no verified signature never parks.
+  limit_parked_pane 'Usage limit reached · continuing automatically · esc to cancel' | fm_limit_park_match codex \
+    && fail "an unregistered harness borrowed another harness's parked signature"
+
+  # Only the footer band, so transcript output quoting a past banner - which a
+  # worker doing this very kind of work prints - is not read as current state.
+  { printf '  Usage limit reached · press enter to continue\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do printf '  ordinary output line %s\n' "$i"; done
+  } | fm_limit_park_match claude && fail "a banner quoted in transcript output was read as the pane's current state"
+
+  # Absolute times resolve against the anchor; relative ones against now.
+  [ "$(fm_limit_park_reset_epoch "$now" "$now" 'Usage limit reached · resets in 2h 30m · esc to cancel')" = "$((now + 9000))" ] \
+    || fail "a relative reset time was not resolved against the reading moment"
+  [ "$(fm_limit_park_reset_epoch "$now" "$now" 'Usage limit reached · resets in 45m · esc to cancel')" = "$((now + 2700))" ] \
+    || fail "a minutes-only relative reset time was misread"
+  [ "$(fm_limit_park_reset_epoch "$now" "$now" 'Your usage limit has reset · press enter to continue')" = "$now" ] \
+    || fail "a footer saying the limit already reset did not answer the reading moment"
+  [ -z "$(fm_limit_park_reset_epoch "$now" "$now" 'Usage limit reached · continuing automatically when it resets · esc to cancel')" ] \
+    || fail "a footer naming no reset time invented one"
+
+  future=$(reset_footer_at $((now + 7200)))
+  fm_limit_park_due "$now" "$now" "$future" && fail "a reset still two hours out was reported due"
+  fm_limit_park_due "$now" "$now" 'Your usage limit has reset · press enter to continue' \
+    || fail "a limit that has already reset was not reported due"
+  fm_limit_park_due "$now" "$now" 'Usage limit reached · continuing automatically when it resets · esc to cancel' \
+    && fail "a footer naming no reset time became due immediately"
+  fm_limit_park_due "$((now - FM_LIMIT_PARK_MAX_WAIT))" "$now" 'Usage limit reached · continuing automatically when it resets · esc to cancel' \
+    || fail "the bounded maximum wait did not make an unreadable reset time due"
+  pass "the parked-footer reader recognises the state and its reset time, and only in the footer band"
+}
+
+# Record every resume the watcher asks for, and answer with <rc>.
+make_fake_limit_resume() {  # <fakebin> [rc]
+  local fakebin=$1 rc=${2:-0}
+  cat > "$fakebin/fm-limit-resume.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\${1:-}" >> "\${FM_LIMIT_RESUME_LOG:-/dev/null}"
+printf 'fake resume of %s\n' "\${1:-}"
+exit $rc
+SH
+  chmod +x "$fakebin/fm-limit-resume.sh"
+}
+
+# Record every steer fm-limit-resume.sh sends, and optionally clear the parked
+# footer from the pane the way a worker that really came back would.
+make_fake_send() {  # <fakebin> <resumed-pane-file-or-empty>
+  local fakebin=$1 resumed=$2
+  cat > "$fakebin/fm-send.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\${FM_FAKE_SEND_LOG:-/dev/null}"
+resumed='$resumed'
+[ -z "\$resumed" ] || printf 'ThisMate is on it.\n\n  esc to interrupt\n' > "\$resumed"
+exit 0
+SH
+  chmod +x "$fakebin/fm-send.sh"
+}
+
+test_limit_parked_worker_is_absorbed_until_its_reset() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid resume_log
+  dir=$(make_case limit-parked-before-reset); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  resume_log="$dir/resume.log"
+  window="test:fm-parked"
+  make_fake_limit_resume "$fakebin" 0
+  limit_parked_pane "$(reset_footer_at $(( $(date +%s) + 7200 )))" > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/parked.meta"
+  printf 'working: implementing the fix\n' > "$state/parked.status"
+  sig=$(seen_sig "$state/parked.status"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # No running pipeline and an idle pane: without the footer this reads as a
+  # crew that stopped, and is surfaced at once.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_LIMIT_RESUME_BIN="$fakebin/fm-limit-resume.sh" FM_LIMIT_RESUME_LOG="$resume_log" \
+    FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "a worker parked by its usage limit was surfaced instead of waited out: $(cat "$out")"
+  fi
+  reap "$pid"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a limit-parked worker was reported as a possible wedge: $(cat "$out")"
+  [ ! -s "$resume_log" ] || fail "a resume was attempted before the reset time: $(cat "$resume_log")"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a limit-parked worker kept a wedge escalation count"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the limit-parked poll failed"
+  grep "$(printf '\tstale\t')" "$drain_out" >/dev/null && fail "a limit-parked worker queued a stale wake: $(cat "$drain_out")"
+  unset FM_FAKE_CREW_STATE
+  pass "a worker parked by its own usage limit is absorbed until its reset, never wedge-escalated"
+}
+
+test_limit_parked_worker_is_resumed_once_the_limit_resets() {
+  local dir state fakebin out capture_file window key pane_hash sig pid resume_log
+  dir=$(make_case limit-parked-after-reset); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; resume_log="$dir/resume.log"
+  window="test:fm-due"
+  make_fake_limit_resume "$fakebin" 0
+  limit_parked_pane 'Your usage limit has reset · press enter to continue' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/due.meta"
+  printf 'working: implementing the fix\n' > "$state/due.status"
+  sig=$(seen_sig "$state/due.status"); printf '%s' "$sig" > "$state/.seen-due_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_LIMIT_RESUME_BIN="$fakebin/fm-limit-resume.sh" FM_LIMIT_RESUME_LOG="$resume_log" \
+    FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "a resumed worker still surfaced a wake: $(cat "$out")"
+  fi
+  reap "$pid"
+  grep -Fx "due" "$resume_log" >/dev/null || fail "the watcher did not resume a worker whose limit had reset: $(cat "$resume_log" 2>/dev/null)"
+  unset FM_FAKE_CREW_STATE
+  pass "a worker whose usage limit has reset is resumed automatically"
+}
+
+# A parked footer that counts down towards its reset rewrites the pane every
+# minute, so such a worker never holds one pane hash long enough to be called
+# stale. Recognising the park must therefore not depend on staleness at all:
+# with no repeated-hash history primed, the very first poll still has to see it.
+test_limit_parked_countdown_pane_is_still_resumed() {
+  local dir state fakebin out capture_file window pid resume_log
+  dir=$(make_case limit-parked-countdown); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; resume_log="$dir/resume.log"
+  window="test:fm-counting"
+  make_fake_limit_resume "$fakebin" 0
+  limit_parked_pane 'Usage limit reached · resets in 0m · esc to cancel' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/counting.meta"
+  printf 'working: implementing the fix\n' > "$state/counting.status"
+  printf '%s' "$(seen_sig "$state/counting.status")" > "$state/.seen-counting_status"
+  # Deliberately no .hash-* / .count-* priming: this pane is never stable.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_LIMIT_RESUME_BIN="$fakebin/fm-limit-resume.sh" FM_LIMIT_RESUME_LOG="$resume_log" \
+    FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "a counting-down parked pane surfaced a wake: $(cat "$out")"
+  fi
+  reap "$pid"
+  grep -Fx "counting" "$resume_log" >/dev/null \
+    || fail "a parked worker was only recognised once its pane held still: $(cat "$resume_log" 2>/dev/null)"
+  unset FM_FAKE_CREW_STATE
+  pass "a parked pane that counts down is recognised without ever holding one hash"
+}
+
+test_limit_parked_resume_that_never_lands_is_reported_once() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid resume_log
+  dir=$(make_case limit-parked-resume-failed); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"; resume_log="$dir/resume.log"
+  window="test:fm-unresumed"
+  make_fake_limit_resume "$fakebin" 6
+  limit_parked_pane 'Your usage limit has reset · press enter to continue' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/unresumed.meta"
+  printf 'working: implementing the fix\n' > "$state/unresumed.status"
+  sig=$(seen_sig "$state/unresumed.status"); printf '%s' "$sig" > "$state/.seen-unresumed_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_LIMIT_RESUME_BIN="$fakebin/fm-limit-resume.sh" FM_LIMIT_RESUME_LOG="$resume_log" \
+    FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a resume that never landed was never reported"
+  grep -F "usage limit reset but the worker did not resume" "$out" >/dev/null \
+    || fail "the report did not say the worker never came back: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the failed resume failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "did not resume" >/dev/null \
+    || fail "the failed resume was not queued: $(cat "$drain_out")"
+  [ -e "$state/.limit-surfaced-$key" ] || fail "the failed resume was not marked reported, so it would repeat every poll"
+  unset FM_FAKE_CREW_STATE
+  pass "a resume that could not be verified is reported once, not on every poll"
+}
+
+# --- a genuine wedge is still a wedge ---------------------------------------
+# The other half of the contract: nothing about the limit-park path may soften
+# the wedge alarm for a pane that shows no parked footer.
+test_wedged_worker_still_escalates_and_is_never_auto_resumed() {
+  local dir state fakebin out capture_file window key pane_hash sig pid resume_log
+  dir=$(make_case wedge-not-limit-parked); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; resume_log="$dir/resume.log"
+  window="test:fm-really-wedged"
+  make_fake_limit_resume "$fakebin" 0
+  printf 'idle building output' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/really-wedged.meta"
+  printf 'working: still monitoring ci\n' > "$state/really-wedged.status"
+  sig=$(seen_sig "$state/really-wedged.status"); printf '%s' "$sig" > "$state/.seen-really-wedged_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle building output")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_LIMIT_RESUME_BIN="$fakebin/fm-limit-resume.sh" FM_LIMIT_RESUME_LOG="$resume_log" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a genuinely wedged pane stopped escalating: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the wedge alarm no longer fires: $(cat "$out")"
+  [ ! -s "$resume_log" ] || fail "a wedged worker was auto-resumed: $(cat "$resume_log")"
+  unset FM_FAKE_CREW_STATE
+  pass "a genuinely wedged worker still escalates and is never auto-resumed"
+}
+
+# --- the resume command itself ----------------------------------------------
+
+test_limit_resume_sends_a_real_message_and_verifies_it_landed() {
+  local dir state fakebin capture_file send_log window out rc
+  dir=$(make_case limit-resume-lands); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"; send_log="$dir/send.log"
+  window="test:fm-resumed"
+  limit_parked_pane 'Your usage limit has reset · press enter to continue' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/resumed.meta"
+  make_fake_send "$fakebin" "$capture_file"
+
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_HOME="$dir" FM_SEND_BIN="$fakebin/fm-send.sh" FM_FAKE_SEND_LOG="$send_log" \
+    FM_LIMIT_RESUME_VERIFY_SLEEP=0 "$ROOT/bin/fm-limit-resume.sh" resumed 2>&1) && rc=0 || rc=$?
+  [ "$rc" = 0 ] || fail "a due resume did not report success (exit $rc): $out"
+  # The verified 2026-08-20 finding: a bare Enter does not resume such a worker.
+  grep -F -- "--key" "$send_log" >/dev/null && fail "the resume used a bare keystroke instead of a message: $(cat "$send_log")"
+  grep -F "Continue the task you were working on" "$send_log" >/dev/null \
+    || fail "the resume did not send a real message: $(cat "$send_log" 2>/dev/null)"
+  [ ! -e "$state/resumed.limit-park" ] || fail "the park record survived a verified resume"
+  pass "a due resume sends a real message and clears the park once the pane confirms it landed"
+}
+
+# A resumed worker's banner takes a moment to scroll out of the footer band, so
+# a pane that is demonstrably working again counts as landed even while the
+# banner is still visible. Without this, resumes that worked would be counted
+# as failures and would spend the attempt budget.
+test_limit_resume_accepts_a_worker_that_is_visibly_working_again() {
+  local dir state fakebin capture_file send_log window out rc
+  dir=$(make_case limit-resume-busy-again); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"; send_log="$dir/send.log"
+  window="test:fm-busy-again"
+  limit_parked_pane 'Your usage limit has reset · press enter to continue' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-again.meta"
+  # The send leaves the banner where it is and adds the busy footer under it.
+  cat > "$fakebin/fm-send.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\${FM_FAKE_SEND_LOG:-/dev/null}"
+printf '  esc to interrupt\n' >> '$capture_file'
+exit 0
+SH
+  chmod +x "$fakebin/fm-send.sh"
+
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_HOME="$dir" FM_SEND_BIN="$fakebin/fm-send.sh" FM_FAKE_SEND_LOG="$send_log" \
+    FM_LIMIT_RESUME_VERIFY_SLEEP=0 "$ROOT/bin/fm-limit-resume.sh" busy-again 2>&1) && rc=0 || rc=$?
+  [ "$rc" = 0 ] || fail "a worker visibly working again was counted as an unresumed park (exit $rc): $out"
+  [ ! -e "$state/busy-again.limit-park" ] || fail "the park record survived a worker that came back"
+  pass "a worker that is visibly working again counts as resumed even before its banner scrolls away"
+}
+
+test_limit_resume_refuses_before_the_reset_without_spending_an_attempt() {
+  local dir state fakebin capture_file send_log window out rc
+  dir=$(make_case limit-resume-early); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"; send_log="$dir/send.log"
+  window="test:fm-early"
+  limit_parked_pane "$(reset_footer_at $(( $(date +%s) + 7200 )))" > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/early.meta"
+  make_fake_send "$fakebin" "$capture_file"
+
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_HOME="$dir" FM_SEND_BIN="$fakebin/fm-send.sh" FM_FAKE_SEND_LOG="$send_log" \
+    FM_LIMIT_RESUME_VERIFY_SLEEP=0 "$ROOT/bin/fm-limit-resume.sh" early 2>&1) && rc=0 || rc=$?
+  [ "$rc" = 4 ] || fail "a resume before the reset was not refused as not-yet-due (exit $rc): $out"
+  [ ! -s "$send_log" ] || fail "a resume before the reset still steered the worker: $(cat "$send_log")"
+  [ "$(fm_limit_park_get "$state" early attempts)" = "" ] || fail "a refused early resume spent part of the attempt budget"
+  grep -F 'Usage limit reached' "$capture_file" >/dev/null || fail "a refused early resume disturbed the pane"
+  pass "a resume attempted before the reset sends nothing and spends no attempt"
+}
+
+test_limit_resume_reports_a_message_that_did_not_land_and_stops_at_the_budget() {
+  local dir state fakebin capture_file send_log window out rc n
+  dir=$(make_case limit-resume-unverified); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"; send_log="$dir/send.log"
+  window="test:fm-unverified"
+  limit_parked_pane 'Your usage limit has reset · press enter to continue' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/unverified.meta"
+  # A send that succeeds but leaves the pane parked: the exact shape a
+  # keystroke-only resume would have produced, and the reason landing is read
+  # back from the pane instead of taken from the send's exit status.
+  make_fake_send "$fakebin" ""
+
+  n=1
+  while [ "$n" -le 3 ]; do
+    out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_HOME="$dir" FM_SEND_BIN="$fakebin/fm-send.sh" FM_FAKE_SEND_LOG="$send_log" \
+      FM_LIMIT_RESUME_VERIFY_TRIES=1 FM_LIMIT_RESUME_VERIFY_SLEEP=0 "$ROOT/bin/fm-limit-resume.sh" unverified 2>&1) && rc=0 || rc=$?
+    [ "$rc" = 6 ] || fail "attempt $n did not report an unverified resume (exit $rc): $out"
+    [ "$(fm_limit_park_get "$state" unverified attempts)" = "$n" ] || fail "attempt $n was not counted"
+    n=$((n + 1))
+  done
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_HOME="$dir" FM_SEND_BIN="$fakebin/fm-send.sh" FM_FAKE_SEND_LOG="$send_log" \
+    FM_LIMIT_RESUME_VERIFY_TRIES=1 FM_LIMIT_RESUME_VERIFY_SLEEP=0 "$ROOT/bin/fm-limit-resume.sh" unverified 2>&1) && rc=0 || rc=$?
+  [ "$rc" = 5 ] || fail "the attempt budget did not stop a resume that keeps not landing (exit $rc): $out"
+  [ "$(grep -c . "$send_log")" = 3 ] || fail "the budget did not bound how often the worker was steered: $(cat "$send_log")"
+  pass "an unverified resume is reported, counted, and bounded by its attempt budget"
+}
+
 test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
@@ -1863,3 +2232,13 @@ test_heartbeat_backstop_surfaces_unsurfaced_status
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
+test_limit_park_classifier
+test_limit_parked_worker_is_absorbed_until_its_reset
+test_limit_parked_worker_is_resumed_once_the_limit_resets
+test_limit_parked_countdown_pane_is_still_resumed
+test_limit_parked_resume_that_never_lands_is_reported_once
+test_wedged_worker_still_escalates_and_is_never_auto_resumed
+test_limit_resume_sends_a_real_message_and_verifies_it_landed
+test_limit_resume_accepts_a_worker_that_is_visibly_working_again
+test_limit_resume_refuses_before_the_reset_without_spending_an_attempt
+test_limit_resume_reports_a_message_that_did_not_land_and_stops_at_the_budget
