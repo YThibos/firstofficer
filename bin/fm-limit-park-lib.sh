@@ -89,7 +89,8 @@ _fm_limit_park_date() {  # <tz> <date-argument>...
 }
 
 # Convert a wall-clock <hour>:<minute> in <tz> (empty for the machine's own
-# zone) to the first epoch second at or after <anchor> that shows that time.
+# zone) to the epoch second on the anchor's day that shows that time, rolled a
+# day forward only when that keeps it inside the bounded maximum wait.
 # Prints nothing when the platform's date cannot express the conversion, which
 # leaves the caller with an unknown reset rather than a wrong one.
 _fm_limit_park_wallclock_epoch() {  # <anchor> <hour> <minute> <tz>
@@ -102,9 +103,21 @@ _fm_limit_park_wallclock_epoch() {  # <anchor> <hour> <minute> <tz>
     || epoch=$(_fm_limit_park_date "$tz" -j -f '%Y-%m-%d %H:%M' "$stamp" +%s 2>/dev/null) \
     || return 0
   case "$epoch" in ''|*[!0-9]*) return 0 ;; esac
-  # The banner always names a reset ahead of the moment it appeared, so a time
-  # that already passed on the anchor's day belongs to the next one.
-  [ "$epoch" -lt "$anchor" ] && epoch=$((epoch + 86400))
+  # The anchor is the moment the WATCHER FIRST SAW the footer, not the moment
+  # the banner appeared - a parked footer can sit unnoticed for hours - so a
+  # named time that already passed on the anchor's day is usually a reset that
+  # has genuinely elapsed, not one a day out. Roll it forward only when the
+  # rolled reading still lands inside the bounded maximum wait, which is what
+  # keeps a midnight crossing working ("resets 00:30" first seen at 23:50 is 40
+  # minutes ahead). Otherwise take the reading as it stands, so the reset reads
+  # as already past and the worker is due now: rolling the motivating
+  # 2026-09-03 case (a banner naming 11:10 whose footer was first seen at 12:44)
+  # a full day forward would leave it waiting on the 6h backstop, which is the
+  # failure this work exists to remove.
+  if [ "$epoch" -lt "$anchor" ] \
+    && [ "$((epoch + 86400))" -le "$((anchor + FM_LIMIT_PARK_MAX_WAIT))" ]; then
+    epoch=$((epoch + 86400))
+  fi
   printf '%s' "$epoch"
 }
 
@@ -147,7 +160,7 @@ fm_limit_park_reset_epoch() {  # <anchor> <now> <footer>
   # "continuing automatically at 12:40pm", "resets 12:40pm (Europe/Brussels)",
   # "resets 23:10". The minutes and the meridiem are each optional.
   rest=$(printf '%s' "$footer" \
-    | sed -n 's/.*\([Rr]esets\|continuing automatically at\)[[:space:]]\{1,\}\([0-9]\{1,2\}\)\(:\([0-9]\{2\}\)\)\{0,1\}[[:space:]]*\([aApP][mM]\)\{0,1\}.*/\2 \4 \5/p')
+    | sed -nE 's/.*([Rr]esets|continuing automatically at)[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?[[:space:]]*([aApP][mM])?.*/\2 \4 \5/p')
   [ -n "${rest// /}" ] || return 0
   hour=${rest%% *}
   minute=$(printf '%s' "$rest" | cut -d' ' -f2)

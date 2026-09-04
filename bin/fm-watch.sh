@@ -169,6 +169,9 @@ FM_LIMIT_RESUME_BIN=${FM_LIMIT_RESUME_BIN:-$SCRIPT_DIR/fm-limit-resume.sh}
 # than a harness settles, so without this the whole attempt budget would be spent
 # inside one minute on a worker that simply needed longer to come back.
 FM_LIMIT_RESUME_RETRY_SECS=${FM_LIMIT_RESUME_RETRY_SECS:-300}
+# The same bounded attempt budget bin/fm-limit-resume.sh enforces, read here so
+# an exhausted park stops spawning a resume that can only refuse.
+FM_LIMIT_RESUME_MAX_ATTEMPTS=${FM_LIMIT_RESUME_MAX_ATTEMPTS:-3}
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
 # A captain-held or paused crew whose agent has confidently exited uses the same
@@ -422,7 +425,7 @@ handle_paused_stale() {  # <window> <task> <hash>
 # refusals (not parked, not reset yet) cost nothing, so a poll that arrives
 # early leaves the worker exactly as it found it.
 handle_limit_parked() {  # <window> <task> <hash> <pane-tail>
-  local win=$1 task=$2 h=$3 tail=$4 key footer now anchor last out rc reason
+  local win=$1 task=$2 h=$3 tail=$4 key footer now anchor last out rc reason attempts
   key=$(printf '%s' "$win" | tr ':/.' '___')
   footer=$(printf '%s' "$tail" | fm_limit_park_match "$(window_harness "$win")") || {
     fm_limit_park_clear "$STATE" "$task"
@@ -448,6 +451,14 @@ handle_limit_parked() {  # <window> <task> <hash> <pane-tail>
       fi
       ;;
   esac
+  # Already reported and out of attempts: only a human can free this worker, so
+  # keep absorbing the pane without spawning a resume that can do nothing but
+  # refuse, poll after poll.
+  attempts=$(fm_limit_park_attempts "$STATE" "$task")
+  if [ -e "$STATE/.limit-surfaced-$key" ] \
+    && [ "$attempts" -ge "$FM_LIMIT_RESUME_MAX_ATTEMPTS" ]; then
+    return 0
+  fi
   out=$("$FM_LIMIT_RESUME_BIN" "$task" 2>&1) && rc=0 || rc=$?
   case "$rc" in
     0)

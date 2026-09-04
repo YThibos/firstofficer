@@ -1834,6 +1834,12 @@ limit_parked_pane() {  # <footer>
   printf '\xe2\x8f\xba Read(bin/fm-watch.sh)\n  \xe2\x8e\xbf  Read 1097 lines\n\n\xe2\x8f\xba Now wiring the handler into the poll loop.\n\n  %s\n' "$1"
 }
 
+# A fixed local wall-clock moment as an epoch second, so the reset-time cases
+# below are built from stated anchors rather than the wall clock.
+fixed_local_epoch() {  # <YYYY-MM-DD HH:MM>
+  date -d "$1" +%s 2>/dev/null || date -j -f '%Y-%m-%d %H:%M' "$1" +%s
+}
+
 # A parked footer whose named reset falls at <epoch>.
 reset_footer_at() {  # <epoch>
   local at
@@ -1845,7 +1851,7 @@ reset_footer_at() {  # <epoch>
 # have to appear, which harnesses have a registered signature at all, and when
 # the named reset has passed.
 test_limit_park_classifier() {
-  local now future
+  local now future seen
   now=$(date +%s)
 
   limit_parked_pane 'Usage limit reached · continuing automatically at 12:40pm · esc to cancel' | fm_limit_park_match claude >/dev/null \
@@ -1890,6 +1896,22 @@ test_limit_park_classifier() {
     && fail "a footer naming no reset time became due immediately"
   fm_limit_park_due "$((now - FM_LIMIT_PARK_MAX_WAIT))" "$now" 'Usage limit reached · continuing automatically when it resets · esc to cancel' \
     || fail "the bounded maximum wait did not make an unreadable reset time due"
+  # A footer that sat unnoticed for hours: the anchor is the moment the WATCHER
+  # FIRST SAW it, not the moment the banner appeared, so a named reset already
+  # behind the anchor is due now rather than a day out - the exact 2026-09-03
+  # case this work exists to remove. Fixed anchors, so neither case flakes near
+  # midnight.
+  seen=$(fixed_local_epoch '2026-09-03 12:44')
+  fm_limit_park_due "$seen" "$((seen + 60))" 'Usage limit reached · continuing automatically at 11:10 · esc to cancel' \
+    || fail "a reset that had already passed when the footer was first seen was not reported due"
+  # The midnight crossing still rolls forward, because the rolled reading lands
+  # inside the bounded maximum wait.
+  seen=$(fixed_local_epoch '2026-09-03 23:50')
+  [ "$(fm_limit_park_reset_epoch "$seen" "$seen" 'Usage limit reached · resets 00:30 · esc to cancel')" \
+    = "$(fixed_local_epoch '2026-09-04 00:30')" ] \
+    || fail "a reset just past midnight was not resolved to the next day"
+  fm_limit_park_due "$seen" "$((seen + 60))" 'Usage limit reached · resets 00:30 · esc to cancel' \
+    && fail "a reset forty minutes past midnight was reported due before it arrived"
   pass "the parked-footer reader recognises the state and its reset time, and only in the footer band"
 }
 
