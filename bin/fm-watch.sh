@@ -40,6 +40,12 @@
 #                          count, and demand-deep-inspection marker, for human
 #                          inspection only - never an automatic interrupt,
 #                          signal, or restart of the worker or its tool process.
+#                          A pane showing its harness's registered
+#                          parked-by-usage-limit footer is none of the above: it
+#                          is absorbed until that limit resets, then resumed with
+#                          a real message through bin/fm-limit-resume.sh, and
+#                          surfaces (once) only when that resume could not be
+#                          verified to land. See handle_limit_parked.
 #   check: <script>: <out> authenticated check output, always actionable
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
@@ -70,6 +76,10 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
+# The one owner of the parked-by-usage-limit pane signature, its reset time, and
+# the durable record the resume command keys off.
+# shellcheck source=bin/fm-limit-park-lib.sh
+. "$SCRIPT_DIR/fm-limit-park-lib.sh"
 # Parent-owned secondmate missed-report guards: durable pending-reply
 # expectations created by fm-send on marked secondmate requests. The tick is
 # cheap when no records exist and never scrapes secondmate conversation.
@@ -149,6 +159,19 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # turn-ended and resets the age. Set generously above any legitimate interval
 # between completed turns, including long tool calls, builds, or test runs.
 BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
+# A worker parked by its own usage limit resumes only when a real message
+# reaches it after the reset, so the watcher schedules that resume itself rather
+# than surfacing a pane nobody can tell apart from a wedge. This is the command
+# that performs and verifies it; see bin/fm-limit-resume.sh for the contract and
+# the exit statuses read below.
+FM_LIMIT_RESUME_BIN=${FM_LIMIT_RESUME_BIN:-$SCRIPT_DIR/fm-limit-resume.sh}
+# Seconds between resume attempts on the same park. The watcher polls far faster
+# than a harness settles, so without this the whole attempt budget would be spent
+# inside one minute on a worker that simply needed longer to come back.
+FM_LIMIT_RESUME_RETRY_SECS=${FM_LIMIT_RESUME_RETRY_SECS:-300}
+# The same bounded attempt budget bin/fm-limit-resume.sh enforces, read here so
+# an exhausted park stops spawning a resume that can only refuse.
+FM_LIMIT_RESUME_MAX_ATTEMPTS=${FM_LIMIT_RESUME_MAX_ATTEMPTS:-3}
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
 # A captain-held or paused crew whose agent has confidently exited uses the same
@@ -376,6 +399,101 @@ handle_paused_stale() {  # <window> <task> <hash>
     wake "$reason"
   fi
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
+}
+
+# Absorb a worker parked by its OWN usage limit, and resume it once that limit
+# has reset.
+#
+# Such a pane is stable, idle, unbusy, and backed by no running pipeline - the
+# exact shape of a stopped or wedged worker - so before this it was surfaced
+# repeatedly or absorbed as noise, and only a manual steer ever restarted it.
+# Two workers lost over three hours each to that on 2026-09-03. What tells the
+# two apart is in the pane: the harness names the limit, and usually its reset
+# time. Only a pane carrying that registered footer takes this path, so a
+# genuine wedge is untouched and keeps escalating exactly as before.
+#
+# Returns 0 when this poll is fully handled (the worker is parked), and 1 when
+# it is not parked and the ordinary staleness path should decide - which also
+# retires the park record, so a worker that came back, however it got back,
+# never carries a stale anchor or a spent attempt budget into its next park.
+# Being parked is not being wedged, so the pane's wedge timer and escalation
+# count are retired and its stale suppressor is taken over while the park lasts.
+#
+# The resume itself, its refusals, its attempt budget, and the verification that
+# it landed all belong to bin/fm-limit-resume.sh; this only decides when to ask.
+# The attempt budget is spent only by attempts that were actually made: its
+# refusals (not parked, not reset yet) cost nothing, so a poll that arrives
+# early leaves the worker exactly as it found it.
+handle_limit_parked() {  # <window> <task> <hash> <pane-tail>
+  local win=$1 task=$2 h=$3 tail=$4 key footer now anchor last out rc reason attempts
+  key=$(printf '%s' "$win" | tr ':/.' '___')
+  footer=$(printf '%s' "$tail" | fm_limit_park_match "$(window_harness "$win")") || {
+    fm_limit_park_clear "$STATE" "$task"
+    rm -f "$STATE/.limit-surfaced-$key"
+    return 1
+  }
+  now=$(date +%s)
+  anchor=$(fm_limit_park_anchor "$STATE" "$task" "$now")
+  case "$anchor" in ''|*[!0-9]*) anchor=$now ;; esac
+  printf '%s' "$h" > "$STATE/.stale-$key"
+  rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
+  if ! fm_limit_park_due "$anchor" "$now" "$footer"; then
+    triage_log "absorbed stale (usage limit, waiting for the reset): $win"
+    return 0
+  fi
+  last=$(fm_limit_park_get "$STATE" "$task" last-attempt)
+  case "$last" in
+    ''|*[!0-9]*) : ;;
+    *)
+      if [ "$(( now - last ))" -lt "$FM_LIMIT_RESUME_RETRY_SECS" ]; then
+        triage_log "absorbed stale (usage limit, waiting out the resume retry interval): $win"
+        return 0
+      fi
+      ;;
+  esac
+  # Already reported and out of attempts: only a human can free this worker, so
+  # keep absorbing the pane without spawning a resume that can do nothing but
+  # refuse, poll after poll.
+  attempts=$(fm_limit_park_attempts "$STATE" "$task")
+  if [ -e "$STATE/.limit-surfaced-$key" ] \
+    && [ "$attempts" -ge "$FM_LIMIT_RESUME_MAX_ATTEMPTS" ]; then
+    return 0
+  fi
+  out=$("$FM_LIMIT_RESUME_BIN" "$task" 2>&1) && rc=0 || rc=$?
+  case "$rc" in
+    0)
+      rm -f "$STATE/.limit-surfaced-$key"
+      triage_log "resumed after a usage-limit reset: $win ($out)"
+      return 0
+      ;;
+    3)
+      # The footer went away between this poll's capture and the resume's own
+      # read: the worker came back on its own, so hand the pane back.
+      fm_limit_park_clear "$STATE" "$task"
+      rm -f "$STATE/.limit-surfaced-$key"
+      return 1
+      ;;
+    4)
+      triage_log "absorbed stale (usage limit not reset yet): $win"
+      return 0
+      ;;
+    2)
+      # The endpoint could not be resolved at all, which is not a usage-limit
+      # question. Let the ordinary stale path report it.
+      return 1
+      ;;
+  esac
+  # Sent and unverified, or out of attempts: the one case a human must see.
+  # Surfaced once per park, because repeating it every poll would bury the pane
+  # it is about.
+  if [ ! -e "$STATE/.limit-surfaced-$key" ]; then
+    reason="stale: $win (usage limit reset but the worker did not resume: $out)"
+    fm_wake_append stale "$win" "$reason" || exit 1
+    : > "$STATE/.limit-surfaced-$key"
+    wake "$reason"
+  fi
+  triage_log "absorbed stale (usage-limit resume already reported): $win"
+  return 0
 }
 
 clear_pause_state() {  # <window>
@@ -923,6 +1041,15 @@ EOF
     # content cannot suppress stale detection. Read once per window per poll and
     # reused below so a busy verdict is consistent within one cycle.
     if window_is_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
+    # Decided before any staleness bookkeeping, because a parked footer that
+    # counts down towards its reset rewrites the pane every minute: such a pane
+    # never holds one hash long enough to be called stale, so a decision taken
+    # inside the stale branch would never be reached on the very panes this
+    # exists for. An idle pane is the only precondition - a busy one is working
+    # by definition, whatever a leftover banner above the footer says.
+    if [ "$busy_now" -ne 0 ] && handle_limit_parked "$w" "$task" "$h" "$tail40"; then
+      continue
+    fi
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"

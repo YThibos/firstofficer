@@ -22,6 +22,9 @@ A concurrent replacement remains armed, every non-merged or invalid observation 
 `bin/fm-pr-lib.sh` owns the receipt format and strict identity mechanics, while `bin/fm-watch.sh` owns queue-before-retirement ordering.
 No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step attributed to that crew's current code or a backend busy signature.
 A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
+A worker whose own harness parked it on a usage limit is a third case, told apart from both by the footer that harness renders: `bin/fm-limit-park-lib.sh` owns the per-harness signature and the reset time read from it, and a harness with no verified signature never classifies as parked.
+Such a pane is absorbed until that reset, then resumed by `bin/fm-limit-resume.sh`, which sends a real message rather than a keystroke, because a bare Enter does not resume such a worker, and reads the pane back to confirm the resume landed instead of trusting the send.
+It refuses before the reset and on a pane that is no longer parked, spending none of its bounded attempt budget, and only a resume that could not be verified surfaces to the First Officer.
 For an ordinary crew that has stopped, the normal-mode watcher first surfaces one stale wake, then applies that same cadence to an unchanged `paused:` or durable `captain-held` endpoint only when the backend confidently reports its agent dead.
 Live or inconclusive liveness remains fail-open at that initial surface, and the secondmate idle-endpoint exemption is unchanged.
 Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
