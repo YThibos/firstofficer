@@ -158,6 +158,29 @@ Observed output:
 ok - Claude 2.1.219 (Claude Code) live E2E reclaimed a stale session lock through session start, completed two tokenless Stop-owned rewake cycles, and preserved the competing-live-owner boundary
 ```
 
+The forced stow before the usage budget runs out was validated live on 2026-09-14 with tmux 3.4, against isolated primary-shaped homes and a real tmux server rather than a stubbed `capture-pane`.
+The approaching wording is the literal read out of the shipped Claude Code 2.1.270 binary that day, `Approaching your 5-hour usage limit` followed by its separator and `Claude will wrap up the current step.`, and the stopped state is the observed `You've hit your session limit` footer read through `bin/fm-limit-park-lib.sh`.
+A driver running inside the pane painted that wording into the pane's own visible buffer, then ran the guard so its `tmux capture-pane -t "$TMUX_PANE"` read the live pane back.
+This matters because a guard that no-ops silently cannot be proven working by absence of effect; the trigger was observed firing, not assumed.
+
+```sh
+tmux -S /tmp/fmlive-<pid>.sock new-session -d -x 200 -y 50 -n live \
+  "bash drive.sh <checkout> <workdir> <out> <socket>"
+```
+
+Observed results, one stage per line:
+
+```text
+approaching, first turn end   exit 2, stderr banner "USAGE BUDGET NEARLY SPENT - STOW NOW, BRIEFLY", naming the 5-hour window
+                              state/.turnend-limit-stow-episode = "key=claude:5-hour:live-sess-1 at=<epoch>"
+approaching, second turn end  exit 0, no output, marker unchanged (episode already claimed)
+exhausted only                exit 0, no output, marker absent
+ordinary pane                 exit 0, no output, marker absent
+approaching, outside tmux     exit 0, no output, marker absent
+```
+
+The banner deliberately never quotes the warning it matches on, so the live pass also confirms the block cannot re-trigger itself from its own output on the next capture.
+
 Current entry points:
 
 ```sh
