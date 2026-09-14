@@ -265,7 +265,7 @@ cmd_preflight() {
 }
 
 cmd_merge() {
-  local default up_branch up_head incoming branch agents_before agents_after
+  local default up_branch up_head incoming branch agents_before agents_after base
   local conflicts captain_n=0 agent_n=0 total=0 path reason merge_log merge_rc
 
   require_upstream_remote
@@ -286,7 +286,10 @@ cmd_merge() {
   up_branch=$(upstream_default_branch) \
     || die "cannot determine the $UPSTREAM_REMOTE default branch"
   up_head=$(git_repo rev-parse "$UPSTREAM_REMOTE/$up_branch")
+  base=$(git_repo merge-base HEAD "$UPSTREAM_REMOTE/$up_branch") \
+    || die "no common history with $UPSTREAM_REMOTE/$up_branch"
   incoming=$(git_repo rev-list --count "HEAD..$UPSTREAM_REMOTE/$up_branch")
+  report_declared_drift "$base"
 
   # A no-op sync reports plainly and creates no branch.
   if [ "$incoming" -eq 0 ]; then
