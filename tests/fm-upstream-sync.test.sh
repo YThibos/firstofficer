@@ -7,7 +7,8 @@
 # to, and a fork checkout that carries its own divergence. The guarantees under
 # test are the ones a wrong sync would quietly break: a no-op sync that creates
 # no branch, conflicts on the captain-decision paths never being resolved by an
-# agent, a red tree never landing, and upstream never receiving a push.
+# agent, a red tree never landing, upstream never receiving a push, and the
+# merge never touching the primary checkout a live session runs from.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -89,6 +90,16 @@ upstream_commit() {
   git -C "$tmp/fork" fetch -q upstream
 }
 
+# The isolated sync copy the script creates beside the fork's checkout.
+copy_of() { printf '%s-upstream-sync\n' "$1"; }
+
+# primary_snapshot <fork>: branch, HEAD, and working-tree status of the primary
+# checkout, so a test can prove the sync never touched it.
+primary_snapshot() {
+  printf '%s %s\n' "$(git -C "$1" symbolic-ref --short HEAD)" "$(git -C "$1" rev-parse HEAD)"
+  git -C "$1" status --porcelain --untracked-files=all
+}
+
 run_sync() {
   local fork=$1
   shift
@@ -127,6 +138,7 @@ test_nothing_upstream_is_a_plain_no_op() {
   [ -z "$branches" ] || fail "no-op merge created a sync branch: $branches"
   [ "$(git -C "$tmp/fork" symbolic-ref --short HEAD)" = main ] \
     || fail "no-op merge left the fork off its default branch"
+  assert_absent "$(copy_of "$tmp/fork")" "no-op merge created a sync copy"
   pass "nothing new upstream reports plainly and creates no branch"
 }
 
@@ -165,19 +177,24 @@ test_preflight_refuses_a_dirty_fork_without_touching_it() {
 # --- merge classification ---------------------------------------------------
 
 test_clean_merge_reports_clean_on_the_dated_branch() {
-  local tmp out
+  local tmp out copy before
   tmp=$(fm_test_tmproot fm-upstream-sync-clean)
   fixture "$tmp"
   upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  copy=$(copy_of "$tmp/fork")
+  before=$(primary_snapshot "$tmp/fork")
 
   out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
   assert_contains "$out" "sync-branch: $SYNC_BRANCH" "merge did not name today's sync branch"
+  assert_contains "$out" "sync-copy: $copy" "merge did not report where the sync copy is"
   assert_contains "$out" "merge: clean" "a non-conflicting upstream merge was not reported clean"
   assert_contains "$out" "agents-md: unchanged" "an untouched AGENTS.md was reported as changed"
-  [ "$(git -C "$tmp/fork" symbolic-ref --short HEAD)" = "$SYNC_BRANCH" ] \
-    || fail "merge did not leave the fork on the sync branch"
-  assert_present "$tmp/fork/NOTES.md" "the clean merge did not bring in the upstream change"
-  pass "a clean upstream merge lands on the dated sync branch and reports clean"
+  [ "$(git -C "$copy" symbolic-ref --short HEAD)" = "$SYNC_BRANCH" ] \
+    || fail "merge did not leave the sync copy on the sync branch"
+  assert_present "$copy/NOTES.md" "the clean merge did not bring in the upstream change"
+  [ "$before" = "$(primary_snapshot "$tmp/fork")" ] || fail "a clean merge touched the primary checkout"
+  assert_absent "$tmp/fork/NOTES.md" "the upstream change leaked into the primary checkout"
+  pass "a clean upstream merge lands on the dated sync branch in the sync copy and reports clean"
 }
 
 test_an_ordinary_conflict_is_left_for_the_agent_to_resolve() {
@@ -195,10 +212,11 @@ test_an_ordinary_conflict_is_left_for_the_agent_to_resolve() {
 }
 
 test_a_conflict_on_a_captain_decision_path_is_never_resolved_here() {
-  local tmp out unmerged
+  local tmp out unmerged copy
   tmp=$(fm_test_tmproot fm-upstream-sync-captain-conflict)
   fixture "$tmp"
   upstream_commit "$tmp" CLAUDE.md 'upstream anchor, rewritten' 'upstream rewrites the anchor'
+  copy=$(copy_of "$tmp/fork")
 
   out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
   assert_contains "$out" "conflict: CLAUDE.md captain-decision" \
@@ -207,9 +225,9 @@ test_a_conflict_on_a_captain_decision_path_is_never_resolved_here() {
     "the captain-decision conflict did not carry its reason"
   assert_contains "$out" "captain-decision=1" "the captain-decision conflict was not counted"
 
-  unmerged=$(git -C "$tmp/fork" diff --name-only --diff-filter=U)
+  unmerged=$(git -C "$copy" diff --name-only --diff-filter=U)
   assert_contains "$unmerged" "CLAUDE.md" "the anchor conflict was silently resolved"
-  assert_grep '<<<<<<<' "$tmp/fork/CLAUDE.md" "the anchor conflict markers were removed for the captain"
+  assert_grep '<<<<<<<' "$copy/CLAUDE.md" "the anchor conflict markers were removed for the captain"
   pass "a conflict on a captain-decision path is reported, never resolved"
 }
 
@@ -228,6 +246,48 @@ test_an_upstream_agents_md_change_is_flagged_for_hand_reconciliation() {
   pass "an upstream AGENTS.md change is surfaced as a captain reconciliation, even on a clean merge"
 }
 
+test_a_conflicted_merge_never_touches_the_primary_checkout() {
+  local tmp out before copy
+  tmp=$(fm_test_tmproot fm-upstream-sync-isolated)
+  fixture "$tmp"
+  upstream_commit "$tmp" tool.sh '# upstream tool, rewritten' 'upstream rewrites the tool'
+  upstream_commit "$tmp" CLAUDE.md 'upstream anchor, rewritten' 'upstream rewrites the anchor'
+  copy=$(copy_of "$tmp/fork")
+  before=$(primary_snapshot "$tmp/fork")
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  assert_contains "$out" "merge: conflicts 2" "the merge under test did not conflict: $out"
+  assert_contains "$out" "sync-copy: $copy" "a conflicted merge did not say where to resolve it"
+  assert_grep '<<<<<<<' "$copy/tool.sh" "the conflict was not left open in the sync copy"
+
+  [ "$before" = "$(primary_snapshot "$tmp/fork")" ] \
+    || fail "a conflicted merge changed the primary checkout's branch, HEAD, or working tree"
+  assert_no_grep '<<<<<<<' "$tmp/fork/tool.sh" "conflict markers reached the primary checkout"
+  assert_absent "$(git -C "$tmp/fork" rev-parse --absolute-git-dir)/MERGE_HEAD" \
+    "the primary checkout was left mid-merge"
+  pass "a conflicted merge stays in the sync copy and leaves the primary checkout untouched"
+}
+
+test_a_second_merge_refuses_while_a_sync_copy_exists() {
+  local tmp out rc=0 copy copy_head
+  tmp=$(fm_test_tmproot fm-upstream-sync-second)
+  fixture "$tmp"
+  upstream_commit "$tmp" tool.sh '# upstream tool, rewritten' 'upstream rewrites the tool'
+  copy=$(copy_of "$tmp/fork")
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  copy_head=$(git -C "$copy" rev-parse HEAD)
+
+  out=$(run_sync "$tmp/fork" merge) || rc=$?
+  expect_code 1 "$rc" "a second merge ran beside an existing sync copy"
+  assert_contains "$out" "already exists at $copy" "the second merge did not name the existing sync copy"
+  [ "$copy_head" = "$(git -C "$copy" rev-parse HEAD)" ] || fail "the second merge moved the first sync copy"
+  assert_grep '<<<<<<<' "$copy/tool.sh" "the second merge clobbered the first sync copy's open conflict"
+  [ "$(git -C "$tmp/fork" worktree list --porcelain | grep -c '^worktree ')" -eq 2 ] \
+    || fail "the second merge created another worktree"
+  pass "a second merge refuses while a sync copy exists and leaves the first alone"
+}
+
 # --- landing ----------------------------------------------------------------
 
 # upstream_refs <tmp>: a stable snapshot of every ref in the bare upstream, so a
@@ -237,31 +297,36 @@ upstream_refs() {
 }
 
 test_a_green_sync_lands_and_pushes_only_to_origin() {
-  local tmp out before_upstream after_upstream origin_main fork_main
+  local tmp out before_upstream after_upstream origin_main origin_main_before sync_tip before copy
   tmp=$(fm_test_tmproot fm-upstream-sync-land)
   fixture "$tmp"
   upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
   before_upstream=$(upstream_refs "$tmp")
+  origin_main_before=$(git -C "$tmp/origin.git" rev-parse main)
+  copy=$(copy_of "$tmp/fork")
+  before=$(primary_snapshot "$tmp/fork")
 
   out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
   assert_contains "$out" "merge: clean" "the merge under test was not clean: $out"
+  sync_tip=$(git -C "$copy" rev-parse HEAD)
 
   out=$(run_sync "$tmp/fork" land) || fail "land failed on a green clean sync: $out"
   assert_contains "$out" "validate: lint ok" "land did not run the repo's lint"
   assert_contains "$out" "validate: tests ok" "land did not run the repo's tests"
-  assert_contains "$out" "landed: main" "land did not report the default branch advancing"
+  assert_contains "$out" "landed: origin/main" "land did not report origin's default branch advancing"
 
-  [ "$(git -C "$tmp/fork" symbolic-ref --short HEAD)" = main ] \
-    || fail "land did not return the fork to its default branch"
   origin_main=$(git -C "$tmp/origin.git" rev-parse main)
-  fork_main=$(git -C "$tmp/fork" rev-parse main)
-  [ "$origin_main" = "$fork_main" ] || fail "land did not push the default branch to origin"
-  git -C "$tmp/origin.git" rev-parse --verify --quiet "$SYNC_BRANCH" >/dev/null \
+  [ "$origin_main" = "$sync_tip" ] || fail "land did not advance origin's default branch to the sync"
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$origin_main_before" "$origin_main" \
+    || fail "land moved origin's default branch by something other than a fast-forward"
+  [ "$(git -C "$tmp/origin.git" rev-parse "$SYNC_BRANCH")" = "$sync_tip" ] \
     || fail "land did not push the dated sync branch to origin"
+  [ "$before" = "$(primary_snapshot "$tmp/fork")" ] || fail "land touched the primary checkout"
+  assert_absent "$copy" "land did not remove the sync copy after landing"
 
   after_upstream=$(upstream_refs "$tmp")
   [ "$before_upstream" = "$after_upstream" ] || fail "the sync wrote to upstream"
-  pass "a green clean sync lands autonomously, pushes to origin, and never touches upstream"
+  pass "a green clean sync fast-forwards origin from the sync copy and never touches upstream or the primary checkout"
 }
 
 test_land_refuses_a_red_tree_and_pushes_nothing() {
@@ -273,7 +338,7 @@ test_land_refuses_a_red_tree_and_pushes_nothing() {
   before_upstream=$(upstream_refs "$tmp")
 
   out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
-  printf '1\n' > "$tmp/fork/.tests-rc"
+  printf '1\n' > "$(copy_of "$tmp/fork")/.tests-rc"
 
   out=$(run_sync "$tmp/fork" land) || rc=$?
   expect_code 1 "$rc" "land accepted a red tree"
@@ -285,6 +350,7 @@ test_land_refuses_a_red_tree_and_pushes_nothing() {
   git -C "$tmp/origin.git" rev-parse --verify --quiet "$SYNC_BRANCH" >/dev/null \
     && fail "a red sync still pushed the sync branch"
   [ "$before_upstream" = "$(upstream_refs "$tmp")" ] || fail "a red sync wrote to upstream"
+  assert_present "$(copy_of "$tmp/fork")" "a red sync removed the sync copy it needs fixing in"
   pass "land refuses a red tree and pushes nothing anywhere"
 }
 
@@ -293,13 +359,25 @@ test_land_refuses_a_branch_that_is_not_a_sync_branch() {
   tmp=$(fm_test_tmproot fm-upstream-sync-wrong-branch)
   fixture "$tmp"
   upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
-  git -C "$tmp/fork" checkout -q -b feat/unrelated
+  git -C "$tmp/fork" worktree add -q -b feat/unrelated "$(copy_of "$tmp/fork")"
 
   out=$(run_sync "$tmp/fork" land) || rc=$?
   expect_code 1 "$rc" "land accepted an unrelated branch"
   assert_contains "$out" "not a dated upstream-update/<date> sync branch" \
     "land did not say why the branch was rejected"
   pass "land refuses any branch that is not a dated sync branch"
+}
+
+test_land_refuses_without_a_sync_copy() {
+  local tmp out rc=0
+  tmp=$(fm_test_tmproot fm-upstream-sync-no-copy)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+
+  out=$(run_sync "$tmp/fork" land) || rc=$?
+  expect_code 1 "$rc" "land ran with no sync copy"
+  assert_contains "$out" "no upstream sync copy" "land did not say the sync copy was missing"
+  pass "land refuses when there is no sync copy to land"
 }
 
 test_land_refuses_an_unfinished_merge() {
@@ -318,18 +396,22 @@ test_land_refuses_an_unfinished_merge() {
 # --- abort ------------------------------------------------------------------
 
 test_abort_returns_to_the_default_branch_without_discarding_work() {
-  local tmp out
+  local tmp out before
   tmp=$(fm_test_tmproot fm-upstream-sync-abort)
   fixture "$tmp"
   upstream_commit "$tmp" CLAUDE.md 'upstream anchor, rewritten' 'upstream rewrites the anchor'
+  before=$(primary_snapshot "$tmp/fork")
 
   out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
   out=$(run_sync "$tmp/fork" abort) || fail "abort failed: $out"
   assert_contains "$out" "upstream merge aborted" "abort did not report undoing the merge"
-  [ "$(git -C "$tmp/fork" symbolic-ref --short HEAD)" = main ] \
-    || fail "abort did not return the fork to its default branch"
-  assert_grep 'fork anchor, replaced' "$tmp/fork/CLAUDE.md" "abort did not restore the fork's anchor"
-  pass "abort undoes an unresolved merge and returns to the default branch"
+  assert_contains "$out" "empty $SYNC_BRANCH deleted" "abort did not clean up the empty sync branch"
+  assert_absent "$(copy_of "$tmp/fork")" "abort did not remove the sync copy"
+  [ "$(git -C "$tmp/fork" worktree list --porcelain | grep -c '^worktree ')" -eq 1 ] \
+    || fail "abort left the sync copy registered as a worktree"
+  [ "$before" = "$(primary_snapshot "$tmp/fork")" ] || fail "abort left the primary checkout changed"
+  assert_grep 'fork anchor, replaced' "$tmp/fork/CLAUDE.md" "abort did not keep the fork's anchor"
+  pass "abort undoes an unresolved merge, removes the sync copy, and leaves the primary checkout as it was"
 }
 
 test_abort_keeps_a_sync_branch_that_carries_commits() {
@@ -343,6 +425,7 @@ test_abort_keeps_a_sync_branch_that_carries_commits() {
   assert_contains "$out" "carries commits" "abort did not say it kept the landed-nowhere sync branch"
   git -C "$tmp/fork" show-ref --verify --quiet "refs/heads/$SYNC_BRANCH" \
     || fail "abort deleted a sync branch that carried unlanded work"
+  assert_absent "$(copy_of "$tmp/fork")" "abort did not remove the sync copy"
   pass "abort never deletes a sync branch that carries unlanded work"
 }
 
@@ -354,9 +437,12 @@ test_clean_merge_reports_clean_on_the_dated_branch
 test_an_ordinary_conflict_is_left_for_the_agent_to_resolve
 test_a_conflict_on_a_captain_decision_path_is_never_resolved_here
 test_an_upstream_agents_md_change_is_flagged_for_hand_reconciliation
+test_a_conflicted_merge_never_touches_the_primary_checkout
+test_a_second_merge_refuses_while_a_sync_copy_exists
 test_a_green_sync_lands_and_pushes_only_to_origin
 test_land_refuses_a_red_tree_and_pushes_nothing
 test_land_refuses_a_branch_that_is_not_a_sync_branch
+test_land_refuses_without_a_sync_copy
 test_land_refuses_an_unfinished_merge
 test_abort_returns_to_the_default_branch_without_discarding_work
 test_abort_keeps_a_sync_branch_that_carries_commits

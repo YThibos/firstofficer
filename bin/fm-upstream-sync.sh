@@ -15,17 +15,31 @@
 # stashes, and never discards unlanded work: every refusal below leaves the
 # working tree exactly as it found it.
 #
+# NEVER MERGES IN THE PRIMARY CHECKOUT. A running firstmate loads its skills
+# and runs its hooks from the repo under sync, so a half-merged tree there
+# would corrupt the live session for every turn spent resolving conflicts.
+# `merge` therefore does all its work in an isolated sync copy: a git worktree
+# of this repo at <repo>-upstream-sync, a sibling directory outside the
+# primary checkout. The primary checkout's branch, HEAD, and working tree are
+# never touched, conflicts are resolved in the sync copy, and bringing the
+# primary checkout current after a landing stays /updatefirstmate's
+# fast-forward. Only one sync copy exists at a time: while it does, `merge`
+# refuses rather than creating a second or clobbering the first.
+#
 # Subcommands:
 #   preflight   Fetch upstream, report whether there is anything to sync, and
 #               print the empirical fork-drift set. Creates nothing.
-#   merge       Create upstream-update/<YYYY-MM-DD> off the default branch and
-#               merge the upstream default branch into it, classifying every
-#               conflict. A no-op sync creates no branch.
-#   land        Validate the merged sync branch and, only when validation is
-#               green, fast-forward the default branch onto it and push both to
-#               origin. This is the autonomous clean-merge path.
-#   abort       Undo an in-progress merge and return to the default branch,
-#               deleting the sync branch only when it carries no commits.
+#   merge       Create upstream-update/<YYYY-MM-DD> off the default branch in a
+#               new sync copy, merge the upstream default branch into it there,
+#               and classify every conflict. Prints `sync-copy: <path>`, the
+#               directory where conflicts are resolved and the merge committed.
+#               A no-op sync creates no branch and no sync copy.
+#   land        Validate the merged sync branch in the sync copy and, only when
+#               validation is green, push it to origin and fast-forward origin's
+#               default branch onto it, then remove the sync copy. This is the
+#               autonomous clean-merge path.
+#   abort       Undo an in-progress merge and remove the sync copy, deleting the
+#               sync branch only when it carries no commits.
 #
 # CAPTAIN-DECISION PATHS (declared below in captain_decision_paths, validated
 # empirically on every run): a conflict in one of these is never resolved by an
@@ -44,7 +58,7 @@
 # wording.
 #
 # Repo under sync: FM_ROOT_OVERRIDE, else this script's own repo root. The
-# validation `land` runs comes from that repo's own bin/ (fm-lint.sh, then
+# validation `land` runs comes from the sync copy's own bin/ (fm-lint.sh, then
 # fm-test-run.sh --all), so it always validates the tree it is about to land.
 #
 # Conflicts are an expected outcome, not a script failure: `merge` exits 0 and
@@ -56,6 +70,7 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+SYNC_COPY="$REPO-upstream-sync"
 UPSTREAM_REMOTE=upstream
 PUSH_REMOTE=origin
 SYNC_BRANCH_PREFIX=upstream-update
@@ -65,10 +80,14 @@ usage() {
 usage: fm-upstream-sync.sh <subcommand>
 
   preflight   fetch upstream and report what a sync would do (creates nothing)
-  merge       create upstream-update/<YYYY-MM-DD> and merge upstream into it
-  land        validate the merged sync branch, then land it and push to origin
-  abort       undo an in-progress merge and return to the default branch
+  merge       create upstream-update/<YYYY-MM-DD> in the sync copy and merge
+              upstream into it there; prints the sync copy's path
+  land        validate the sync copy, then push it and fast-forward origin's
+              default branch onto it; removes the sync copy
+  abort       undo an in-progress merge and remove the sync copy
 
+The sync copy is a git worktree at <repo>-upstream-sync, outside the primary
+checkout, which the sync never changes; resolve conflicts in the sync copy.
 Never pushes to upstream, never forces, never discards unlanded work.
 A conflict in one of these is a captain decision, never an agent's:
 USAGE
@@ -79,6 +98,7 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 refuse() { printf '%s: refused - %s\n' "$1" "$2" >&2; exit 1; }
 
 git_repo() { git -C "$REPO" "$@"; }
+git_copy() { git -C "$SYNC_COPY" "$@"; }
 
 # The one push chokepoint. Anything but origin is a bug, and upstream in
 # particular is unpushable by design, so refuse before git ever runs.
@@ -87,7 +107,7 @@ push_remote() {
   shift
   [ "$remote" = "$PUSH_REMOTE" ] \
     || die "refusing to push to '$remote'; this script pushes only to $PUSH_REMOTE"
-  git_repo push "$remote" "$@"
+  git_copy push "$remote" "$@"
 }
 
 # Declared captain-decision paths, one tab-separated "<path><TAB><reason>" per
@@ -149,16 +169,38 @@ upstream_default_branch() {
 
 sync_branch_name() { printf '%s/%s\n' "$SYNC_BRANCH_PREFIX" "$(date +%Y-%m-%d)"; }
 
-current_branch() { git_repo symbolic-ref --quiet --short HEAD 2>/dev/null || printf '\n'; }
+is_sync_branch() {
+  case "$1" in
+    "$SYNC_BRANCH_PREFIX"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# current_branch [dir]: the checked-out branch of the primary checkout, or of
+# the given directory.
+current_branch() { git -C "${1:-$REPO}" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '\n'; }
 
 working_tree_dirty() {
-  [ -n "$(git_repo status --porcelain 2>/dev/null | head -1)" ]
+  [ -n "$(git -C "${1:-$REPO}" status --porcelain 2>/dev/null | head -1)" ]
 }
 
 # --absolute-git-dir, because `git -C <repo> rev-parse --git-dir` answers
-# relative to <repo> and would be read against this script's own directory.
+# relative to <repo> and would be read against this script's own directory. In
+# the sync copy it resolves to that worktree's own git dir, as it must.
 merge_in_progress() {
-  [ -e "$(git_repo rev-parse --absolute-git-dir)/MERGE_HEAD" ]
+  [ -e "$(git -C "${1:-$REPO}" rev-parse --absolute-git-dir)/MERGE_HEAD" ]
+}
+
+# The sync copy counts only when it is a worktree of this very repo, so a
+# stray directory at that path is never merged into, landed, or removed.
+require_sync_copy() {
+  local cmd=$1 mine theirs
+  [ -e "$SYNC_COPY" ] \
+    || refuse "$cmd" "no upstream sync copy at $SYNC_COPY; run 'merge' first"
+  mine=$(git_repo rev-parse --path-format=absolute --git-common-dir)
+  theirs=$(git_copy rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [ "$mine" = "$theirs" ] \
+    || refuse "$cmd" "$SYNC_COPY is not a worktree of $REPO; move it aside by hand"
 }
 
 require_upstream_remote() {
@@ -202,15 +244,15 @@ report_agents_md() {
   fi
 }
 
-# The repo's own validation, run from the repo being landed rather than from
-# this script's checkout, so `land` can never green-light a different tree.
+# The sync copy's own validation, run from the tree being landed rather than
+# from this script's checkout, so `land` can never green-light a different tree.
 run_validation() {
-  if ! ( cd "$REPO" && "$REPO/bin/fm-lint.sh" ); then
+  if ! ( cd "$SYNC_COPY" && "$SYNC_COPY/bin/fm-lint.sh" ); then
     printf 'validate: lint failed\n'
     return 1
   fi
   printf 'validate: lint ok\n'
-  if ! ( cd "$REPO" && "$REPO/bin/fm-test-run.sh" --all ); then
+  if ! ( cd "$SYNC_COPY" && "$SYNC_COPY/bin/fm-test-run.sh" --all ); then
     printf 'validate: tests failed\n'
     return 1
   fi
@@ -271,14 +313,10 @@ cmd_merge() {
   require_upstream_remote
   default=$(default_branch) \
     || die "cannot determine this fork's default branch in $REPO"
-  if merge_in_progress; then
-    refuse merge "a merge is already in progress in $REPO; finish it or run 'abort'"
-  fi
-  if [ "$(current_branch)" != "$default" ]; then
-    refuse merge "$REPO is on '$(current_branch)', expected the default branch '$default'"
-  fi
-  if working_tree_dirty; then
-    refuse merge "$REPO has uncommitted changes; commit or set them aside first"
+  git_repo show-ref --verify --quiet "refs/heads/$default" \
+    || die "no local '$default' branch in $REPO to base the sync on"
+  if [ -e "$SYNC_COPY" ]; then
+    refuse merge "an upstream sync copy already exists at $SYNC_COPY; land or abort it first"
   fi
 
   git_repo fetch --quiet "$UPSTREAM_REMOTE" \
@@ -286,12 +324,12 @@ cmd_merge() {
   up_branch=$(upstream_default_branch) \
     || die "cannot determine the $UPSTREAM_REMOTE default branch"
   up_head=$(git_repo rev-parse "$UPSTREAM_REMOTE/$up_branch")
-  base=$(git_repo merge-base HEAD "$UPSTREAM_REMOTE/$up_branch") \
+  base=$(git_repo merge-base "$default" "$UPSTREAM_REMOTE/$up_branch") \
     || die "no common history with $UPSTREAM_REMOTE/$up_branch"
-  incoming=$(git_repo rev-list --count "HEAD..$UPSTREAM_REMOTE/$up_branch")
+  incoming=$(git_repo rev-list --count "$default..$UPSTREAM_REMOTE/$up_branch")
   report_declared_drift "$base"
 
-  # A no-op sync reports plainly and creates no branch.
+  # A no-op sync reports plainly and creates no branch and no sync copy.
   if [ "$incoming" -eq 0 ]; then
     printf 'up-to-date: yes\n'
     printf 'merge: nothing to sync; %s/%s is already merged, no branch created\n' \
@@ -304,28 +342,31 @@ cmd_merge() {
     if [ "$(git_repo rev-parse "$branch")" != "$(git_repo rev-parse "$default")" ]; then
       refuse merge "$branch already exists and carries work; land, abort, or rename it first"
     fi
-    git_repo checkout --quiet "$branch"
+    git_repo worktree add --quiet "$SYNC_COPY" "$branch" \
+      || die "could not create the sync copy at $SYNC_COPY"
   else
-    git_repo checkout --quiet -b "$branch"
+    git_repo worktree add --quiet -b "$branch" "$SYNC_COPY" "$default" \
+      || die "could not create the sync copy at $SYNC_COPY"
   fi
 
-  agents_before=$(git_repo rev-parse "HEAD:AGENTS.md" 2>/dev/null || printf 'absent\n')
+  agents_before=$(git_copy rev-parse "HEAD:AGENTS.md" 2>/dev/null || printf 'absent\n')
 
   printf 'sync-branch: %s\n' "$branch"
+  printf 'sync-copy: %s\n' "$SYNC_COPY"
   printf 'merged-from: %s/%s %s\n' "$UPSTREAM_REMOTE" "$up_branch" "$up_head"
 
-  merge_log=$(git_repo merge --no-edit "$UPSTREAM_REMOTE/$up_branch" 2>&1) && merge_rc=0 || merge_rc=$?
+  merge_log=$(git_copy merge --no-edit "$UPSTREAM_REMOTE/$up_branch" 2>&1) && merge_rc=0 || merge_rc=$?
   if [ "$merge_rc" -eq 0 ]; then
-    agents_after=$(git_repo rev-parse "HEAD:AGENTS.md" 2>/dev/null || printf 'absent\n')
+    agents_after=$(git_copy rev-parse "HEAD:AGENTS.md" 2>/dev/null || printf 'absent\n')
     report_agents_md "$agents_before" "$agents_after"
     printf 'merge: clean\n'
     return 0
   fi
 
-  conflicts=$(git_repo diff --name-only --diff-filter=U)
+  conflicts=$(git_copy diff --name-only --diff-filter=U)
   if [ -z "$conflicts" ]; then
     printf '%s\n' "$merge_log" >&2
-    refuse merge "the merge failed without conflicts; inspect $REPO by hand"
+    refuse merge "the merge failed without conflicts; inspect $SYNC_COPY by hand"
   fi
   while IFS= read -r path; do
     [ -n "$path" ] || continue
@@ -346,6 +387,7 @@ EOF
   report_agents_md "$agents_before" "$agents_after"
   printf 'merge: conflicts %s captain-decision=%s agent-resolve=%s\n' \
     "$total" "$captain_n" "$agent_n"
+  printf 'merge: resolve and commit in %s, then run land\n' "$SYNC_COPY"
   return 0
 }
 
@@ -355,26 +397,25 @@ cmd_land() {
   require_upstream_remote
   default=$(default_branch) \
     || die "cannot determine this fork's default branch in $REPO"
-  branch=$(current_branch)
+  require_sync_copy land
+  branch=$(current_branch "$SYNC_COPY")
 
-  case "$branch" in
-    "$SYNC_BRANCH_PREFIX"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
-    *) refuse land "$REPO is on '$branch', not a dated $SYNC_BRANCH_PREFIX/<date> sync branch" ;;
-  esac
-  if merge_in_progress; then
+  is_sync_branch "$branch" \
+    || refuse land "$SYNC_COPY is on '$branch', not a dated $SYNC_BRANCH_PREFIX/<date> sync branch"
+  if merge_in_progress "$SYNC_COPY"; then
     refuse land "the upstream merge is still in progress; resolve it and commit before landing"
   fi
-  if working_tree_dirty; then
-    refuse land "$REPO has uncommitted changes; commit the resolved merge before landing"
+  if working_tree_dirty "$SYNC_COPY"; then
+    refuse land "$SYNC_COPY has uncommitted changes; commit the resolved merge before landing"
   fi
 
   up_branch=$(upstream_default_branch) \
     || die "cannot determine the $UPSTREAM_REMOTE default branch"
   up_head=$(git_repo rev-parse "$UPSTREAM_REMOTE/$up_branch")
-  if ! git_repo merge-base --is-ancestor "$up_head" HEAD; then
+  if ! git_copy merge-base --is-ancestor "$up_head" HEAD; then
     refuse land "$branch does not contain $UPSTREAM_REMOTE/$up_branch; it is not a completed sync"
   fi
-  if ! git_repo merge-base --is-ancestor "$default" HEAD; then
+  if ! git_copy merge-base --is-ancestor "$default" HEAD; then
     refuse land "$default is not an ancestor of $branch; rebuild the sync on the current $default"
   fi
   # Cheap checks all happen before validation, so a stale sync fails in seconds
@@ -382,7 +423,7 @@ cmd_land() {
   git_repo fetch --quiet "$PUSH_REMOTE" \
     || die "could not fetch $PUSH_REMOTE; check network access and the remote URL"
   if git_repo show-ref --verify --quiet "refs/remotes/$PUSH_REMOTE/$default" \
-    && ! git_repo merge-base --is-ancestor "$PUSH_REMOTE/$default" HEAD; then
+    && ! git_copy merge-base --is-ancestor "$PUSH_REMOTE/$default" HEAD; then
     refuse land "$PUSH_REMOTE/$default has moved past this sync; rebuild it on the current $default"
   fi
 
@@ -391,46 +432,58 @@ cmd_land() {
     refuse land "validation is red; nothing was landed or pushed"
   fi
 
-  before=$(git_repo rev-parse --short "$default")
-  push_remote "$PUSH_REMOTE" "$branch:refs/heads/$branch"
-  git_repo checkout --quiet "$default"
-  git_repo merge --ff-only --quiet "$branch"
-  push_remote "$PUSH_REMOTE" "$default:refs/heads/$default"
-  after=$(git_repo rev-parse --short "$default")
+  # Pushing the sync branch onto origin's default branch without force is a
+  # fast-forward or a rejection, never a rewrite. The primary checkout is not
+  # touched; /updatefirstmate fast-forwards it from origin afterwards.
+  before=$(git_repo rev-parse --short "refs/remotes/$PUSH_REMOTE/$default" 2>/dev/null || printf 'none\n')
+  push_remote "$PUSH_REMOTE" --quiet "$branch:refs/heads/$branch"
+  push_remote "$PUSH_REMOTE" --quiet "$branch:refs/heads/$default"
+  after=$(git_copy rev-parse --short HEAD)
 
-  printf 'landed: %s %s..%s\n' "$default" "$before" "$after"
+  printf 'landed: %s/%s %s..%s\n' "$PUSH_REMOTE" "$default" "$before" "$after"
   printf 'pushed: %s %s and %s\n' "$PUSH_REMOTE" "$branch" "$default"
+  # The sync branch now lives on origin, so the disposable copy can go; a plain
+  # remove refuses rather than discarding anything unexpected.
+  if git_repo worktree remove "$SYNC_COPY"; then
+    printf 'sync-copy: removed %s\n' "$SYNC_COPY"
+  else
+    printf 'sync-copy: kept %s; remove it by hand once inspected\n' "$SYNC_COPY"
+  fi
 }
 
 cmd_abort() {
-  local default branch
+  local branch
 
-  default=$(default_branch) \
+  default_branch >/dev/null \
     || die "cannot determine this fork's default branch in $REPO"
-  branch=$(current_branch)
+  if [ ! -e "$SYNC_COPY" ]; then
+    printf 'abort: no upstream sync copy at %s; nothing to undo\n' "$SYNC_COPY"
+    return 0
+  fi
+  require_sync_copy abort
+  branch=$(current_branch "$SYNC_COPY")
 
-  if merge_in_progress; then
-    git_repo merge --abort
+  if merge_in_progress "$SYNC_COPY"; then
+    git_copy merge --abort
     printf 'abort: upstream merge aborted\n'
   fi
-  if working_tree_dirty; then
-    refuse abort "$REPO still has uncommitted changes; nothing was discarded"
+  if working_tree_dirty "$SYNC_COPY"; then
+    refuse abort "$SYNC_COPY still has uncommitted changes; nothing was discarded"
   fi
 
-  case "$branch" in
-    "$SYNC_BRANCH_PREFIX"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
-    *)
-      printf 'abort: %s is not a dated %s/<date> sync branch; left as is\n' "$branch" "$SYNC_BRANCH_PREFIX"
-      return 0
-      ;;
-  esac
+  git_repo worktree remove "$SYNC_COPY" \
+    || refuse abort "could not remove the sync copy at $SYNC_COPY; nothing was discarded"
+  printf 'abort: sync copy %s removed\n' "$SYNC_COPY"
 
-  git_repo checkout --quiet "$default"
+  if ! is_sync_branch "$branch"; then
+    printf 'abort: %s is not a dated %s/<date> sync branch; left as is\n' "$branch" "$SYNC_BRANCH_PREFIX"
+    return 0
+  fi
   # -d, never -D: a sync branch that carries commits is unlanded work and stays.
   if git_repo branch -d "$branch" >/dev/null 2>&1; then
-    printf 'abort: back on %s, empty %s deleted\n' "$default" "$branch"
+    printf 'abort: empty %s deleted\n' "$branch"
   else
-    printf 'abort: back on %s, %s kept because it carries commits\n' "$default" "$branch"
+    printf 'abort: %s kept because it carries commits\n' "$branch"
   fi
 }
 
