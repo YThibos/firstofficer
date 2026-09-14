@@ -73,6 +73,35 @@ Grok's project hook requires the checkout to be trusted with `/hooks-trust` or l
 If a passive adapter cannot invoke its SDK, or the Grok legacy fallback cannot find `grok` or a session id, the next pull-based `fm-guard.sh` call reports the problem.
 That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it always points to the active harness protocol rather than embedding another repair command.
 
+## Forced stow before the usage budget runs out
+
+The same `Stop` event is the last reliable moment to react to Claude's approaching-limit warning, so `--claude` mode also reads its own pane for that warning and blocks once per usage window to force a brief knowledge stow.
+This is deliberately not a second hook: adding a competing turn-end registration would give the primary two independent blockers with no shared block budget.
+Detection and the once-per-episode ledger live in `bin/fm-limit-warning-lib.sh`; only the blocking lives in the guard.
+The split exists because the library is pure pane-text classification plus one ledger, with no dependency on a `Stop` payload, a supervision predicate, or a blocking mechanism, so it is testable directly against captured pane text and reusable by a future crewmate-side reader of the same warnings.
+
+Claude Code shows two distinct end-of-window states and only the first is actionable.
+`Approaching your <window> usage limit` means the session can still run one short step, and it is the only trigger.
+`You've hit your session limit ... Press ⏎ to continue after reset` means the session has already stopped, so it is detected only to suppress a stow that could no longer run, and it wins when both are visible.
+That stopped state is read through `bin/fm-limit-park-lib.sh`, which already owns Claude's stopped-footer signature for parked workers, so the two features cannot drift on what "stopped" means.
+
+The forced stow runs before the supervision predicate because it must fire even when supervision is perfectly healthy, which is that predicate's normal silent exit.
+It never replaces the blind-turn block: it claims its episode and blocks once, and the next turn end reaches the supervision predicate normally.
+It contributes at most one block per usage window on top of the re-block budget's default 3, so the pair stays well below Claude's 8-consecutive-block override.
+The block instruction names the window that is running out, puts writing to disk ahead of every other action, and points at the `stow` skill's "Budget nearly gone" section for the short mode rather than the full sweep.
+Its wording deliberately never quotes the warning it matches on, so the banner cannot read as the warning itself on the next pane capture.
+
+The episode marker is `state/.turnend-limit-stow-episode`, a bounded two-line overwritten file following the same shape as `bin/fm-guard.sh`'s stale-banner episode marker.
+The key differs because the approaching warning carries no reset time: it is the harness, the window descriptor the warning names, and the harness session id, and its expiry is the claim time plus the named window's own length.
+That yields exactly one stow per session per usage window and re-arms a session that outlives its own window.
+
+Every uncertain path leaves the turn alone, because a bug here must never wedge the captain's own session.
+An unsupported harness, a terminal that is not tmux, a pane that cannot be captured, an absent or unwritable episode marker, an unreadable clock, or an already-claimed episode all return "not due" silently.
+Only Claude's wording has been observed, so every other harness is a silent no-op until its exact strings are captured and pinned by a test.
+Scrollback is excluded from the capture so a warning from a previous window still in history cannot read as a live one.
+Child crewmate and scout worktrees are already outside the shared primary scope, so the forced stow inherits that exclusion rather than re-deriving it.
+`FM_TURNEND_LIMIT_STOW=0` disables the forced stow without affecting the blind-turn block.
+
 ## Compatibility limits
 
 - Child crewmate and scout worktrees are outside scope.
@@ -87,11 +116,14 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - If `jq` is removed after installation, the hook remains silent and exits 0, turn-end wakes stop, and Kimi crews fall back to idle detection.
 - Unreadable hook input remains fail-open.
 - No harness adapter uses a shell ampersand to manufacture supervision.
+- The forced stow before the usage budget runs out is Claude-only and tmux-only; every other harness and every non-tmux terminal is a silent no-op because their wording, or the pane itself, is unavailable.
+- A pane that merely quotes the warning, for example a session discussing this feature, matches it; the cost is bounded at one brief stow per window and is the deliberate direction to err in, because a missed stow loses knowledge while a spurious one does not.
 
 ## Regression coverage
 
 `tests/fm-turnend-guard.test.sh` covers the predicate, main and secondmate primary scope, child-worktree exclusion, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, the cooperative `--claude` claim wait, epoch allow, re-block budget, Pi logical-run latching, missing-`jq` behavior, all five primary registrations, Grok native and legacy selection, typed field precedence, malformed input, and exactly-one-path safety.
+It also covers the forced stow: classification of both observed end-of-window states, the window descriptor and its length, Claude-only wording support, exactly one block per episode, re-arming in a later window, and the fail-open paths for the exhausted state, an ordinary pane, a non-tmux terminal, an uncapturable pane, an unverified harness, a child worktree, and `FM_TURNEND_LIMIT_STOW=0`.
 `tests/fm-kimi-harness.test.sh` covers the separate Kimi crew hook's format preservation, idempotence, refusal cases, token guard, spawn registration, and teardown cleanup.
 `tests/fm-supervision-instructions.test.sh` covers recovery-line ownership and pi-signed's identity-preserving reuse of Pi's protocol.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` is the opt-in isolated Pi path.
-[`verification/supervision.md`](verification/supervision.md#turn-end-guard) records the active cross-harness empirical evidence, including the 2026-07-24 Claude `asyncRewake` revalidation.
+[`verification/supervision.md`](verification/supervision.md#turn-end-guard) records the active cross-harness empirical evidence, including the 2026-07-24 Claude `asyncRewake` revalidation and the 2026-09-14 live tmux pass on the forced stow.

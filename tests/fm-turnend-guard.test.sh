@@ -105,6 +105,8 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
   cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
+  cp "$ROOT/bin/fm-limit-warning-lib.sh" "$dir/bin/fm-limit-warning-lib.sh"
+  cp "$ROOT/bin/fm-limit-park-lib.sh" "$dir/bin/fm-limit-park-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
   mkdir -p "$dir/docs"
@@ -180,10 +182,14 @@ make_secondmate_linked_home_dir() {
   printf '%s\n' "$dir"
 }
 
+# The limit-warning stow reads the CALLING process's own tmux pane, so every
+# hook runner that is not deliberately exercising that path must be blind to the
+# host terminal. Otherwise a suite run inside a real tmux pane would classify the
+# developer's own pane.
 run_hook() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+  printf '{"stop_hook_active":%s}' "$stop_active" | env -u TMUX -u TMUX_PANE CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
 }
 
 nonexistent_pid() {
@@ -953,7 +959,7 @@ EOF
 run_hook_claude() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s,"session_id":"sess-claude-mode"}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
+  printf '{"stop_hook_active":%s,"session_id":"sess-claude-mode"}' "$stop_active" | env -u TMUX -u TMUX_PANE CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
 }
 
 # The 2026-07-21 incident regression: after a spent forced continuation the old
@@ -1104,6 +1110,296 @@ test_hook_claude_mode_secondmate_reblocks_like_primary() {
   pass "fm-turnend-guard --claude: secondmate home re-blocks unclaimed and allows auto-arm-claimed stops"
 }
 
+# --- LIMIT WARNING: bin/fm-limit-warning-lib.sh and the forced stow ----------
+#
+# Claude Code shows two distinct end-of-window states and only the first is
+# actionable: by the time the session is exhausted it can no longer run a stow.
+# The safety property here is that every uncertain path leaves the turn alone, so
+# each of those paths is driven directly rather than assumed.
+
+# The approaching warning as observed in the captain's own session, 2026-08-25.
+APPROACHING_PANE_TEXT='● Reviewed the diff and pushed the branch.
+
+Approaching your 5-hour usage limit · Claude will wrap up the current step.
+
+╭────────────────────────────────────────────╮
+│ >                                          │
+╰────────────────────────────────────────────╯'
+
+# The exhausted state as observed in a crewmate pane, 2026-08-25.
+EXHAUSTED_PANE_TEXT="● Reviewed the diff and pushed the branch.
+
+You've hit your session limit · resets 11:10am (Europe/Brussels) · progress saved
+Press ⏎ to continue after reset"
+
+QUIET_PANE_TEXT='● Reviewed the diff and pushed the branch.
+
+╭────────────────────────────────────────────╮
+│ >                                          │
+╰────────────────────────────────────────────╯'
+
+LIMIT_BANNER='USAGE BUDGET NEARLY SPENT'
+LIMIT_MARKER_REL='state/.turnend-limit-stow-episode'
+
+write_pane() {  # <path> <text>
+  printf '%s\n' "$2" > "$1"
+}
+
+lib_call() {  # <function> [arg ...] - run one library function in isolation
+  local fn=$1
+  shift
+  bash -c '. "$1"; shift; fn=$1; shift; "$fn" "$@"' _ "$ROOT/bin/fm-limit-warning-lib.sh" "$fn" "$@"
+}
+
+# A tmux stand-in whose capture-pane returns a fixed fixture, so the pane the
+# guard reads is always the one the test wrote and never the host terminal.
+install_fake_tmux() {  # <dir> <pane-file> -> fakebin path
+  local dir=$1 pane_file=$2 fb
+  fb=$(fm_fakebin "$dir")
+  cat > "$fb/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+case "\${1:-}" in
+  capture-pane)
+    [ "\${FM_FAKE_TMUX_CAPTURE_FAILS:-0}" = 1 ] && exit 1
+    cat "$pane_file"
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tmux"
+  printf '%s\n' "$fb"
+}
+
+# Run the guard exactly as a turn-end hook would, inside a tmux pane showing the
+# given fixture. Trailing VAR=value arguments reach the hook's environment.
+run_hook_pane() {  # <dir> <pane-file> <session-id> <claude|default> [tmux|notmux] [VAR=value ...]
+  local dir=$1 pane_file=$2 session=$3 mode=$4 tmux_mode home fb
+  shift 4
+  tmux_mode=${1:-tmux}
+  [ "$#" -gt 0 ] && shift
+  local -a flags=() envs=()
+  [ "$mode" = claude ] && flags=(--claude)
+  home=$(cd "$dir" && pwd)
+  fb=$(install_fake_tmux "$dir" "$pane_file")
+  envs=("PATH=$fb:$PATH" CLAUDECODE=1 "FM_HOME=$home")
+  if [ "$tmux_mode" = notmux ]; then
+    envs+=(TMUX= TMUX_PANE=)
+  else
+    envs+=('TMUX=/tmp/fm-test-tmux,1,0' 'TMUX_PANE=%0')
+  fi
+  printf '{"stop_hook_active":false,"session_id":"%s"}' "$session" \
+    | env "${envs[@]}" "$@" bash "$dir/bin/fm-turnend-guard.sh" ${flags[@]+"${flags[@]}"} 2>&1
+}
+
+test_limit_lib_classifies_the_two_observed_states() {
+  local verdict
+  verdict=$(printf '%s\n' "$APPROACHING_PANE_TEXT" | lib_call fm_limit_warning_classify)
+  [ "$verdict" = approaching ] || fail "the approaching warning must classify as approaching, got '$verdict'"
+  verdict=$(printf '%s\n' "$EXHAUSTED_PANE_TEXT" | lib_call fm_limit_warning_classify)
+  [ "$verdict" = exhausted ] || fail "the exhausted state must classify as exhausted, got '$verdict'"
+  verdict=$(printf '%s\n' "$QUIET_PANE_TEXT" | lib_call fm_limit_warning_classify)
+  [ "$verdict" = none ] || fail "an ordinary pane must classify as none, got '$verdict'"
+  verdict=$(printf '%s\n%s\n' "$APPROACHING_PANE_TEXT" "$EXHAUSTED_PANE_TEXT" | lib_call fm_limit_warning_classify)
+  [ "$verdict" = exhausted ] || fail "an already-stopped session must win over the earlier warning, got '$verdict'"
+  # The literal shipped in the Claude Code 2.1.270 binary, separator included.
+  verdict=$(printf 'Approaching your 5-hour usage limit — Claude will wrap up the current step.\n' \
+    | lib_call fm_limit_warning_classify)
+  [ "$verdict" = approaching ] || fail "the verbatim shipped warning must classify as approaching, got '$verdict'"
+  pass "fm-limit-warning-lib: classifies approaching, exhausted, and none, and prefers exhausted"
+}
+
+test_limit_lib_reads_window_descriptor_and_length() {
+  local desc secs
+  desc=$(printf 'Approaching your 5-hour usage limit - Claude will wrap up the current step.\n' \
+    | lib_call fm_limit_warning_window)
+  [ "$desc" = 5-hour ] || fail "a plain-dash warning must still yield the 5-hour window, got '$desc'"
+  desc=$(printf 'Approaching your weekly usage limit · Claude will wrap up the current step.\n' \
+    | lib_call fm_limit_warning_window)
+  [ "$desc" = weekly ] || fail "expected the weekly window, got '$desc'"
+  desc=$(printf 'nothing to see here\n' | lib_call fm_limit_warning_window)
+  [ "$desc" = unknown ] || fail "a pane with no warning must yield unknown, got '$desc'"
+  secs=$(lib_call fm_limit_window_seconds 5-hour)
+  [ "$secs" = 18000 ] || fail "the 5-hour window must be 18000 seconds, got '$secs'"
+  secs=$(lib_call fm_limit_window_seconds weekly)
+  [ "$secs" = 604800 ] || fail "the weekly window must be 604800 seconds, got '$secs'"
+  secs=$(lib_call fm_limit_window_seconds unknown)
+  [ "$secs" = 18000 ] || fail "an unrecognised window must fall back to the shortest published one, got '$secs'"
+  pass "fm-limit-warning-lib: reads the window the warning names and how long it lasts"
+}
+
+test_limit_lib_only_claude_wording_is_verified() {
+  local h
+  for h in codex opencode pi pi-signed grok kimi ''; do
+    if lib_call fm_limit_warning_harness_supported "$h"; then
+      fail "harness '$h' has no observed limit wording and must never be acted on"
+    fi
+  done
+  lib_call fm_limit_warning_harness_supported claude \
+    || fail "claude is the one harness whose wording was observed and must be supported"
+  pass "fm-limit-warning-lib: only claude's observed wording is acted on"
+}
+
+test_hook_limit_stow_blocks_once_per_episode() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-once")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-once claude); status=$?
+  expect_code 2 "$status" "the approaching warning must block the turn end"
+  assert_contains "$out" "$LIMIT_BANNER" "the block must carry the stow instruction"
+  assert_contains "$out" "5-hour" "the instruction must name the window that is running out"
+  assert_contains "$out" "Write to disk FIRST" "the instruction must put writing to disk ahead of everything else"
+  assert_present "$dir/$LIMIT_MARKER_REL" "the block must claim the episode"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-once claude); status=$?
+  expect_code 0 "$status" "a second turn end in the same episode must not block again"
+  [ -z "$out" ] || fail "a second turn end in the same episode must be silent: $out"
+  pass "fm-turnend-guard --claude: the approaching warning forces exactly one stow per episode"
+}
+
+test_hook_limit_stow_rearms_in_a_later_window() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-rearm")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  run_hook_pane "$dir" "$pane" sess-limit-rearm claude >/dev/null 2>&1 || true
+  assert_present "$dir/$LIMIT_MARKER_REL" "the first block must claim the episode"
+  # Age the claim past the 5-hour window the warning itself named.
+  printf 'key=claude:5-hour:sess-limit-rearm\nat=%s\n' "$(($(date +%s) - 18001))" \
+    > "$dir/$LIMIT_MARKER_REL"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-rearm claude); status=$?
+  expect_code 2 "$status" "a warning after the named window elapsed must block again"
+  assert_contains "$out" "$LIMIT_BANNER" "the re-armed block must carry the stow instruction"
+  pass "fm-turnend-guard --claude: the episode expires with the window the warning named"
+}
+
+test_hook_limit_stow_ignores_exhausted_only_state() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-exhausted")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$EXHAUSTED_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-exhausted claude); status=$?
+  expect_code 0 "$status" "an already-stopped session must not be asked to run a stow"
+  [ -z "$out" ] || fail "the exhausted state must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "the exhausted state must not consume the episode"
+  pass "fm-turnend-guard --claude: the exhausted state suppresses a stow that could not run"
+}
+
+test_hook_limit_stow_silent_on_an_ordinary_pane() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-quiet")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$QUIET_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-quiet claude); status=$?
+  expect_code 0 "$status" "an ordinary pane must end the turn normally"
+  [ -z "$out" ] || fail "an ordinary pane must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "an ordinary pane must not claim an episode"
+  pass "fm-turnend-guard --claude: an ordinary pane never forces a stow"
+}
+
+test_hook_limit_stow_fails_open_outside_tmux() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-no-tmux")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-no-tmux claude notmux); status=$?
+  expect_code 0 "$status" "a terminal that is not tmux must end the turn normally"
+  [ -z "$out" ] || fail "a non-tmux terminal must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "a non-tmux terminal must not claim an episode"
+  pass "fm-turnend-guard --claude: fails open when the terminal is not tmux"
+}
+
+test_hook_limit_stow_fails_open_when_the_pane_cannot_be_read() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-capture-fails")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-capture claude tmux FM_FAKE_TMUX_CAPTURE_FAILS=1); status=$?
+  expect_code 0 "$status" "an uncapturable pane must end the turn normally"
+  [ -z "$out" ] || fail "an uncapturable pane must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "an uncapturable pane must not claim an episode"
+  pass "fm-turnend-guard --claude: fails open when the pane cannot be captured"
+}
+
+test_hook_limit_stow_silent_on_unverified_harness_mode() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-default-mode")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-default default); status=$?
+  expect_code 0 "$status" "the cross-harness mode has no verified wording and must end the turn normally"
+  [ -z "$out" ] || fail "the cross-harness mode must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "the cross-harness mode must not claim an episode"
+  pass "fm-turnend-guard: an unverified harness never acts on Claude's wording"
+}
+
+test_hook_limit_stow_silent_in_crewmate_worktree() {
+  local base dir pane out status
+  base="$TMP_ROOT/limit-child-base"
+  dir=$(make_crewmate_worktree_dir "$base" "$TMP_ROOT/limit-child")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-child claude); status=$?
+  expect_code 0 "$status" "a child task worktree must never be forced to stow"
+  [ -z "$out" ] || fail "a child task worktree must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "a child task worktree must not claim an episode"
+  pass "fm-turnend-guard --claude: the forced stow is primary-only"
+}
+
+test_hook_limit_stow_can_be_disabled() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-disabled")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-off claude tmux FM_TURNEND_LIMIT_STOW=0); status=$?
+  expect_code 0 "$status" "FM_TURNEND_LIMIT_STOW=0 must end the turn normally"
+  [ -z "$out" ] || fail "the disabled guard must produce no output: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "the disabled guard must not claim an episode"
+  pass "fm-turnend-guard --claude: FM_TURNEND_LIMIT_STOW=0 turns the forced stow off"
+}
+
+# A home that has fast-forwarded the guard but not yet its sibling library must
+# behave exactly like every other uncertain path: no block, and no stderr noise
+# leaking an unknown command into the captain's session.
+test_hook_limit_stow_fails_open_without_its_library() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-no-lib")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  rm -f "$dir/bin/fm-limit-warning-lib.sh"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-no-lib claude); status=$?
+  expect_code 0 "$status" "a guard without its library must end the turn normally"
+  [ -z "$out" ] || fail "a missing library must produce no output at all: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "a missing library must not claim an episode"
+  # The stopped-footer owner going missing must be just as silent.
+  dir=$(make_primary_dir "$TMP_ROOT/limit-no-park-lib")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  rm -f "$dir/bin/fm-limit-park-lib.sh"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-no-park-lib claude); status=$?
+  expect_code 0 "$status" "a guard without the stopped-footer library must end the turn normally"
+  [ -z "$out" ] || fail "a missing stopped-footer library must produce no output at all: $out"
+  assert_absent "$dir/$LIMIT_MARKER_REL" "a missing stopped-footer library must not claim an episode"
+  pass "fm-turnend-guard --claude: fails open silently when the sibling library is missing"
+}
+
+test_hook_limit_stow_does_not_mask_the_blind_turn_block() {
+  local dir pane out status
+  dir=$(make_primary_dir "$TMP_ROOT/limit-then-supervision")
+  pane="$dir/pane.txt"
+  write_pane "$pane" "$APPROACHING_PANE_TEXT"
+  : > "$dir/state/task1.meta"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-both claude); status=$?
+  expect_code 2 "$status" "the nearly-spent budget must block first"
+  assert_contains "$out" "$LIMIT_BANNER" "the budget block must come first"
+  out=$(run_hook_pane "$dir" "$pane" sess-limit-both claude tmux FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100); status=$?
+  expect_code 2 "$status" "the blind-turn block must still fire on the next turn end"
+  assert_contains "$out" "$REQUIRED_REASON" "the blind-turn block must be unchanged"
+  assert_not_contains "$out" "$LIMIT_BANNER" "the spent episode must not block a second time"
+  pass "fm-turnend-guard --claude: the forced stow defers to, and never replaces, the blind-turn block"
+}
+
 test_predicate_healthy_no_inflight
 test_predicate_unhealthy_no_beacon
 test_predicate_unhealthy_stale_beacon
@@ -1154,3 +1450,17 @@ test_hook_claude_mode_block_budget_then_degraded_allow
 test_hook_claude_mode_allow_resets_budget
 test_hook_claude_mode_waits_for_late_claim
 test_hook_claude_mode_secondmate_reblocks_like_primary
+test_limit_lib_classifies_the_two_observed_states
+test_limit_lib_reads_window_descriptor_and_length
+test_limit_lib_only_claude_wording_is_verified
+test_hook_limit_stow_blocks_once_per_episode
+test_hook_limit_stow_rearms_in_a_later_window
+test_hook_limit_stow_ignores_exhausted_only_state
+test_hook_limit_stow_silent_on_an_ordinary_pane
+test_hook_limit_stow_fails_open_outside_tmux
+test_hook_limit_stow_fails_open_when_the_pane_cannot_be_read
+test_hook_limit_stow_silent_on_unverified_harness_mode
+test_hook_limit_stow_silent_in_crewmate_worktree
+test_hook_limit_stow_can_be_disabled
+test_hook_limit_stow_fails_open_without_its_library
+test_hook_limit_stow_does_not_mask_the_blind_turn_block

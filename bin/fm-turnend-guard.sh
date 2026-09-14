@@ -57,6 +57,15 @@
 #      hard 8-consecutive-block override - then allow degraded with a visible
 #      systemMessage so the session can always end.
 # Any allow resets the consecutive-block budget.
+#
+# Forced stow before the usage budget runs out (--claude mode only): the same
+# Stop event is the last reliable moment to react to Claude's approaching-limit
+# warning, so this guard also reads its own pane for that warning and blocks once
+# per usage window to force a brief knowledge stow. The detection and the
+# once-per-episode ledger live in bin/fm-limit-warning-lib.sh; only the blocking
+# belongs here. It runs BEFORE the supervision predicate because it must fire
+# even when supervision is perfectly healthy, which is the predicate's normal
+# silent exit. Set FM_TURNEND_LIMIT_STOW=0 to disable it.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +79,8 @@ CLAUDE_MODE=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
+LIMIT_STOW=${FM_TURNEND_LIMIT_STOW:-1}
+case "$LIMIT_STOW" in 0|false|FALSE|no|NO|off|OFF) LIMIT_STOW=0 ;; *) LIMIT_STOW=1 ;; esac
 case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; esac
 case "$EPOCH_FRESH" in ''|*[!0-9]*|0) EPOCH_FRESH=15 ;; esac
 case "$BLOCK_BUDGET" in ''|*[!0-9]*|0) BLOCK_BUDGET=3 ;; esac
@@ -123,6 +134,44 @@ fi
 # so this exempts them while guarding every real secondmate home.
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
+SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null || printf 'unknown')
+[ -n "$SESSION_ID" ] || SESSION_ID=unknown
+
+# Shared banner rule for both blocking paths below.
+BANNER_RULE='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+
+# --- forced stow before the usage budget runs out ----------------------------
+# The wording deliberately avoids quoting the warning it matches on, so this
+# banner cannot be mistaken for the warning itself on the next pane capture.
+block_limit_stow() {
+  local window=${FM_LIMIT_WINDOW_DESC:-current}
+  {
+    printf '●%s\n' "$BANNER_RULE"
+    printf '●  USAGE BUDGET NEARLY SPENT - STOW NOW, BRIEFLY\n'
+    printf '●  This session'"'"'s %s budget is almost gone, so this may be the last turn that can write anything at all.\n' "$window"
+    printf '●  Write to disk FIRST, before any other work, any tool call that is not a write, and any reply to the captain.\n'
+    printf '●  Capture two things: the durable knowledge from this session that is still only in conversation, and the\n'
+    printf '●  in-flight intent - what you were part-way through and what the next session must pick up.\n'
+    printf '●  Be brief. Something written beats everything written, and the full sweep will not fit.\n'
+    printf '●  The stow skill'"'"'s "Budget nearly gone" section owns this short mode; do not run its full sweep.\n'
+    printf '●  This fires once per usage window. Finish the writes, then end the turn normally.\n'
+    printf '●%s\n' "$BANNER_RULE"
+  } >&2
+  exit 2
+}
+
+# A home mid-update may have this guard without its sibling library yet, so the
+# missing-library path stays as silent as every other uncertain one: no stderr
+# noise, no block.
+if [ "$CLAUDE_MODE" -eq 1 ] && [ "$LIMIT_STOW" -eq 1 ] && [ -r "$SCRIPT_DIR/fm-limit-warning-lib.sh" ]; then
+  # shellcheck source=bin/fm-limit-warning-lib.sh
+  . "$SCRIPT_DIR/fm-limit-warning-lib.sh" 2>/dev/null || true
+  if command -v fm_limit_stow_due >/dev/null 2>&1 \
+    && fm_limit_stow_due claude "$STATE" "$SESSION_ID"; then
+    block_limit_stow
+  fi
+fi
+
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -158,7 +207,7 @@ block_stop() {
   [ -f "$CONFIG/x-mode.env" ] && x_mode=1
   reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
     || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
-  rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  rule=$BANNER_RULE
   {
     printf '●%s\n' "$rule"
     printf '●  TURN WOULD END BLIND - SUPERVISION IS OFF\n'
@@ -214,7 +263,6 @@ fi
 # The auto-arm genuinely failed to establish: re-block, but never past the
 # budget so the session can always end and Claude's 8-block override is never
 # approached.
-SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null || printf 'unknown')
 COUNT=0
 if [ -f "$BUDGET_FILE" ]; then
   old_session=$(sed -n '1s/^session=//p' "$BUDGET_FILE" 2>/dev/null || true)

@@ -56,6 +56,22 @@ The goal is a session that is safe to reset or destroy because everything durabl
    Summarize, in plain outcome language (section 9): what was stowed and where, what was filed to the backlog, and whether the session is now safe to reset or destroy - i.e. whether every durable finding from this sweep now lives on disk rather than only in this conversation.
    If something could not be captured yet (for example, project-intrinsic knowledge waiting on a crewmate to land it), say so explicitly rather than reporting the session fully safe.
 
+## Budget nearly gone: the short mode
+
+This section is an exception mode, not a change to the normal sweep above.
+It applies only when the turn-end guard has blocked the turn with its "USAGE BUDGET NEARLY SPENT" instruction, which fires once per usage window when Claude warns that the session's budget is almost spent.
+[`docs/turnend-guard.md`](../../../docs/turnend-guard.md) owns that trigger; this section owns only what to do once it has fired.
+Every other entry into this skill, including a plain `/stow`, runs the full sweep above and ignores this section.
+
+The budget may not survive a full sweep, so getting something written beats getting everything written.
+
+- Write to disk first, before any other tool call that is not a write and before any reply to the captain.
+- Capture two things only: durable knowledge from this session that still exists nowhere but the conversation, and the in-flight intent - what was part-way done and what the next session must pick up.
+- Prefer one write per destination over several refining passes.
+- Keep inspect-then-update where the destination is short enough to read first, and otherwise append a clearly dated entry rather than losing the finding entirely; a later full sweep can curate it.
+- Skip anything that needs a crewmate, a pipeline, or a PR to land, and file it as a queued backlog item instead so it survives as work rather than as prose.
+- Tell the captain in one line what was written and what was skipped, once the writes are on disk.
+
 ## Scope exclusion: no skill storage
 
 `/stow` must **never** store, create, or edit a skill as a destination for any finding.
