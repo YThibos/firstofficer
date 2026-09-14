@@ -208,6 +208,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/updatefirstofficer/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "AGENTS.md",
       "audience": "agent-runtime"
     },

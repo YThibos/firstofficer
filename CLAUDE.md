@@ -284,6 +284,7 @@ Captain-invocable skills, loaded on invocation or the stated condition:
 - `/ahoy` and `/bearings` - the captain asks for a recap, catch-up, or fleet status report.
 - `/stow` - the captain asks to stow knowledge, or a context reset is coming.
 - `/updatefirstmate` - the captain asks to update firstmate; section 12 owns the surface it refreshes.
+- `/updatefirstofficer` - the captain asks to sync this fork from the original upstream project; it owns the guarded upstream merge, its conflict routing, and its autonomous clean-sync landing.
 
 ## 14. X mode
 
