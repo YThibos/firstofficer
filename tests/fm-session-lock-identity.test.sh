@@ -133,17 +133,20 @@ fi
 pass "a versioned binary with no harness name in argv[0] is not a harness"
 stop_child "$live_other"
 
-# Nor when a DIRECTORY component of argv[0] names a harness. This is the leaf
-# session process itself, whose argv[0] is the versioned binary's own full path
-# under .../claude/versions/. Matching it would hand a home to any binary merely
-# living under a "claude" directory, so only argv[0]'s basename is ever matched.
+# The leaf session process itself, whose argv[0] is the versioned binary's own
+# full path under .../claude/versions/, IS a harness: an exact harness name as a
+# whole path component identifies it, because Claude Code's native installer
+# names the per-session executable by version and Linux reports only that bare
+# version as the process name. Whole components only, so a path merely living
+# under ~/.claude or a component that just starts with a harness name stays out
+# (tests/fm-session-lock-ancestry.test.sh pins those negatives).
 start_child "$LEAF" "$LEAF"
 live_leaf=$CHILD_PID
-if fm_harness_pid_alive "$live_leaf"; then
+if ! fm_harness_pid_alive "$live_leaf"; then
   stop_child "$live_leaf"
-  fail "a versioned binary under a claude-named directory was treated as a harness"
+  fail "a versioned binary under a claude path component was not treated as a harness"
 fi
-pass "a harness name in a directory component of argv[0] is not a harness"
+pass "an exact harness name as a whole path component of argv[0] is a harness"
 stop_child "$live_leaf"
 
 # --- the two narrower rules still stand ------------------------------------
@@ -235,9 +238,11 @@ printf "%s %s %s\n" "$PPID" "$$" "$(fm_harness_ancestry_pid || echo NONE)"
   fi
   pass "ancestry walk resolves the verified Claude session host, not the claude-named client above it"
 
-  # The walk just recorded that pid, so liveness must agree - a session host is
-  # named after its release version and matches no naming rule on its own.
-  start_child "$LEAF" "$LEAF"
+  # The walk just recorded that pid, so liveness must agree. The record alone has
+  # to carry that answer here, so the host runs as a version-named binary whose
+  # path names no harness at all: the leaf under .../claude/versions/ is already
+  # a harness by its path component, which would hide whether the record counted.
+  start_child "$VERSIONED" "$VERSIONED"
   host_pid=$CHILD_PID
   host_start=$(fm_proc_stat_field "$host_pid" 19)
   printf '{"pid":%s,"sessionId":"%s","procStart":"%s"}\n' \

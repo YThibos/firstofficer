@@ -157,6 +157,18 @@ as_etime() {
   fi
 }
 row=$(awk -F'\t' -v p="$pid" '$1 == p { print; exit }' "$FM_TEST_PS_TABLE" 2>/dev/null)
+# A host's real pid 1 is init, never harness-shaped. The session-lock walk
+# examines pid 1 because a harness can be pid 1 of its own PID namespace, so
+# the catch-all below must not answer for it.
+if [ -z "$row" ] && [ "$pid" = 1 ]; then
+  case "$field" in
+    comm) printf 'systemd\n' ;;
+    args) printf '/sbin/init\n' ;;
+    ppid) printf '0\n' ;;
+    etime) as_etime 0 ;;
+  esac
+  exit 0
+fi
 if [ -z "$row" ]; then
   case "$field" in
     comm|args) printf 'claude\n' ;;
@@ -766,13 +778,17 @@ test_unverifiable_session_host_record_is_never_a_takeover() {
 $rec
 EOF
   # The only thing tying this holder to a transcript is its record, and its
-  # procStart now belongs to a process that once had this pid. Nothing about it
-  # can be trusted, so it is not a session at all here: the lock reads stale,
-  # and the limit-stop path never speaks for it.
+  # procStart now belongs to a process that once had this pid, so nothing in the
+  # record can be trusted. The holder is still a live harness by its own
+  # executable path (a whole `claude` component of argv[0]), so the lock reads
+  # held and the claim refuses; the untrustworthy record never lets the
+  # limit-stop path speak for it.
   write_session_record "$holder" ffffffff-7777-7777-7777-ffffffffffff 1
   out=$(lock_status "$home" "$fakebin" "$table")
-  assert_contains "$out" "lock: stale" "an untrustworthy record still identified a live session"
+  assert_contains "$out" "held by live harness" "a live versioned session executable did not read as holding the lock"
   out=$(claim "$home" "$fakebin" "$table" 2>&1)
+  assert_contains "$out" "another live firstmate session holds the lock" \
+    "a live holder with an untrustworthy record did not refuse the claim"
   assert_not_contains "$out" "stopped by a usage limit" \
     "a holder identified only by an untrustworthy record was taken over as limit-stopped"
   assert_not_contains "$out" "takeover" \

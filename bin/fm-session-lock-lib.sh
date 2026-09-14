@@ -11,8 +11,13 @@
 # docs/session-lock.md for the ownership contract and its safety rationale.
 # This file is sourced by scripts and has no side effects on source.
 
-# Known harness command names; extend when a new adapter is verified.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
+# Cursor process identity is NOT expressible as a command-name pattern and is
+# deliberately not added to the tables below: Cursor's installed names are
+# cursor-agent and the far-too-generic legacy alias `agent`, and it runs as a
+# bundled node script. bin/fm-cursor-lib.sh is the fleet's single owner of that
+# decision, so this file delegates to it rather than widening the name match.
+# shellcheck source=bin/fm-cursor-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-cursor-lib.sh"
 
 # Directory this lib was sourced from, so the node helper below is found from
 # the same code root as the rest of bin/ no matter which home is being served.
@@ -189,112 +194,153 @@ fm_claude_superseded_own_host() {
   [ "$holder_id" = "$own_id" ]
 }
 
-# Decide whether one process is a verified harness, from its name ($1, ps comm)
-# and its command line ($2, ps args). Echoes the string that identified it, so
-# a caller can tell WHICH harness matched, and returns non-zero when none did.
-# Both the ancestry walk and the liveness check below go through here: if they
-# matched by different rules, the walk could record a lock holder that liveness
-# then reads back as stale, and every guard would see the home as unowned.
+# Known harness command names; extend when a new adapter is verified. omp is
+# anchored exactly like pi: its process name is the bare word `omp` (verified,
+# omp 18.1.11), and a substring match would claim ompd or comp.
+FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$'
+
+# The same harnesses as exact executable names. Keep in sync with
+# FM_HARNESS_RE. Used only for the stricter path evidence below, where the
+# loose regex would also match ordinary firstmate paths such as
+# bin/fm-claude-stop-autoarm.sh.
+FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi omp)
+
+# Print the exact harness name carried by executable path $1 - its own basename
+# or any directory component - or return 1.
 #
-# Three rules, narrowest first:
-#  1. the process name itself names a harness;
-#  2. a bare interpreter (node, python) running a script whose path names one;
-#  3. a versioned launcher, matched on argv[0]'s basename alone. Claude Code
-#     execs its own release binary, so the process name is the version string
-#     ("2.1.235") and names no harness, while argv[0] is still "claude". This
-#     rule reads argv[0] and never the rest of the command line, so a process
-#     that merely mentions a harness in an argument - a shell running a
-#     "claude ..." command, an editor holding an adapter path - is not mistaken
-#     for one by accident. argv[0] is freely settable by any process of the same
-#     user, so this is a guard against misidentification, not against a
-#     deliberate forge - as rule 1 already was, since naming or symlinking an
-#     executable "claude" has always been enough for it.
-#     The leaf session process, whose argv[0] is the versioned binary's own
-#     path, is deliberately left unmatched here: its basename is the version
-#     string too, and reaching it would mean matching a directory component of
-#     that path, which would hand a home to any binary merely living under a
-#     "claude" directory. The walk below still resolves such a session, through
-#     the argv[0]-named launcher above it.
+# This exists because Claude Code's native installer names the per-session
+# executable by its version (~/.local/share/claude/versions/2.1.220), so the
+# basename identifies nothing while the install path still says claude. Matching
+# whole path components only is what keeps that widening safe: an ordinary path
+# such as bin/fm-claude-stop-autoarm.sh or ~/.claude/hooks/notify.sh has no
+# "claude" component and is correctly not a harness process.
+fm_harness_path_name() {  # <path>
+  local path=$1 name
+  [ -n "$path" ] || return 1
+  for name in "${FM_HARNESS_NAMES[@]}"; do
+    case "/$path/" in
+      */"$name"/*) printf '%s' "$name"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# True when the process described by command name $1 and full argument string $2
+# is a verified harness. Sets FM_HARNESS_IS_CLAUDE for the ancestry walk.
 #
-# A process shared across sessions is rejected before any of the three rules,
-# and both callers below apply the same rejection ahead of the verified
-# session-host short-circuit as well, so no caller can select one by any route:
-# the walk stops one hop below it and keeps this session's own host, and a lock
-# already recording one reads back as stale and reclaimable instead of pinning
-# the home read-only for as long as that service runs.
-fm_harness_identity() {
-  local comm=$1 args=$2 candidate
+# Evidence, in order:
+#   1. the basename of the reported command name, against FM_HARNESS_RE.
+#   2. an exact harness component in that command path or in argv[0]. Both are
+#      needed because the two platforms report different things: macOS reports
+#      argv[0] in `ps -o comm=`, while procps on Linux reports the kernel exec
+#      name and ignores argv[0] entirely, so a version-named Claude Code binary
+#      is identified by its install path on macOS and by argv[0] on Linux.
+#   3. a bare interpreter (node, python) running a harness script path.
+#   4. Cursor's own structural identity, owned by bin/fm-cursor-lib.sh.
+FM_HARNESS_IS_CLAUDE=0
+fm_harness_process_matches() {  # <comm> <args>
+  local comm=$1 args=$2 base argv0 name
+  FM_HARNESS_IS_CLAUDE=0
+  # A process that serves many sessions at once is never one session's
+  # identity, whichever rule below would otherwise match it.
   fm_harness_shared_service "$comm" "$args" && return 1
-  candidate=${comm##*/}
-  if [[ $candidate =~ $FM_HARNESS_RE ]]; then
-    printf '%s' "$candidate"
+  base=$(basename -- "$comm")
+  if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
+    case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
     return 0
   fi
+  argv0=${args%% *}
+  if name=$(fm_harness_path_name "$comm") || name=$(fm_harness_path_name "$argv0"); then
+    case "$name" in claude) FM_HARNESS_IS_CLAUDE=1 ;; esac
+    return 0
+  fi
+  # Bare interpreter (e.g. node): match the harness name in its script path.
   case "$comm" in
     *node*|*python*)
-      if [[ $args =~ $FM_HARNESS_RE ]]; then
-        printf '%s' "$args"
+      if printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"; then
+        case "$args" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
         return 0
       fi
       ;;
   esac
-  fm_argv0_basename "$args" candidate || return 1
-  if [[ $candidate =~ $FM_HARNESS_RE ]]; then
-    printf '%s' "$candidate"
-    return 0
-  fi
+  # Cursor: its own owner decides, from Cursor's name or versioned install tree
+  # in the command path or argv[0]. Without this a Cursor primary can never
+  # locate its own harness in the ancestry, so every session start refuses the
+  # fleet lock as read-only and the park can never arm.
+  fm_cursor_process_matches "$comm" "$args" "$argv0" && return 0
   return 1
 }
 
-# Walk the current process ancestry (up to 16 hops) and print a harness pid.
-# For every harness except Claude, the first match wins (innermost pid), which
-# is where e.g. Pi's shared signed-wrapper ancestry actually holds the session:
-# a "pi-signed" launcher can be the direct parent of the inner "pi" engine
-# pid that owns the lock, and the wrapper pid above it is not that owner.
-# Claude Code's bg-spare hook worker chain is the opposite shape: it nests
-# several claude-named processes directly parent-child with no non-harness
-# process between them, and the lock is held by the outermost pid of that
-# run. So once a claude-named match is found, this keeps walking past it
-# looking for a still-more-ancestral claude-named match, and stops the
-# instant a non-match follows - never walking past that gap to an unrelated
-# claude-named process further up the real process tree (e.g. the live
-# session that launched a test as its own subprocess). A process shared across
-# sessions is not an identity at all, so it counts as exactly such a non-match
-# and the extension stops one hop below it, keeping this session's own host.
-# The harness pid lives as long as the session, unlike the transient subshell
-# pid of any one tool call.
+# Walk the current process ancestry (up to 16 hops) and print this session's
+# contiguous verified-harness ancestry, innermost pid first.
 #
-# A verified Claude session host short-circuits every NAMING rule and wins on
-# sight, innermost first, because it answers the question the walk is only ever
-# approximating: which process IS this session. Taking it also stops the
-# claude-extension above from climbing out of the session into the client that
-# launched it, whose pid the session loses the moment Claude re-hosts it as a
-# background job (see fm_claude_session_host). The shared-service rejection is
-# the one test that still precedes it, so a process serving many sessions is
-# never selected even if it should ever carry a verifiable per-pid record.
-fm_harness_ancestry_pid() {
-  local pid=$$ comm args ident best='' extending=0
+# The walk climbs freely until the first harness match, because the caller is
+# normally an ordinary shell several levels below its session. After that first
+# match it stops at the first non-harness ancestor, so it can never cross a gap
+# into an unrelated harness further up the real process tree - for example the
+# live session that launched a test as its own subprocess.
+#
+# For every harness except Claude the innermost match is the session, which is
+# where e.g. Pi's shared signed-wrapper ancestry actually holds the lock: a
+# "pi-signed" launcher can be the direct parent of the inner "pi" engine pid that
+# owns the lock, and the wrapper pid above it is not that owner. Claude Code
+# instead runs hooks several levels below the session inside its own nested
+# worker chain (hook shell -> claude bg-spare -> claude bg-pty-host -> claude ->
+# claude), with no non-harness process between them. Which pid in that run is the
+# session cannot be read off the ancestry at all, so the whole contiguous run is
+# reported and the callers below decide what they need from it.
+#
+# A verified Claude session host short-circuits every naming rule and ends the
+# run on sight, because it answers the question the walk is only approximating:
+# which process IS this session. Stopping there also keeps the Claude extension
+# from climbing out of the session into the client that launched it, whose pid
+# the session loses the moment Claude re-hosts it as a background job (see
+# fm_claude_session_host). The shared-service rejection is the one test that
+# still precedes it, so a process serving many sessions is never selected.
+fm_harness_ancestry_pids() {
+  local pid=$$ comm args extending=0 printed=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
     if ! fm_harness_shared_service "$comm" "$args" && fm_claude_session_host "$pid"; then
-      echo "$pid"
+      printf '%s\n' "$pid"
       return 0
     fi
-    if ident=$(fm_harness_identity "$comm" "$args"); then
-      best="$pid"
-      case "$ident" in
-        *claude*) extending=1 ;;
-        *) break ;;
-      esac
+    if fm_harness_process_matches "$comm" "$args"; then
+      printf '%s\n' "$pid"
+      printed=1
+      [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
+      extending=1
     elif [ "$extending" -eq 1 ]; then
       break
     fi
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
+    # Examine the top of the chain before stopping. Inside a PID namespace the
+    # harness itself is pid 1, so stopping as soon as the next pid is 1 hides the
+    # very process this walk exists to find. A host's real pid 1 (init, systemd,
+    # launchd) is not harness-shaped, so fm_harness_process_matches rejects it.
+    case "$pid" in '' | *[!0-9]*) break ;; esac
+    [ "$pid" -ge 1 ] || break
   done
-  [ -n "$best" ] && { echo "$best"; return 0; }
-  return 1
+  [ "$printed" -eq 1 ]
+}
+
+# Print the one pid that identifies this session when the session lock is being
+# WRITTEN: the outermost pid of the contiguous run. That is the pid that lives as
+# long as the session - a Claude worker several levels in is reaped when its hook
+# returns, and a lock naming it would look stale moments later while the session
+# is still running. Every non-Claude harness reports a single pid, so this is its
+# innermost match unchanged.
+fm_harness_ancestry_pid() {
+  local pids pid outermost=''
+  pids=$(fm_harness_ancestry_pids) || return 1
+  while IFS= read -r pid; do
+    [ -n "$pid" ] && outermost=$pid
+  done <<EOF
+$pids
+EOF
+  [ -n "$outermost" ] || return 1
+  printf '%s\n' "$outermost"
 }
 
 # True if $1 is a live process that looks like a verified harness.
@@ -315,21 +361,30 @@ fm_harness_pid_alive() {
   args=$(ps -o args= -p "$pid" 2>/dev/null)
   fm_harness_shared_service "$comm" "$args" && return 1
   fm_claude_session_host "$pid" && return 0
-  fm_harness_identity "$comm" "$args" >/dev/null
+  fm_harness_process_matches "$comm" "$args"
 }
 
-# True when state dir $1 holds a session lock whose pid is the harness ancestor
+# True when state dir $1 holds a session lock whose pid is ANY harness ancestor
 # of the current process: this script runs inside the session that owns the
-# home's fleet lock. A missing lock, a lock held by another live harness, or an
+# home's fleet lock. Membership is the honest test of that question, because the
+# lock owner sits at an unknown depth in a contiguous Claude run - it is the
+# outermost pid when the hook fires inside the session's own nested worker chain,
+# and an inner pid when a harness-named daemon parents the session. A missing
+# lock, a malformed lock, a lock held by a harness outside this ancestry, or an
 # ancestry that cannot be resolved all fail closed.
 fm_session_lock_owned_by_self() {
-  local state=$1 lock_pid my_pid
+  local state=$1 lock_pid pids pid
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  my_pid=$(fm_harness_ancestry_pid) || return 1
-  [ "$my_pid" = "$lock_pid" ]
+  pids=$(fm_harness_ancestry_pids) || return 1
+  while IFS= read -r pid; do
+    [ "$pid" = "$lock_pid" ] && return 0
+  done <<EOF
+$pids
+EOF
+  return 1
 }
 
 # --- limit-stop takeover -------------------------------------------------
