@@ -75,7 +75,7 @@ The known ones are `CLAUDE.md`, the fork-owned operating anchor that replaced up
 
 **`agents-md: changed`** is a captain decision even on a clean merge.
 `tests/fm-anchor-budget.test.sh` pins the `AGENTS.md` revision whose rules are reconciled into `CLAUDE.md`, so validation stays red until the rule-bearing changes are reconciled into the anchor by hand and the pin is bumped in the same commit.
-Read `git diff <pre-merge-commit> HEAD -- AGENTS.md`, then surface the specific upstream changes and what each would mean for the anchor's operating text.
+Read the upstream change in the sync copy named by the `sync-copy:` line with `git -C <sync-copy> diff <pre-merge-commit> HEAD -- AGENTS.md`, then surface the specific upstream changes and what each would mean for the anchor's operating text.
 Do not invent anchor wording on your own.
 A provably non-rule-bearing change, a typo fix or pure reformatting that alters no rule, may be reconciled directly, but say explicitly that you did so and why it changes no rule.
 
