@@ -48,15 +48,17 @@ A `stale` line is worth a sentence to the captain, because the declaration and t
 bin/fm-upstream-sync.sh merge
 ```
 
-It creates `upstream-update/<YYYY-MM-DD>` off the default branch, merges the upstream default branch into it, and classifies the outcome.
+It creates `upstream-update/<YYYY-MM-DD>` off the default branch in an isolated sync copy, merges the upstream default branch into it there, and classifies the outcome.
+The `sync-copy:` line names that copy's path; every later step of the sync happens in it.
 `merge: clean` goes straight to step 4.
 `merge: conflicts <n> captain-decision=<n> agent-resolve=<n>` goes to step 3.
 
 Either way, read the `agents-md:` line before moving on.
 `agents-md: changed` means `AGENTS.md` moved even if nothing conflicted, and that is its own captain decision (step 3, third case).
 
-While the sync branch is checked out, the primary checkout is deliberately off its default branch, so other firstmate commands will print the worktree-tangle warning.
-That is expected for the length of the sync and clears when it lands or is aborted.
+The primary checkout this session runs from stays on its default branch, untouched, for the whole sync.
+Never merge, resolve, or commit there: this session loads its skills and hooks from it, so a half-merged tree would corrupt every turn spent resolving.
+If `merge` refuses because a sync copy already exists, an earlier sync is still open; land or abort that one first.
 
 ### 3. Conflicts
 
@@ -77,11 +79,12 @@ Read `git diff <pre-merge-commit> HEAD -- AGENTS.md`, then surface the specific 
 Do not invent anchor wording on your own.
 A provably non-rule-bearing change, a typo fix or pure reformatting that alters no rule, may be reconciled directly, but say explicitly that you did so and why it changes no rule.
 
-Resolving conflicts here edits firstmate's own shared tracked material, so section 1 of the anchor still applies: load `firstmate-coding-guidelines` before touching it, and when any worker is live, hand the resolution to one on the sync branch rather than competing with supervision.
+Resolve every conflict in the sync copy, never in the primary checkout.
+Resolving conflicts edits firstmate's own shared tracked material, so section 1 of the anchor still applies: load `firstmate-coding-guidelines` before touching it, and when any worker is live, hand the resolution to a worker working in the sync copy rather than competing with supervision.
 Resolve towards keeping the fork's behaviour and adding upstream's, not towards whichever side is easier to take whole.
 
-Once every conflict is resolved or answered, commit the merge, then continue to step 4.
-If the captain calls the sync off, `bin/fm-upstream-sync.sh abort` undoes the merge and returns to the default branch, keeping any sync branch that carries commits.
+Once every conflict is resolved or answered, commit the merge in the sync copy, then continue to step 4.
+If the captain calls the sync off, `bin/fm-upstream-sync.sh abort` undoes the merge and removes the sync copy, keeping any sync branch that carries commits.
 
 ### 4. Land
 
@@ -89,8 +92,9 @@ If the captain calls the sync off, `bin/fm-upstream-sync.sh abort` undoes the me
 bin/fm-upstream-sync.sh land
 ```
 
-It runs this repo's own validation (`bin/fm-lint.sh`, then `bin/fm-test-run.sh --all`) and refuses to land anything red, pushing nothing anywhere.
-On green it pushes the dated sync branch to `origin`, fast-forwards the default branch onto it, and pushes that too.
+It runs the sync copy's own validation (`bin/fm-lint.sh`, then `bin/fm-test-run.sh --all`) and refuses to land anything red, pushing nothing anywhere.
+On green it pushes the dated sync branch to `origin`, fast-forwards `origin`'s default branch onto it, and removes the sync copy.
+The primary checkout is still untouched at that point; step 5's `/updatefirstmate` fast-forwards it.
 
 **A clean, validated sync lands with no captain intervention.**
 That is what this command is for, and the captain's invocation is the authority for it.
