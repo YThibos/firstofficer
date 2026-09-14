@@ -13,6 +13,10 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The script under test commits merges itself, so it needs an identity that
+# does not depend on the host git config (CI runners have none).
+fm_git_identity 'Firstmate Tests' 'tests@example.invalid'
+
 SYNC="$ROOT/bin/fm-upstream-sync.sh"
 TODAY=$(date +%Y-%m-%d)
 SYNC_BRANCH="upstream-update/$TODAY"
