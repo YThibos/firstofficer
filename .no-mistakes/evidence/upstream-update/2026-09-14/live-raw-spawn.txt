@@ -1,0 +1,7 @@
+error: harness bash has no verified way to signal turn-end from a shared worktree, so joining another task's worktree would hijack that task's turn-end signal; use claude, codex, pi, or pi-signed for a worktree-sharing spawn
+rc=1
+--- meta
+cat: /tmp/fmlive.cfqc/home/state/live-raw-1.meta: No such file or directory
+--- tmux windows
+captain:0: sleep* (1 panes) [80x24] 
+--- worker pane

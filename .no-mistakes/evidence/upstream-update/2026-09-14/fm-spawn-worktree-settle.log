@@ -1,0 +1,4 @@
+ok - a single transient stale pane_current_path read is not accepted as the worktree
+ok - an already-settled pane confirms on the next read, not a whole extra cycle
+ok - a transient primary-checkout pane read is not accepted as the worktree
+ok - a pane stuck on the primary checkout fails loudly at the deadline

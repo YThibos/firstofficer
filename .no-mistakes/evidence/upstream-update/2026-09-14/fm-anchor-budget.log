@@ -1,0 +1,4 @@
+ok - CLAUDE.md is a real fork-owned file, not a symlink to AGENTS.md
+ok - CLAUDE.md is reconciled against the pinned AGENTS.md revision
+ok - CLAUDE.md is 39879 bytes, 121 bytes of headroom under the 40000-byte ceiling
+ok - budget guard fails loudly and names the size, overage, and ceiling

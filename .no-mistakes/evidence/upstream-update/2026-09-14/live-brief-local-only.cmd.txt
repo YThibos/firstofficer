@@ -1,0 +1,2 @@
+scaffolded: /tmp/fmbrief.1E3s/home/data/live-lo-1/brief.md (ship, mode=local-only; replace {TASK} and {FIRSTMATE_SPEC})
+rc=0
