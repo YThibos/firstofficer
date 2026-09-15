@@ -28,7 +28,7 @@ TMP_ROOT=$(fm_test_tmproot fm-merge-local-tests)
 make_case() {
   local name=$1 branch=$2 case_dir
   case_dir="$TMP_ROOT/$name"
-  mkdir -p "$case_dir/state"
+  mkdir -p "$case_dir/state" "$case_dir/data"
 
   git init -q "$case_dir/project"
   git -C "$case_dir/project" symbolic-ref HEAD refs/heads/main
@@ -59,7 +59,7 @@ write_task_meta() {
 run_merge_local() {
   local case_dir=$1
   shift
-  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" \
   FM_STATE_OVERRIDE="$case_dir/state" \
     "$MERGE_LOCAL" "$@"
 }
@@ -87,7 +87,7 @@ test_jira_keyed_branch_merges() {
 
   run_merge_local_capture "$case_dir" task-x1
 
-  expect_code 0 "$CODE" "jira-keyed: merge should succeed"
+  expect_code 0 "$CODE" "jira-keyed: merge should succeed"$'\n'"$ERR"
   assert_contains "$OUT" 'merged chore/JUSTMD-45 into local main' \
     "jira-keyed: should report the JIRA-keyed branch it merged"
   [ "$(main_tip "$case_dir")" = "$wt_tip" ] \

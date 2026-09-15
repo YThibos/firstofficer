@@ -336,9 +336,14 @@ fm_backend_required_tool_available() {  # <backend> <tool>
 # errors) if the file or key is absent. Mirrors the ad hoc `grep '^key=' |
 # tail -1 | cut -d= -f2-` snippet every fm-*.sh script used to repeat inline.
 fm_meta_get() {  # <meta-file> <key>
-  local meta=$1 key=$2
+  local meta=$1 key=$2 line value=''
   [ -f "$meta" ] || return 0
-  grep "^$key=" "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*) value=${line#*=} ;;
+    esac
+  done < "$meta" 2>/dev/null || true
+  printf '%s' "$value"
 }
 
 # fm_backend_of_meta: the backend recorded in <meta-file>, defaulting to
@@ -793,19 +798,19 @@ fm_backend_busy_state() {  # <backend> <target>
   esac
 }
 
-# fm_backend_composer_state: classify the composer/input row of <target> as
+# fm_backend_composer_state: classify the composer/input area of <target> as
 # empty|pending|pending-unproven|unknown for callers that need a pre-submit
-# input guard or an adapter's conservative submit fallback. It is exposed so a
-# caller other than the send path (the away-mode daemon's supervisor-pane
-# pending-input guard, bin/fm-supervise-daemon.sh) can ask the same question
-# without duplicating per-backend composer-reading logic. tmux and herdr both
-# expose a named classifier already (fm_tmux_composer_state,
-# fm_backend_herdr_composer_state), as do orca and cmux
-# (fm_backend_orca_composer_state, fm_backend_cmux_composer_state); zellij's
-# submit path uses an internal content-diff approach with no separately named
-# classifier, so it reports unknown here - callers fall back to their own
-# policy, exactly as an unknown fm_backend_busy_state already does.
-fm_backend_composer_state() {  # <backend> <target> -> empty|pending|pending-unproven|unknown
+# input guard, a submit acknowledgement, or a launch-readiness check. It is
+# exposed so a caller other than the send path (the away-mode daemon's
+# supervisor-pane pending-input guard in bin/fm-supervise-daemon.sh, and
+# fm-spawn.sh's kimi readiness/delivery checks) can ask the same question
+# without duplicating per-backend composer reading. Every adapter's named
+# classifier is a THIN wrapper - capture plus a capability descriptor fed to
+# the one shared shape owner (bin/fm-composer-lib.sh,
+# fm_composer_classify_screen) - so no backend can hold a private shape
+# assumption; zellij's classifier reads `dump-screen --ansi`, which replaced
+# its old no-classifier content-diff reporting.
+fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pending|pending-unproven|unknown
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
@@ -814,6 +819,7 @@ fm_backend_composer_state() {  # <backend> <target> -> empty|pending|pending-unp
     herdr) fm_backend_herdr_composer_state "$@" ;;
     orca) fm_backend_orca_composer_state "$@" ;;
     cmux) fm_backend_cmux_composer_state "$@" ;;
+    zellij) fm_backend_zellij_composer_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -878,12 +884,17 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 #   ambiguous  - the endpoint exists but its process cannot be attributed.
 #   unreadable - a target or inventory read failed or contradicted itself.
 #   unverified - this backend has no recovery classifier.
-# Only `dead` and `missing` license recovery. The tmux adapter requires a
-# successful session inventory and returns `missing` only when it omits the
-# exact window; the Herdr adapter reuses its husk
-# classifier. Zellij remains unverified because its secondmate ghost-tab and
-# agent-process recovery path has not been empirically validated. Orca and cmux
-# do not support secondmate spawns.
+# Only `dead` and `missing` license recovery. Every `alive` is proven at
+# process level through the shared classifier in bin/fm-agent-process-lib.sh,
+# never from a registration or a rendered title alone. The tmux adapter
+# requires a successful session inventory and returns `missing` only when it
+# omits the exact window; the Herdr adapter reuses its strict husk classifier -
+# which verifies a registered agent against `pane process-info` and the real
+# process table, so a registration Herdr kept over a shell-only pane reads
+# `dead` here (issue #4115) - then maps a positively stopped session server to
+# `missing` only in this recovery-grade view. Zellij remains unverified because
+# its secondmate ghost-tab and agent-process recovery path has not been
+# empirically validated. Orca and cmux do not support secondmate spawns.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
