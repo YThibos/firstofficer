@@ -12,6 +12,7 @@
 # of the task's volatile state.
 #
 # Usage: fm-check-register.sh <id>
+# Retire with fm-check-unregister.sh <id>; do not hand-compose an rm.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
