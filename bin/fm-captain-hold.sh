@@ -389,13 +389,17 @@ show_field() {  # <show-output> <field>
   printf '%s\n' "$output" | sed -n "s/^  $field: //p" | head -1
 }
 
+# A shown scalar field arrives as a JSON-encoded bare string, which decode_json
+# accepts only where the installed JSON::PP defaults allow_nonref on. Older
+# libraries default it off and reject the whole value as "must be object or
+# array", so ask for it explicitly rather than inheriting the local default.
 decode_shown_value() {  # <shown-field>
   local value=$1
   case "$value" in
     \"*\")
       printf '%s' "$value" | perl -MJSON::PP -e '
         local $/;
-        my $value = decode_json(<STDIN>);
+        my $value = JSON::PP->new->utf8->allow_nonref->decode(<STDIN>);
         binmode STDOUT, ":raw";
         utf8::encode($value) if utf8::is_utf8($value);
         print $value;

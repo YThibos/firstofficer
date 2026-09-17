@@ -5,11 +5,13 @@
 # filled in. Ship and scout `# Task` sections have two subsections Firstmate
 # fills before dispatch: `{TASK}` under `## Captain's intent` (the captain's
 # own ask plus the context needed to read it, including the substance of any
-# report, decision, or PR the ask refers to) and `{FIRSTMATE_SPEC}`
+# report, decision, or PR the ask refers to, without added speaker labels or
+# direct address) and `{FIRSTMATE_SPEC}`
 # under `## Firstmate spec` (build instructions, which are never the captain's
 # intent). bin/fm-dod-lib.sh owns the no-mistakes `--intent` contract those
-# subsections feed; bin/fm-spawn.sh refuses leftover placeholders. Secondmate
-# charters and craft-review briefs still use a single `{TASK}` fill. Firstmate may adjust other
+# subsections feed; bin/fm-spawn.sh refuses leftover placeholders and a
+# `## Captain's intent` line opening with a Captain label or address. Secondmate
+# charters and craft-review briefs still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--branch <name>]
@@ -114,6 +116,7 @@ esac
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved
@@ -454,7 +457,7 @@ The report is the only thing that survives, so anything worth keeping must be in
    https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
    copies that URL from your line rather than assembling one.
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
-   known external wait you expect to clear on its own (an upstream release, a rate-limit reset):
+   known external wait you expect to clear on its own ($CREWMATE_PAUSE_WAIT_EXAMPLES):
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
    treating it as a possible wedge. When you know when the wait clears, say so in the line with
    \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) and firstmate rechecks at that time instead.
@@ -593,20 +596,18 @@ BRANCH_NAME=${BRANCH:-'{BRANCH}'}
 case "$MODE" in
   direct-PR)
     SETUP2=""
-    RULE1="1. Never push to the default branch (push only your \`$BRANCH_NAME\` branch). Never merge a PR."
     ;;
   local-only)
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`.
    If this project has no \`origin\` remote at all, the pipeline has nowhere to push: skip stage 2's validation run and take the no-remote outcome at the publish stage instead."
-    RULE1="1. Never push to the default branch (publish only your \`$BRANCH_NAME\` branch, and only at the publish stage below). Never open a PR or merge request, and never merge."
     ;;
   *)  # no-mistakes
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
-    RULE1='1. Never push to the default branch. Never merge a PR.'
     ;;
 esac
+RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH_NAME") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH_NAME" "$REPO" "$STATE" "$CONFIG") || exit 1
 
 cat > "$BRIEF" <<EOF
@@ -642,8 +643,8 @@ $RULE1
    A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
    turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
-   known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
-   a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
+   known external wait you expect to clear on its own ($CREWMATE_PAUSE_WAIT_EXAMPLES):
+   firstmate then leaves your idle pane alone and rechecks it on a long
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
