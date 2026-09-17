@@ -668,6 +668,7 @@ tests/fm-afk-contract.test.sh 3000
 tests/fm-afk-inject-e2e.test.sh 35792
 tests/fm-afk-pi-herdr-return-e2e.test.sh 100
 tests/fm-afk-return.test.sh 1837
+tests/fm-anchor-budget.test.sh 70
 tests/fm-ask-user-authority.test.sh 128
 tests/fm-backend-cmux-smoke.test.sh 33
 tests/fm-backend-cmux.test.sh 3657
@@ -697,6 +698,7 @@ tests/fm-codex-continuity-live-e2e.test.sh 21
 tests/fm-composer-matrix-live-e2e.test.sh 23
 tests/fm-control-relaunch.test.sh 48210
 tests/fm-control.test.sh 54301
+tests/fm-craft-review.test.sh 703
 tests/fm-cursor-harness.test.sh 30103
 tests/fm-cursor-primary-live-e2e.test.sh 21
 tests/fm-cursor-primary.test.sh 54947
@@ -723,6 +725,7 @@ tests/fm-inactive-reconcile.test.sh 74399
 tests/fm-kimi-harness.test.sh 18015
 tests/fm-lint-workflows.test.sh 855
 tests/fm-live-gate.test.sh 6000
+tests/fm-merge-local.test.sh 4775
 tests/fm-muse-harness.test.sh 55572
 tests/fm-muse-signals-live-e2e.test.sh 23
 tests/fm-no-mistakes-required.test.sh 370
@@ -771,6 +774,8 @@ tests/fm-send-resolve-key.test.sh 19619
 tests/fm-send-secondmate-marker-herdr-e2e.test.sh 51
 tests/fm-send-secondmate-marker.test.sh 6252
 tests/fm-session-lock-ancestry.test.sh 1414
+tests/fm-session-lock-identity.test.sh 3662
+tests/fm-session-lock-limit-stop.test.sh 4420
 tests/fm-session-start.test.sh 156952
 tests/fm-sessionstart-hook-live-e2e.test.sh 20
 tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh 22
@@ -798,6 +803,7 @@ tests/fm-trace-context-lib.test.sh 209
 tests/fm-trace-context-spawn.test.sh 44702
 tests/fm-turnend-guard.test.sh 42565
 tests/fm-update.test.sh 5212
+tests/fm-upstream-sync.test.sh 3234
 tests/fm-vendor-auth-probe.test.sh 43316
 tests/fm-voice-relay.test.sh 28699
 tests/fm-wake-daemon-lifecycle-e2e.test.sh 7381
