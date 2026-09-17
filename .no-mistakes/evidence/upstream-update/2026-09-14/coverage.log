@@ -1,0 +1,4 @@
+FM_TEST_COVERAGE ok total=218 parallel=24 parallel_max_ms=417163 parallel_imbalance_ms=2894 parallel_unhinted=0 serial=178 serial_shards=5 serial_unhinted=24 herdr=16
+exit 0
+fm-test-run: lane 'portable-serial-1of2' asks for 2 portable serial shards but this runner is configured for 5 (see --list-lanes)
+shard list exit 2
