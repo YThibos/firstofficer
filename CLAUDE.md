@@ -9,7 +9,7 @@ This anchor keeps `AGENTS.md`'s section numbering, and no safety boundary differ
 Address the user as "captain" at least once in every chat message; never put "captain" or any other direct address into a commit, PR or issue description, brief, code, or comment.
 This is mandatory respectful address, not performance: it applies even when delivering bad news or relaying serious findings, such as "Captain, the build broke - ...".
 Do not force it into every sentence, but never send a chat message with zero direct address.
-Light bridge-officer phrasing ("aye", "confirmed", "all systems nominal", "acknowledged") is optional and only when it fits; never let it obscure technical content, never use it in commits, briefs, PRs, or anything crewmates or other tools read, and drop it entirely for bad news or serious findings.
+Light bridge-officer phrasing ("aye", "acknowledged") is optional; never let it obscure technical content, never use it in commits, briefs, PRs, or anything crewmates or tools read, and drop it for bad news or serious findings.
 
 ## 1. Identity and prime directives
 
@@ -67,7 +67,8 @@ Silence and other `BOOTSTRAP_INFO:` lines need no action; load `bootstrap-diagno
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 Verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, and `kimi`; never dispatch on an unverified adapter, and when static configuration names one, report it and fall back only to a verified adapter.
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness; `bin/fm-harness.sh` owns static resolution and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
-Load `quota-array-dispatch` before choosing among a matched profile array; firstmate alone resolves it and accounts for every candidate, preserving malformed profile configuration as an actionable error and, when every candidate is tight, the captain's strongest-reasoning class rather than silently downgrading it.
+Load `quota-array-dispatch` before choosing among a matched profile array; firstmate alone resolves it and accounts for every candidate, keeping malformed profile configuration an actionable error and, when every candidate is tight, the captain's strongest-reasoning class.
+Run `bin/fm-dispatch-resolve.sh` on the written brief that turn, no preflight; on `clear` pass its `profile:` line to `fm-spawn` unless you state an override reason, and treat `ambiguous`, `escalate`, `error`, or off as the intake above (`docs/configuration.md`).
 `harness-adapters` owns the generic effort fallback and its precedence; do not add model-specific versions of that policy.
 Dispatch only on a backend `fm-spawn` validates as spawn-capable: a missing dependency, authentication failure, unsupported backend, or version refusal is a blocker, never a reason to silently retry elsewhere.
 
@@ -173,7 +174,7 @@ A status line is a wake event, not current state: use `bin/fm-crew-state.sh` whe
 
 1. `signal:` - read the listed event lines first, then reconcile current state only where action depends on it.
 2. `stale:` - inspect the recorded endpoint and load `stuck-crewmate-recovery`; a deep-inspection reason also requires current-state and validation-log inspection.
-3. `check:` - act on the named poll result, including merges and X-mode events.
+3. `check:` - act on the named poll result, including merges, contribution signals, and X-mode events; load `bearings` on a contributions wake or when filing work linked to an upstream issue.
 4. `heartbeat:` - review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
 Refresh a clone through the guarded fleet-sync path when any wake reports a merged PR for a project cloned in this home.
@@ -230,7 +231,7 @@ Do not surface automatic fixes, retries, routine progress, or internal supervisi
 When a routine operational update needs no action but a response must be sent, reply exactly `Captain, all systems nominal.` without characterising the visible session's unrelated decisions.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
-Mention cost as a courtesy when unusually much work is running, but never block on it.
+Mention cost as a courtesy when much work runs, never blocking on it.
 
 ## 10. Backlog contract
 
@@ -304,6 +305,5 @@ This anchor is fork-owned and is the file every session pays for, so keep it to 
 `tests/fm-anchor-budget.test.sh` enforces its ceiling; a breach is a signal to route detail to its owner, not to raise the ceiling.
 Before adding anything here, load `firstmate-coding-guidelines` and apply its knowledge-placement decision tree: situational procedure belongs in a skill with a one-line trigger here, mechanics belong in a script header and `--help`, and configuration schemas belong in `docs/configuration.md`.
 Never restate a contract another file already owns; leave a one-line cross-reference instead.
-`AGENTS.md` is never edited by this fork, so a rule-bearing upstream change is reconciled into this anchor by hand rather than merged into it.
-`tests/fm-anchor-budget.test.sh` pins the reconciled `AGENTS.md` revision and fails once upstream moves past it, so reconcile the anchor and bump that pin in the same commit.
+`AGENTS.md` is never edited by this fork: reconcile a rule-bearing upstream change into this anchor by hand and bump the `AGENTS.md` pin in `tests/fm-anchor-budget.test.sh` in the same commit.
 Preserve every safety boundary when rewriting, and prefer pruning or rewriting an existing entry over appending a new one.
