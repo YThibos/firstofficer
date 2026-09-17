@@ -1,0 +1,13 @@
+ok - CLAUDE.md is a real fork-owned file, not a symlink to AGENTS.md
+ok - CLAUDE.md is reconciled against the pinned AGENTS.md revision
+ok - CLAUDE.md is 39879 bytes, 121 bytes of headroom under the 40000-byte ceiling
+ok - budget guard fails loudly and names the size, overage, and ceiling
+ok - fm-merge-local lands a JIRA-keyed local-only branch
+ok - fm-merge-local still resolves a legacy fm/<id> branch
+ok - fm-merge-local prefers the worktree branch over a stale fm/<id> ref
+ok - fm-merge-local refuses loudly and names every branch it looked for
+ok - fm-merge-local refuses a task that resolves to the default branch
+ok - fm-merge-local still refuses a task that is not local-only
+ok - fm-merge-local still refuses a dirty project working tree
+ok - fm-merge-local still refuses a diverged branch and never discards it
+exit=0
