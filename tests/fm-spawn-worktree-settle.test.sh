@@ -301,7 +301,7 @@ test_borrowed_worktree_is_joined_and_marked() {
 # worktree settings file would fire the other agent's hook on every turn of this one,
 # because --settings merges with it rather than replacing it.
 test_claude_spawn_keeps_its_hook_out_of_the_worktree() {
-  local rec id out status settings
+  local rec id out status settings launch staged
   id=claude-hook-relocated-z6
   rec=$(make_settle_case claude-hook-relocated "$id" 0)
   read_settle_record "$rec"
@@ -321,7 +321,11 @@ test_claude_spawn_keeps_its_hook_out_of_the_worktree() {
   assert_present "$settings" "the spawn did not write the task's own turn-end hook outside the worktree"
   assert_grep "$HOME_DIR/state/$id.turn-ended" "$settings" \
     "the relocated hook does not signal this task's own turn-end"
-  assert_grep "--settings '$settings'" "$HOME_DIR/sent.log" \
+  # The launch command is staged in a file the pane sources, so read it there.
+  launch=$(cat "$HOME_DIR/sent.log")
+  staged=$(tr '\037' '\n' < "$HOME_DIR/sent.log" | sed -n "s/^\. '\([^']*\)'$/\1/p" | tail -1)
+  [ -n "$staged" ] && [ -f "$staged" ] && launch="$launch $(cat "$staged")"
+  assert_contains "$launch" "--settings '$settings'" \
     "the launch command does not carry the relocated hook, so the agent would signal nothing"
   pass "a claude spawn keeps its turn-end hook outside the worktree and carries it on the launch"
 }

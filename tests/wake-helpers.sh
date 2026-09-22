@@ -144,7 +144,8 @@ SH
 # (or its per-id override), defaulting to `none` - no attributed run - which is
 # the answer that leaves every escalation path behaving exactly as it did before
 # the probe existed.
-# Exporting FM_FAKE_CREW_STATE_LOG appends one line per call, so a test that
+# Exporting FM_FAKE_CREW_STATE_LOG appends one line per current-state read (a
+# liveness probe is not one), so a test that
 # asserts how many current-state reads a path spends - the reads are the costly
 # half of watcher triage - can count them instead of inferring them.
 make_fake_crew_state() {  # <fakebin>
@@ -155,7 +156,7 @@ set -u
 mode=state
 if [ "${1:-}" = --pipeline-liveness ]; then mode=liveness; shift; fi
 id=${1:-}
-[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "$id" >> "$FM_FAKE_CREW_STATE_LOG"
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || [ "$mode" = liveness ] || printf '%s\n' "$id" >> "$FM_FAKE_CREW_STATE_LOG"
 key=$(printf '%s' "$id" | tr -c 'A-Za-z0-9' '_')
 if [ "$mode" = liveness ]; then
   var="FM_FAKE_PIPELINE_LIVENESS_$key"

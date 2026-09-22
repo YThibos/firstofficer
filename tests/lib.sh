@@ -239,6 +239,22 @@ fi
 
 # --- live-capability gate ---------------------------------------------------
 #
+# fm_orphan_reaper_pid: print the pid this host hands an orphaned process to.
+# That is 1 on a plain host, but a child subreaper (WSL's init relay, a
+# container or session manager) adopts orphans instead, so a test asserting
+# that a process was orphaned compares against this rather than a literal 1.
+fm_orphan_reaper_pid() {
+  local orphan ppid='' i=0
+  orphan=$(bash -c 'sleep 5 >/dev/null 2>&1 & echo $!')
+  while [ "$i" -lt 40 ]; do
+    ppid=$(ps -o ppid= -p "$orphan" 2>/dev/null | tr -d ' ')
+    [ -n "$ppid" ] && break
+    sleep 0.05; i=$((i + 1))
+  done
+  kill "$orphan" 2>/dev/null
+  printf '%s\n' "${ppid:-1}"
+}
+
 # fm_live_gate <policy> <vars> [tool ...]
 #
 # The single gate every live-harness guard opens with, so "can this host run

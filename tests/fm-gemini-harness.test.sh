@@ -145,6 +145,13 @@ JS
     pass "fm-harness.sh: this platform's node reports comm=node and ancestry reaches gemini"
     return 0
   fi
+  # Run inside a live Claude Code session, real harness ancestry sits above
+  # this node process and outranks both the script path and the marker, so the
+  # shape this case measures cannot be staged here.
+  if [ -n "${CLAUDECODE:-}" ]; then
+    echo "skip: running inside a Claude Code session, whose ancestry outranks the gemini shape under test"
+    return 0
+  fi
   # The measured case: comm is not `node`, so ancestry cannot see the bundle and
   # the marker is the only detection path.
   cat > "$dir/gemini" <<'JS'
