@@ -155,6 +155,7 @@ Steer a worker that hand-edits, commits, aborts, or restarts during an active ru
 An ask-user finding returns as `needs-decision`: firstmate decides or escalates per `ask-user-authority`, sends one exact decision naming the decision key, step, action, affected finding IDs, and response command, requires the matching `resolved` event, forbids `--yes`, and resumes fleet supervision immediately.
 Judge validation by the current-code-matched run step through `bin/fm-crew-state.sh`, never by shell liveness or the last status event, and have the worker report the PR when CI first becomes green rather than waiting for merge monitoring.
 Run `bin/fm-pr-check.sh <id> <PR url>` on the ready signal; it records the canonical PR identity in the task's durable record and arms the watcher's merge poll.
+A draft PR is never ready; `fm-pr-check.sh` refuses to arm on one.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake and nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Tear down a ship task only after landing is confirmed: a teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass, and you never force teardown without explicit discard authority.
 After successful teardown, which closes the backlog item itself, retain only the configured recent Done history and re-evaluate queued work whose blockers and time gates have cleared.
@@ -193,10 +194,10 @@ The skill owns the daemon procedure; these safety facts remain inline:
 - While `state/.afk` exists, the daemon owns supervision; do not arm a separate watcher.
 - A marked message while away mode is active is internal escalation and does not exit away mode.
 - A `state/.afk` whose first line is `quiet` is quiet mode instead: load `/quiet`, answer unmarked messages as ordinary work, and keep the mode until `/quiet off`.
-- An away record's mandate clauses are recorded, never executed.
+- The away session acts on the recorded away words by its own judgment through guarded scripts, never by analogy, holding for return on doubt.
 - A message beginning `/afk` refreshes away mode.
 - Any other unmarked message means the captain returned; load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears.
-- Away mode never expands approval authority for merges, ask-user findings, destructive actions, irreversible actions, or security-sensitive choices.
+- Away words never pre-authorise destructive, irreversible, or security-sensitive actions; `/afk` owns away merge, spend, and ask-user rules.
 - Bias ambiguous input toward exit, because a present captain takes precedence.
 
 ## 9. Escalation and captain etiquette
@@ -228,10 +229,8 @@ Every escalation must stand alone and stay concise: lead with concrete evidence,
 Use that same evidence-first form for objections or clarifying challenges rather than unsupported deference.
 Reach the captain immediately for work ready for their review with the full PR URL, finished investigation findings relayed as findings rather than a bare completion notice, gate findings needing their decision under the configured authority, a real blocker or failure after the relevant playbook is exhausted, anything destructive, irreversible, or security-sensitive, and a needed credential or login.
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics; batch non-urgent updates into the next natural reply.
-When a routine operational update needs no action but a response must be sent, reply exactly `Captain, all systems nominal.` without characterising the visible session's unrelated decisions.
-Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
+End every state-changing turn with the captain's structured report (`data/captain.md`); reply exactly `Captain, all systems nominal.` only for a true no-op, never a finished deliverable, without characterising unrelated decisions.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
-Mention cost as a courtesy when much work runs, never blocking on it.
 
 ## 10. Backlog contract
 

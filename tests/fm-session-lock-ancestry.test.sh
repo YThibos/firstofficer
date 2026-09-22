@@ -730,8 +730,27 @@ expect_phase_foreign() {  # <dir> <n> <expected-arms> <owner-pid> <label>
   [ "$(phase_value "$dir" "$n" lock-after)" = "$owner" ] || fail "$label: a non-owner rewrote the lock"
 }
 
+# True when an orphaned process on this host is adopted by pid 1. A child
+# subreaper (WSL's init relay, a container or session manager) adopts it
+# instead, and the recycled-chain case below cannot be staged there at all.
+orphans_reparent_to_init() {
+  local orphan ppid i=0
+  orphan=$(bash -c 'sleep 5 >/dev/null 2>&1 & echo $!')
+  while [ "$i" -lt 40 ]; do
+    ppid=$(ps -o ppid= -p "$orphan" 2>/dev/null | tr -d ' ')
+    [ -n "$ppid" ] && break
+    sleep 0.05; i=$((i + 1))
+  done
+  kill "$orphan" 2>/dev/null
+  [ "$ppid" = 1 ]
+}
+
 test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
   local dir frontend daemon ptyhost spare i
+  if ! orphans_reparent_to_init; then
+    echo "skip: orphans on this host are adopted by a subreaper, not pid 1, so a recycled background chain cannot be staged"
+    return 0
+  fi
   dir="$TMP_ROOT/e2e-background-session"
   make_background_session_home "$dir"
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
