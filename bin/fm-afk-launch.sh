@@ -7,11 +7,12 @@
 # after a crash.
 #
 # ENTRY (the posture record). `/afk [words]` is two steps so the captain hears
-# the mandate back before it binds: `propose` compiles the words and clauses
-# into a proposal and prints the read-back (bin/fm-afk-contract.sh owns the
-# clause fields, the never-set, the refusal wording, and the record schema); `confirm` promotes it
-# into state/.afk-contract and prints the entry announcement (hold-for-return
-# only: no phone channel exists). The record is the posture in every harness.
+# the mandate back before it binds: `propose` records the captain's away words
+# verbatim into a proposal and prints the read-back (bin/fm-afk-contract.sh owns
+# the record schema; the words are the whole mandate and no script parses them);
+# `confirm` promotes it into state/.afk-contract and prints the entry
+# announcement (hold-for-return only: no phone channel exists). The record is
+# the posture in every harness.
 # On Pi and pi-signed the entry ENDS there: the away daemon is no longer launched
 # on Pi, the ordinary supervision session keeps running in both postures, and
 # `start` refuses on those harnesses. Every other harness still runs the daemon
@@ -38,16 +39,9 @@
 #
 # Usage:
 #   fm-afk-launch.sh propose [--words-file <path> | --words <text>]
-#                            [--action <verb> --object <text> --when <text> [--stop <text>]]...
 #                            [--expected-return <UTC ISO 8601>] [--spend <n>]
-#                            [--grant <task-id>]...
-#                              Record the captain's away words and mandate
-#                              clause fields into a proposal and print the
-#                              read-back. Exit 3 when a clause was refused (its
-#                              missing part is named in the read-back); the
-#                              proposal still records it as refused.
-#                              Repeatable --grant records captain-named task
-#                              ids that may merge-when-green while away.
+#                              Record the captain's away words verbatim into a
+#                              proposal and print the read-back.
 #   fm-afk-launch.sh confirm   Promote the required proposal and print the entry
 #                              announcement. On Pi this is the whole entry.
 #   fm-afk-launch.sh start     Capture the captain pane, then (unless the daemon
@@ -61,8 +55,10 @@
 #                              background job and record that no terminal exists.
 #   fm-afk-launch.sh stop      Correct-ordered exit: SIGTERM the daemon so its
 #                              cleanup flushes WHILE state/.afk is still present,
-#                              wait for it, close the recorded terminal by exact
-#                              id, clear state/.afk, then archive the record last.
+#                              wait for it, close a recorded non-native terminal
+#                              by exact id, clear state/.afk, then archive the
+#                              record last. A Pi or native entry that never
+#                              launched a daemon reports that none was running.
 #   fm-afk-launch.sh reconcile Close a recorded-but-dead daemon terminal by exact
 #                              id and drop the record (recovery after a crash).
 #
@@ -661,7 +657,7 @@ fm_afk_launch_start_native() {
 }
 
 fm_afk_launch_stop() {
-  local pid pid_identity current_identity result=0 read_result archived
+  local pid pid_identity current_identity result=0 read_result archived closed_daemon_terminal=0
   fm_afk_launch_record_read
   read_result=$?
   if [ "$read_result" -eq 2 ]; then
@@ -697,9 +693,15 @@ fm_afk_launch_stop() {
       return 1
     fi
   fi
-  # (2) Close the daemon's own terminal by exact id.
+  # (2) Close the daemon's own terminal by exact id. A native/none record or
+  # an absent record means no terminal existed for this entry (Pi never
+  # launches one).
   if [ "$read_result" -eq 0 ]; then
+    if [ "$FM_AFK_REC_BACKEND" != none ]; then
+      closed_daemon_terminal=1
+    fi
     fm_afk_launch_close_recorded || result=1
+    [ "$result" -eq 0 ] || closed_daemon_terminal=0
   fi
   # (3) Clear the away-mode flag, then (4) archive the posture record LAST so the
   # posture ends only once every daemon-side artifact is down.
@@ -716,7 +718,11 @@ fm_afk_launch_stop() {
     fi
   fi
   if [ "$result" -eq 0 ]; then
-    fm_afk_launch_log "away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived"
+    if [ "$closed_daemon_terminal" -eq 1 ]; then
+      fm_afk_launch_log "away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived"
+    else
+      fm_afk_launch_log "away mode stopped; no daemon terminal was running, .afk cleared, and the posture record archived"
+    fi
   else
     fm_afk_launch_log "away mode stopped; terminal teardown or the record archive remains recorded for retry"
   fi

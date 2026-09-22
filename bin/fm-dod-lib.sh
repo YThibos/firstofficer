@@ -20,6 +20,10 @@
 # safety stage because a check failed to run.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
+# The two PR-based blocks require a non-draft pull request before the done
+# report, read back from the forge; a lane that deliberately holds a draft
+# declares a paused wait instead. bin/fm-pr-check.sh refuses to arm merge
+# monitoring on a draft through the same reading bin/fm-pr-merge.sh uses.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -233,11 +237,19 @@ fm_brief_intent_address_line() {  # <file>
   '
 }
 
+# The `nm-<run>-<step>` decision key this block mandates is load-bearing beyond
+# the brief itself: the watcher binds an open `needs-decision` to the run a
+# crew's current state reports by matching exactly that shape
+# (wedge_wait_evidence in bin/fm-watch.sh, through
+# status_has_open_needs_decision in bin/fm-classify-lib.sh), which is what buys
+# a lane parked at a human-owed gate the long recheck cadence instead of a
+# wedge escalation. A gate escalated under any other key still reads as a
+# suspected wedge.
 fm_ask_user_escalation_block() {  # <data-dir> <task-id>
   local data=$1 id=$2
   cat <<EOF
    For a no-mistakes ask-user gate specifically, escalate all ask-user findings as one event plus one snapshot file, using that same shape even when the gate holds only a single ask-user finding: write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority), to \`$data/$id/nm-<run>-findings.txt\`, then report the gate with
-   \`needs-decision [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file=$data/$id/nm-<run>-findings.txt\`
+   \`needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file=$data/$id/nm-<run>-findings.txt\`
    naming every ask-user finding id from that gate. The status line only points at the file; it never restates or summarizes a finding's content.
 EOF
 }
@@ -315,17 +327,17 @@ Work these stages in order on your branch \`$branch\`.
    \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip push,pr,ci\`
    It stops after the lint step, having pushed nothing.
 3. Stop for the independent craftsmanship review.
-   Append \`done: validated, ready for craftsmanship review\` to the status file and stop.
+   Append \`done [at=<epoch>]: validated, ready for craftsmanship review\` to the status file and stop.
    Firstmate dispatches a reviewer that did not write this code. Do not review your own work, and do not publish yet.
 4. When firstmate returns findings, fix them on this branch, run stage 2 again over the new commits, and report ready for re-review.
    The review is pinned to the exact commit it passed, so every new commit needs a fresh one.
 5. Publish, and only once the review gate lets you:
    \`$gate\`
-   If it refuses, do NOT publish: append \`blocked: {the exact reason it gave}\` to the status file and stop.
+   If it refuses, do NOT publish: append \`blocked [at=<epoch>]: {the exact reason it gave}\` to the status file and stop.
    Once it passes, publish the branch with the pipeline's own push step and nothing beyond it - every step that can commit a fix is skipped too, because stage 2 already ran them and a fix commit made now would reach the remote without the craftsmanship review the verdict is pinned to:
    \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip review,test,document,lint,pr,ci\`
-   Then append \`done: branch $branch published\` and stop. Do NOT open a PR or merge request.
-   If this project has no remote at all, publication does not apply: append \`done: reviewed and ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
+   Then append \`done [at=<epoch>]: branch $branch published\` and stop. Do NOT open a PR or merge request.
+   If this project has no remote at all, publication does not apply: append \`done [at=<epoch>]: reviewed and ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
 
 EOF
   else
@@ -345,8 +357,8 @@ Work these stages in order on your branch \`$branch\`.
    It stops after the lint step, having pushed nothing.
 3. Publish the branch with the pipeline's own push step and nothing beyond it - every step that can commit a fix is skipped too, because stage 2 already ran them:
    \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip review,test,document,lint,pr,ci\`
-   Then append \`done: branch $branch published\` and stop. Do NOT open a PR or merge request.
-   If this project has no remote at all, publication does not apply: append \`done: ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
+   Then append \`done [at=<epoch>]: branch $branch published\` and stop. Do NOT open a PR or merge request.
+   If this project has no remote at all, publication does not apply: append \`done [at=<epoch>]: ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
 
 EOF
   fi
@@ -362,7 +374,11 @@ fm_dod_block() {  # <mode> <task-id> [<branch> <project> <state-dir> <config-dir
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+When it is implemented and committed, push your branch and open a PR with \`gh-axi\` that is ready for review, not a draft.
+Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft\` must print false); if it is a draft, mark it ready with \`gh-axi pr ready\`.
+A draft cannot be merged, so a done report on one leaves the merge unasked.
+Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
+If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;
@@ -374,13 +390,16 @@ EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
 The task is complete only when committed on your branch.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
+When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 EOF
       fm_dod_pipeline_gates
       cat <<EOF
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft\` must print false); if it is a draft, mark it ready with \`gh-axi pr ready\`.
+A draft cannot be merged, so a done report on one leaves the merge unasked.
+Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. You are finished.
+If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 EOF
       ;;
     *)

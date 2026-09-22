@@ -60,16 +60,23 @@ unit_propose_confirm_records_the_posture_without_a_daemon() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-propose.XXXXXX")
   mkdir -p "$st/state"
   out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" propose \
-    --words 'merge the windows fix when green' --action merge --object 'task fix-windows PR' --when 'checks green' \
-    --action merge --object regardless 2>&1)
+    --words 'merge the windows fix when green' --expected-return 2026-09-08T08:00Z --spend 2 2>&1)
   rc=$?
-  if [ "$rc" -eq 3 ] && [ -f "$st/state/.afk-contract.proposed" ] \
-    && printf '%s' "$out" | grep -F '1. merge task fix-windows PR when checks green' >/dev/null \
-    && printf '%s' "$out" | grep -F '2. "action=merge object=regardless when=(none)" - refused: missing when' >/dev/null \
+  if [ "$rc" -eq 0 ] && [ -f "$st/state/.afk-contract.proposed" ] \
+    && printf '%s' "$out" | grep -F '    merge the windows fix when green' >/dev/null \
+    && printf '%s' "$out" | grep -F 'expected return: 2026-09-08T08:00Z' >/dev/null \
+    && printf '%s' "$out" | grep -F 'spend cap: 2 concurrent workers' >/dev/null \
     && [ ! -e "$st/state/.afk-contract" ]; then
-    pass "propose: the read-back lists accepted and refused clauses and writes only a proposal"
+    pass "propose: the read-back carries the words verbatim with the expected return and spend cap, and writes only a proposal"
   else
     fail "propose: read-back or proposal wrong (rc=$rc): $out"
+  fi
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" propose --words 'merge it' --grant fix-windows 2>&1)
+  rc=$?
+  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -F -- '--grant was retired' >/dev/null; then
+    pass "propose: the retired --grant flag is refused by name"
+  else
+    fail "propose: --grant was not refused by name (rc=$rc): $out"
   fi
   out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" confirm 2>&1)
   rc=$?
@@ -81,7 +88,7 @@ unit_propose_confirm_records_the_posture_without_a_daemon() {
     fail "confirm: record, announcement, or daemon state wrong (rc=$rc): $out"
   fi
   printf 'schema\tfm-afk-return.v1\nphase\tblocked\n' > "$st/state/.afk-return-catchup"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" propose --action merge --object 'task a PR' --when 'checks green' >/dev/null 2>&1; then
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" propose --words 'merge task a PR when green' >/dev/null 2>&1; then
     fail "propose: accepted a new mandate while the prior return catch-up was pending"
   else
     pass "propose: refuses while the prior return catch-up is pending"
@@ -116,11 +123,32 @@ unit_pi_never_launches_the_daemon() {
   done
 }
 
+unit_pi_confirm_stop_does_not_claim_a_daemon_terminal() {
+  local st out rc
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-pi-stop.XXXXXX")
+  mkdir -p "$st/state"
+  confirm_posture "$st" || fail "pi stop: could not confirm fixture posture"
+  [ ! -e "$st/state/.afk" ] || fail "pi stop: fixture error: confirm wrote the away flag"
+  [ ! -e "$st/state/.afk-daemon-terminal" ] || fail "pi stop: fixture error: confirm recorded a daemon terminal"
+  [ ! -e "$st/state/.supervise-daemon.log" ] || fail "pi stop: fixture error: a daemon log already existed"
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && printf '%s' "$out" | grep -F 'no daemon terminal was running' >/dev/null \
+    && ! printf '%s' "$out" | grep -F 'daemon terminal torn down' >/dev/null \
+    && [ ! -e "$st/state/.afk-contract" ]; then
+    pass "pi confirm stop: reports that no daemon terminal was running"
+  else
+    fail "pi confirm stop: claimed a daemon teardown or failed (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
 unit_daemon_entry_requires_confirmation() {
   local st out rc
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-entry-record.XXXXXX")
   mkdir -p "$st/state"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" propose --action merge --object 'task a PR' --when 'checks green' >/dev/null 2>&1
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" propose --words 'merge task a PR when green' >/dev/null 2>&1
   out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ] && [ -f "$st/state/.afk-contract.proposed" ] && [ ! -e "$st/state/.afk-contract" ] \
@@ -735,7 +763,7 @@ unit_tmux_absence_distinguishes_probe_failure() {
 }
 
 unit_native_lifecycle() {
-  local st
+  local st out
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-native.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
@@ -748,11 +776,13 @@ unit_native_lifecycle() {
   else
     fail "native lifecycle: state preparation or no-terminal record failed"
   fi
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
-  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop 2>&1)
+  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ] \
+    && printf '%s' "$out" | grep -F 'no daemon terminal was running' >/dev/null \
+    && ! printf '%s' "$out" | grep -F 'daemon terminal torn down' >/dev/null; then
     pass "native lifecycle: uniform stop clears state without closing a terminal"
   else
-    fail "native lifecycle: uniform stop retained state"
+    fail "native lifecycle: uniform stop retained state or claimed a teardown: $out"
   fi
   rm -rf "$st"
 }
@@ -1188,6 +1218,7 @@ e2e_tmux() {
 unit_clear_stale
 unit_propose_confirm_records_the_posture_without_a_daemon
 unit_pi_never_launches_the_daemon
+unit_pi_confirm_stop_does_not_claim_a_daemon_terminal
 unit_daemon_entry_requires_confirmation
 unit_failed_daemon_launch_preserves_confirmed_record
 unit_stop_archives_the_record_last
