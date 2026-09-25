@@ -1364,6 +1364,7 @@ fm_failure_episode_reset() {
   esac
   for path in \
     "$state/.turnend-claude-blocks" \
+    "$state/.turnend-claude-hard-cap" \
     "$state/.claude-autoarm-failure-notified" \
     "$state/.claude-autoarm-failure-alarmed"
   do
@@ -1374,6 +1375,7 @@ fm_failure_episode_reset() {
   done
   if ! rm -f \
     "$state/.turnend-claude-blocks" \
+    "$state/.turnend-claude-hard-cap" \
     "$state/.claude-autoarm-failure-notified" \
     "$state/.claude-autoarm-failure-alarmed" \
     2>/dev/null; then

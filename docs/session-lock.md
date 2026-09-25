@@ -42,6 +42,22 @@ Where this session's own host or its session id cannot be resolved, the existing
 The holder that IS this session's current host is excluded, since nothing has superseded it and a session must never read its own live lock as reclaimable.
 This is a session reclaiming a home it already owns across a re-host, not a takeover of a working session, so it is independent of the usage-limit takeover below and does not widen it.
 
+## A standby never holds the lock
+
+Claude Code's background daemon keeps pre-warmed spare session hosts ready for the next session to claim, and they run as `claude bg-spare`.
+A standby runs the project's SessionStart hooks while it is being pre-warmed, before anyone uses it, so it used to claim a free or stale lock, record its own verified host pid, and then sit on it: it never takes a turn and never exits, so every later session in the home started read-only.
+That is how a read-only Claude primary was held in a turn-end loop until its usage limit ran out, on 2026-09-24 and 2026-09-25; [`turnend-guard.md`](turnend-guard.md) owns the guard side of that incident.
+
+Claude Code marks an unclaimed standby `"spare": true` in its per-pid record and drops the flag once a client claims it, and `fm_claude_session_is_spare` answers from that flag alone.
+The argv cannot decide it, because a claimed standby keeps its `bg-spare` command line for the whole of the session it now hosts.
+The record is trusted only under the same `procStart` check as every other per-pid record, so an unverifiable or absent record answers no and nothing changes.
+
+Two rules follow, and both are needed.
+`bin/fm-lock.sh` refuses to claim the lock from inside an unclaimed standby, and says why, so a standby cannot win the lock in the first place.
+`fm_harness_pid_alive` does not count an unclaimed standby as a live holder, so a lock one already holds reads as stale: the real session claims it at session start, or at its next Stop through the Stop-owned auto-arm's ordinary stale-lock recovery, with no manual step.
+Once claimed, the same process is an ordinary live session host and holds or claims the lock like any other.
+This is not a takeover of a session in use, so it is independent of the usage-limit takeover below and announces nothing.
+
 ## Taking over from a session stopped by a usage limit
 
 A Claude session that stops because a usage limit was reached does not exit.
@@ -127,6 +143,9 @@ Claiming a lock is a fleet mutation, and taking one from a live process is preci
 `tests/fm-session-lock-identity.test.sh` pins which pid a running session resolves to, including that a verified Claude session host wins over the claude-named client above it, that such a host counts as a live harness, and that an unverifiable record leaves the naming rules deciding.
 It also pins that the shared-service boundary outranks that short-circuit: a live `claude daemon run` carrying a verifiable per-pid record of its own is selected neither by the ancestry walk nor by the liveness test, so no home can be pinned read-only by a process every session shares.
 It also pins the claim-before-re-host ordering end to end: a lock recording a still-alive, claude-named client whose verified record names this session's own session id is reclaimable, while the same shape with a different session id, with an unverifiable record, and with no record at all each keep their lock, and this session's own current host is never read as superseded.
+
+It also pins the standby rules against real processes and verified records: an unclaimed standby is not a live holder while the same host counts once its record drops the flag, a real session takes the lock over from a standby through `bin/fm-lock.sh`, a standby cannot claim even a free lock, and a claimed standby keeps its lock like any live session.
+`tests/fm-claude-stop-autoarm.test.sh` pins the automatic side: a real session reclaims a home a standby holds at its next Stop.
 
 `tests/fm-session-lock-limit-stop.test.sh` drives the shared lib and `bin/fm-lock.sh` against fixture process tables and fixture transcripts.
 It pins the shared-service boundary in both the ancestry walk and the liveness test, the takeover of a limit-stopped holder, the continued refusal of a working holder and of a resumed session whose process is younger than its own last record, the takeover of a limit-stopped holder in the session-host shape, whose name is its release version and whose id comes from its verified per-pid record, the refusal of every missing, unparseable, timestamp-less, non-limit, and non-Claude case, and that only the session which performed a takeover is ever told it did.

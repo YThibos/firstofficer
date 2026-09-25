@@ -84,7 +84,14 @@
 #      against an epoch the auto-arm never advanced past the previous
 #      re-block (budget_account_current_epoch owns that rule), so an inert
 #      hook that leaves the ledger frozen cannot hold the guard in an
-#      unbounded re-block loop below that override.
+#      unbounded re-block loop below that override;
+#   4. over all of that sits a hard per-session cap of the same size that no
+#      epoch accounting can reset (claude_block_or_cap): once spent, every
+#      further would-be block allows the stop with one loud line.
+#
+# Every mode stands down for a session that does not hold the home's fleet
+# lock while another live harness does (session_lock_held_elsewhere): such a
+# session is read-only and cannot act on a block.
 #
 # Forced stow before the usage budget runs out (--claude mode only): the same
 # Stop event is the last reliable moment to react to Claude's approaching-limit
@@ -230,8 +237,83 @@ budget_reset() {
   fm_lock_release "$BUDGET_LOCK"
 }
 
+# --- hard per-session block cap (--claude mode) ------------------------------
+# The one bound on consecutive forced continuations that nothing else can reset:
+# it lives in its own file, keyed only by the Claude session id, and is cleared
+# only by positive proof that supervision is back: an idle home
+# (hard_cap_reset below) or a completed failure-episode reset
+# (fm_failure_episode_reset in bin/fm-wake-lib.sh). The
+# event-epoch budget above decides WHICH stops block; this cap decides that no
+# more than BLOCK_BUDGET of them ever do before one is let through, because a
+# session that cannot repair supervision - a denied tool call, a broken hook, a
+# ledger frozen in some state nobody anticipated - would otherwise be forced to
+# continue until its usage limit ran out. docs/turnend-guard.md owns the
+# contract.
+HARD_CAP_FILE="$STATE/.turnend-claude-hard-cap"
+hard_cap_reset() {
+  [ "$CLAUDE_MODE" -eq 1 ] || return 0
+  rm -f "$HARD_CAP_FILE" 2>/dev/null || true
+}
+
+# Decide one would-be block. Returns 0 when this stop may block, having charged
+# it; otherwise allows the stop itself (exit 0), printing one loud line the
+# first time the cap is hit in an episode. A cap that cannot be recorded allows
+# too, because an unrecordable cap is no cap at all.
+claude_block_or_cap() {
+  local old_session count alarmed tmp
+  [ "$CLAUDE_MODE" -eq 1 ] || return 0
+  count=0
+  alarmed=0
+  old_session=$(sed -n '1s/^session=//p' "$HARD_CAP_FILE" 2>/dev/null || true)
+  if [ "$old_session" = "$SESSION_ID" ]; then
+    count=$(sed -n '2s/^count=//p' "$HARD_CAP_FILE" 2>/dev/null || true)
+    alarmed=$(sed -n '3s/^alarmed=//p' "$HARD_CAP_FILE" 2>/dev/null || true)
+    case "$count" in ''|*[!0-9]*) count=$BLOCK_BUDGET ;; esac
+    case "$alarmed" in 1) : ;; *) alarmed=0 ;; esac
+  fi
+  if [ "$count" -lt "$BLOCK_BUDGET" ]; then
+    count=$((count + 1))
+    tmp="$HARD_CAP_FILE.tmp.$$"
+    if printf 'session=%s\ncount=%s\nalarmed=0\n' "$SESSION_ID" "$count" > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$HARD_CAP_FILE" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    alarmed=0
+  fi
+  if [ "$alarmed" -eq 0 ]; then
+    tmp="$HARD_CAP_FILE.tmp.$$"
+    { printf 'session=%s\ncount=%s\nalarmed=1\n' "$SESSION_ID" "$count" > "$tmp" \
+      && mv -f "$tmp" "$HARD_CAP_FILE"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+    printf '{"systemMessage":"FIRSTMATE TURN-END GUARD HARD CAP REACHED: this stop was blocked %s times in a row and supervision is still off, so the guard now lets this session stop instead of forcing further turns. Fleet supervision stays down until this session repairs it or a session holding the fleet lock does; keep it attended."}\n' "$BLOCK_BUDGET"
+  fi
+  exit 0
+}
+
+# --- a session that does not hold the fleet lock cannot act on a block --------
+# Repairing supervision is a fleet mutation, and only the session holding the
+# home's lock may perform one, so blocking any other session only forces turns
+# it is forbidden to use - the 2026-09 incident, where a read-only session was
+# held in a Stop-hook loop until its usage limit ran out. The guard therefore
+# stands down whenever ANOTHER live harness session holds the lock. A missing,
+# malformed, dead, or otherwise reclaimable lock is not that case: this session
+# can claim it, so it is still guarded. A home mid-update without the lock lib
+# keeps the previous behaviour.
+session_lock_held_elsewhere() {
+  local lock_pid
+  lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
+  case "$lock_pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -r "$SCRIPT_DIR/fm-session-lock-lib.sh" ] || return 1
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh" 2>/dev/null || return 1
+  command -v fm_session_lock_owned_by_self >/dev/null 2>&1 || return 1
+  fm_session_lock_owned_by_self "$STATE" && return 1
+  fm_harness_pid_alive "$lock_pid"
+}
+
 fm_supervision_status "$STATE" "$GRACE"
 if [ "$FM_SUP_NEEDED" = false ]; then
+  hard_cap_reset
   [ -e "$FAILURE_NOTICE" ] || budget_reset
   exit 0
 fi
@@ -240,6 +322,7 @@ fi
 allow_supervised_stop() {
   [ "$CLAUDE_MODE" -eq 1 ] || exit 0
   fm_failure_episode_reset "$STATE" && exit 0
+  claude_block_or_cap
   exit 2
 }
 
@@ -267,6 +350,7 @@ fi
 
 block_stop() {
   local afk x_mode reason rule
+  claude_block_or_cap
   afk=0
   [ -e "$STATE/.afk" ] && afk=1
   x_mode=0
@@ -294,6 +378,8 @@ block_stop() {
   } >&2
   exit 2
 }
+
+session_lock_held_elsewhere && exit 0
 
 if [ "$CLAUDE_MODE" -eq 0 ]; then
   block_stop
@@ -519,7 +605,7 @@ i=0
 while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
   if autoarm_owns_recovery; then
     if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
-      fm_failure_episode_reset "$STATE" || exit 2
+      fm_failure_episode_reset "$STATE" || { claude_block_or_cap; exit 2; }
     fi
     exit 0
   fi
@@ -528,7 +614,7 @@ while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
 done
 if autoarm_owns_recovery; then
   if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
-    fm_failure_episode_reset "$STATE" || exit 2
+    fm_failure_episode_reset "$STATE" || { claude_block_or_cap; exit 2; }
   fi
   exit 0
 fi
