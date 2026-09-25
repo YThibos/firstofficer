@@ -1,0 +1,65 @@
+=== S1: read-only session, fleet lock held by another LIVE real session (record without spare) ===
+-- bin/ at 17d4709; lock holder pid 1164769; fm-lock.sh status: lock: held by live harness pid 1164769
+   claude stop 1: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 2: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 3: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 4: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 5: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 6: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 7: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 8: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 9: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   claude stop 10: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   default stop 1: exit=0 
+   default stop 2: exit=0 
+   default stop 3: exit=0 
+   default stop 4: exit=0 
+   default stop 5: exit=0 
+   default stop 6: exit=0 
+   default stop 7: exit=0 
+   default stop 8: exit=0 
+   default stop 9: exit=0 
+   default stop 10: exit=0 
+-- bin/ at HEAD; lock holder pid 1166994; fm-lock.sh status: lock: held by live harness pid 1166994
+   claude stop 1: exit=0 
+   claude stop 2: exit=0 
+   claude stop 3: exit=0 
+   claude stop 4: exit=0 
+   claude stop 5: exit=0 
+   claude stop 6: exit=0 
+   claude stop 7: exit=0 
+   claude stop 8: exit=0 
+   claude stop 9: exit=0 
+   claude stop 10: exit=0 
+   default stop 1: exit=0 
+   default stop 2: exit=0 
+   default stop 3: exit=0 
+   default stop 4: exit=0 
+   default stop 5: exit=0 
+   default stop 6: exit=0 
+   default stop 7: exit=0 
+   default stop 8: exit=0 
+   default stop 9: exit=0 
+   default stop 10: exit=0 
+
+=== S2: frozen/reset epoch vs hard cap (lock free, unhealthy, --claude) ===
+   stop 1 (epoch reset, budget ledger wiped): exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   stop 2 (epoch reset, budget ledger wiped): exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   stop 3 (epoch reset, budget ledger wiped): exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   stop 4 (epoch reset, budget ledger wiped): exit=0 {"systemMessage":"FIRSTMATE TURN-END GUARD HARD CAP REACHED: this stop was blocked 3 times in a row and superv
+   stop 5 (epoch reset, budget ledger wiped): exit=0 
+   stop 6 (epoch reset, budget ledger wiped): exit=0 
+   stop 7 (epoch reset, budget ledger wiped): exit=0 
+   stop 8 (epoch reset, budget ledger wiped): exit=0 
+   hard-cap file: session=s2 count=3 alarmed=1 
+   supervision idle -> exit=0 cap file present: no
+
+=== S3: unclaimed bg-spare standby as lock holder ===
+   fm-lock.sh status: lock: stale (pid 1170633 dead, not a harness, or an unclaimed standby)
+   Stop in a session not holding lock: exit=2 (guard still applies; lock is reclaimable) ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+   standby tries to claim a free lock:
+   error: this is an unclaimed Claude Code standby (pid 1171665), not a session in use; it does not take the fleet lock. If this session is now in use, run bin/fm-lock.sh again to claim it
+rc=1 | lock file: absent
+
+=== S4 (reboot approximation): primary claude-ancestry session starts while bg-spare holds lock ===
+   session start fm-lock.sh: lock acquired: harness pid 1171714 rc=0 me=1171714  | lock now: 1171714 (standby was 1170633)
