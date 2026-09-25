@@ -6,23 +6,28 @@
 # no-mistakes worker that never received the ask-user escalation rule or the
 # `--yes` ban is the exact delivery hole this single owner exists to close.
 # fm_dod_block <no-mistakes|direct-PR|local-only> <task-id> [<branch> <project>
-# <state-dir> <config-dir>] prints the block on stdout with no trailing blank
-# line. The caller validates the mode; an unknown mode is refused rather than
-# silently rendered as the pipeline contract. The optional arguments shape only
-# local-only: <branch> names the branch the worker publishes (default
-# fm/<task-id>), and the rest let bin/fm-craft-review.sh decide, against the
-# dispatching home's own scope file, whether the independent craftsmanship
-# review gates publication. local-only keeps this fork's meaning - validate,
-# pass that review where the home requires it, then publish the branch and open
-# no merge request - and bin/fm-project-mode.sh's header owns why the name stays.
-# Only the craft-review scope's definite "no" (exit 1) drops the review stage;
-# an unanswerable check keeps it, because a contract must never quietly omit a
-# safety stage because a check failed to run.
+# <config-dir>] prints the block on stdout with no trailing blank line. The
+# caller validates the mode; an unknown mode is refused rather than silently
+# rendered as the pipeline contract. <branch> names the branch the worker
+# publishes (default fm/<task-id>); <project> and <config-dir> let
+# bin/fm-craft-rules.sh decide, against the dispatching home's own scope file,
+# whether the pipeline modes add the captain's craftsmanship rules to
+# `--intent`. Only its definite "no" (exit 1) leaves them out, because an
+# unanswerable check must never quietly drop them.
+# local-only keeps this fork's meaning - one pipeline run validates, publishes
+# the branch, and opens the merge request as a draft the captain reviews and
+# merges - and bin/fm-project-mode.sh's header owns why the name stays.
+# That run keeps its own review step, which no-mistakes 1.72+ requires before it
+# pushes, so no publish-only run and no re-review exists.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
-# brief's `## Captain's intent` subsection plus later captain words, never
-# `## Firstmate spec` and never the worker's own tradeoffs.
+# brief's `## Captain's intent` subsection plus later captain words, and the
+# craftsmanship rules block where it applies, never `## Firstmate spec` and
+# never the worker's own tradeoffs. Firstmate fills that subsection with the
+# captain's ask and the task's full acceptance criteria, and states there per
+# task whether offline verification is accepted, so the pipeline neither
+# re-litigates scope nor demands live proof that cannot exist.
 # Author the subsection body and later relays as the actual words, without
 # adding speaker labels or direct address: the heading supplies provenance and
 # is not part of --intent. A legacy mixed Task instead marks each captain line
@@ -72,7 +77,7 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [<branch>]
       printf '%s\n' "1. Never push to the default branch (push only your \`$branch\` branch). Never merge a PR."
       ;;
     local-only)
-      printf '%s\n' "1. Never push to the default branch (publish only your \`$branch\` branch, and only at the publish stage below). Never open a PR or merge request, and never merge."
+      printf '%s\n' "1. Never push to the default branch (publish only your \`$branch\` branch, through the pipeline run below). Open the merge request only as a draft, never mark it ready, and never merge."
       ;;
     no-mistakes)
       printf '%s\n' '1. Never push to the default branch. Never merge a PR.'
@@ -197,7 +202,8 @@ fm_brief_intent_overlay() {  # <captain-intent>
 This section supersedes every earlier brief instruction about constructing `--intent`, but not later clarifications actually supplied by the captain.
 Use everything under `## Captain intent authorized for --intent` through the end of this brief, including any nested subheadings but excluding that heading, plus any later words the captain actually supplied as `--intent`; never include Firstmate specification or other mixed Task content.
 Preserve those words without adding speaker labels or direct address.
-Firstmate-authored constraints, acceptance criteria, implementation details, decisions, and tradeoffs are specification, not captain intent.
+The acceptance criteria and any offline-verification statement written there are part of that intent; Firstmate-authored constraints, implementation details, decisions, and tradeoffs are specification, not captain intent.
+The craftsmanship rules block, where the Definition of done carries one, is added after it exactly as that section says.
 The Definition of done's rule that `--intent` must be self-sufficient still governs the string you pass: resolve any report, decision, or PR the intent below refers to into its substance rather than passing the pointer.
 
 ## Captain intent authorized for --intent
@@ -244,11 +250,13 @@ EOF
 
 # The gate-driving contract every pipeline-running mode hands its worker,
 # stated once so no-mistakes and local-only cannot drift apart.
-fm_dod_pipeline_gates() {
+fm_dod_pipeline_gates() {  # <project> <config-dir>
+  fm_dod_craft_rules "$1" "$2" || return 1
   cat <<EOF
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
-When starting no-mistakes, pass \`--intent\` as only this brief's \`## Captain's intent\` subsection body, not its heading, plus any later words the captain actually said.
+When starting no-mistakes, pass \`--intent\` as only this brief's \`## Captain's intent\` subsection body, not its heading, plus any later words the captain actually said, plus the craftsmanship rules block above when this Definition of done carries one.
+That subsection holds the task's full acceptance criteria and says whether offline verification is accepted; keep both in the intent, because they are what stops the pipeline re-litigating scope or demanding live proof that cannot exist.
 Preserve the actual words without adding speaker labels or direct address; the subsection heading supplies provenance outside the pipeline input.
 For a legacy brief with no such subsection, include only words on lines marked \`[captain] \`, excluding that metadata prefix; never copy its mixed \`# Task\` wholesale.
 If it has no provenance-marked captain words, stop and ask firstmate instead of starting no-mistakes.
@@ -273,88 +281,54 @@ Two firstmate-specific rules layer on top of that guidance:
 EOF
 }
 
-fm_dod_shell_quote() {  # <string>
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-  printf "'"
+# The captain's craftsmanship rules ride in --intent on the projects this home
+# lists, so the pipeline's own review holds the change to them. Only a definite
+# "no" from bin/fm-craft-rules.sh leaves them out, so an unknown project keeps them.
+fm_dod_craft_rules() {  # <project> <config-dir>
+  local project=$1 config=$2 root scope=0 rules
+  root=${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+  FM_CONFIG_OVERRIDE=${config:-${FM_CONFIG_OVERRIDE:-}} "$root/bin/fm-craft-rules.sh" applies "$project" >/dev/null 2>&1 || scope=$?
+  [ "$scope" -ne 1 ] || return 0
+  rules=$("$root/bin/fm-craft-rules.sh" print) || return 1
+  cat <<EOF
+This project carries the captain's craftsmanship rules, so the pipeline's own review holds your change to them.
+Add this block verbatim to the \`--intent\` you pass, after the captain's intent:
+\`\`\`text
+$rules
+\`\`\`
+
+EOF
 }
 
-# local-only in this fork: validate without publishing, pass the independent
-# craftsmanship review where this home requires it, then publish the branch and
-# stop short of the merge request, which the captain's separate "ship it" word
-# authorises later. A project with no remote ends at the guarded local merge.
-fm_dod_local_only() {  # <task-id> <branch> <project> <state-dir> <config-dir>
-  local id=$1 branch=$2 project=$3 state=$4 config=$5 root scope=0 gate
-  root=${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
-  if [ -n "$project" ]; then
-    if [ -n "$config" ]; then
-      FM_CONFIG_OVERRIDE=$config "$root/bin/fm-craft-review.sh" required "$project" >/dev/null 2>&1 || scope=$?
-    else
-      "$root/bin/fm-craft-review.sh" required "$project" >/dev/null 2>&1 || scope=$?
-    fi
-  fi
+# local-only in this fork: one pipeline run validates, publishes the branch, and
+# opens the merge request as a draft that the captain reviews and merges. The
+# run keeps its review step, so what it pushes is exactly what it reviewed. A
+# project with no remote ends at the guarded local merge instead.
+fm_dod_local_only() {  # <branch> <project> <config-dir>
+  local branch=$1 project=$2 config=$3
   cat <<EOF
 # Definition of done
 Delivery contract: mode=local-only
-EOF
-  if [ "$scope" -ne 1 ]; then
-    # Every command a crewmate runs resolves the dispatching home explicitly,
-    # because the crewmate runs outside it and its own FM_HOME would otherwise
-    # read the code root's state and scope file instead.
-    gate="FM_STATE_OVERRIDE=$(fm_dod_shell_quote "$state") FM_CONFIG_OVERRIDE=$(fm_dod_shell_quote "$config") $(fm_dod_shell_quote "$root/bin/fm-craft-review.sh") verify $id"
-    cat <<EOF
-This task ships **local-only**: you validate, an independent reviewer checks craftsmanship, then you publish your branch so the captain can look at it on the real repository.
-That mode name is kept for compatibility and no longer means unpublished - publishing IS the delivery.
-What you must NOT do is open the merge request: the captain gives a separate "ship it" word for that later.
+This task ships **local-only**: one no-mistakes run validates your branch, publishes it, and opens its merge request as a **draft**.
+The captain reviews that draft and merges it; you never mark it ready and never merge.
 
 Work these stages in order on your branch \`$branch\`.
 
 1. Implement and commit.
    Keep the branch a clean fast-forward onto the current default branch - if the default branch has advanced, rebase onto it.
-2. Validate without publishing. Confirm the flag spelling against \`no-mistakes axi run --help\`, then run the pipeline with its publication and merge-request steps skipped:
-   \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip push,pr,ci\`
-   It stops after the lint step, having pushed nothing.
-3. Stop for the independent craftsmanship review.
-   Append \`done: validated, ready for craftsmanship review\` to the status file and stop.
-   Firstmate dispatches a reviewer that did not write this code. Do not review your own work, and do not publish yet.
-4. When firstmate returns findings, fix them on this branch, run stage 2 again over the new commits, and report ready for re-review.
-   The review is pinned to the exact commit it passed, so every new commit needs a fresh one.
-5. Publish, and only once the review gate lets you:
-   \`$gate\`
-   If it refuses, do NOT publish: append \`blocked: {the exact reason it gave}\` to the status file and stop.
-   Once it passes, publish the branch with the pipeline's own push step and nothing beyond it - every step that can commit a fix is skipped too, because stage 2 already ran them and a fix commit made now would reach the remote without the craftsmanship review the verdict is pinned to:
-   \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip review,test,document,lint,pr,ci\`
-   Then append \`done: branch $branch published\` and stop. Do NOT open a PR or merge request.
-   If this project has no remote at all, publication does not apply: append \`done: reviewed and ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
+2. Run /no-mistakes on the branch with no step skipped, passing \`--intent\` per the rule below.
+   That one run reviews, tests, documents, lints, pushes, opens the merge request, and watches CI, so there is no separate publish run.
+3. Confirm on the forge that the merge request is a draft; if it opened ready, mark it draft with the forge's own CLI before you report.
+4. At the CI-ready return point, append \`done: MR {url} draft, checks green\` to the status file and stop.
+
+If this project has no remote at all, the pipeline has nowhere to publish: do not run it, append \`done: ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
 
 EOF
-  else
-    cat <<EOF
-This task ships **local-only**: you validate, then you publish your branch so the captain can look at it on the real repository.
-That mode name is kept for compatibility and no longer means unpublished - publishing IS the delivery.
-What you must NOT do is open the merge request: the captain gives a separate "ship it" word for that later.
-
-This home does not run the independent craftsmanship review on this project, so there is no reviewer to wait for and nothing gates your publish. Do not wait for one.
-
-Work these stages in order on your branch \`$branch\`.
-
-1. Implement and commit.
-   Keep the branch a clean fast-forward onto the current default branch - if the default branch has advanced, rebase onto it.
-2. Validate without publishing. Confirm the flag spelling against \`no-mistakes axi run --help\`, then run the pipeline with its publication and merge-request steps skipped:
-   \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip push,pr,ci\`
-   It stops after the lint step, having pushed nothing.
-3. Publish the branch with the pipeline's own push step and nothing beyond it - every step that can commit a fix is skipped too, because stage 2 already ran them:
-   \`no-mistakes axi run --intent '{captain intent, per the rule below}' --skip review,test,document,lint,pr,ci\`
-   Then append \`done: branch $branch published\` and stop. Do NOT open a PR or merge request.
-   If this project has no remote at all, publication does not apply: append \`done: ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
-
-EOF
-  fi
-  fm_dod_pipeline_gates
+  fm_dod_pipeline_gates "$project" "$config"
 }
 
-fm_dod_block() {  # <mode> <task-id> [<branch> <project> <state-dir> <config-dir>]
-  local mode=$1 id=$2 branch=${3:-fm/$2} project=${4:-} state=${5:-} config=${6:-}
+fm_dod_block() {  # <mode> <task-id> [<branch> <project> <config-dir>]
+  local mode=$1 id=$2 branch=${3:-fm/$2} project=${4:-} config=${5:-}
   case "$mode" in
     direct-PR)
       cat <<EOF
@@ -367,7 +341,7 @@ Do NOT run /no-mistakes. The configured merge authority decides whether to merge
 EOF
       ;;
     local-only)
-      fm_dod_local_only "$id" "$branch" "$project" "$state" "$config"
+      fm_dod_local_only "$branch" "$project" "$config"
       ;;
     no-mistakes)
       cat <<EOF
@@ -377,7 +351,7 @@ The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 EOF
-      fm_dod_pipeline_gates
+      fm_dod_pipeline_gates "$project" "$config" || return 1
       cat <<EOF
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.

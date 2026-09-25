@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--borrow-worktree <path>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--borrow-worktree <path>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -47,14 +47,6 @@
 #   worktree is told once to return, and only a shell that will not go refuses.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
-#   --borrow-worktree <path> joins a live worktree that another task owns instead
-#   of allocating one, so every step of one story shares one checkout. It is for a
-#   task that only reads, such as the independent craftsmanship reviewer: the
-#   borrower reports findings and changes nothing, and the owning task must be idle
-#   while it runs. The spawn records borrowed_worktree=1 so teardown never returns,
-#   detaches, prunes, or cleans that worktree, and it refuses any harness with no
-#   verified way to signal turn-end from a shared worktree, because a signal keyed on
-#   the worktree alone would hijack the owning task's own signal.
 #   --model <name> and --effort <low|medium|high|xhigh|max|ultra> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -530,7 +522,6 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
-BORROW_WT=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
@@ -569,7 +560,6 @@ for a in "$@"; do
       BACKEND_ARG=$a
       BACKEND_SET=1
       ;;
-    borrow-worktree) BORROW_WT=$a ;;
     mode)
       MODE=$a
       MODE_SET=1
@@ -600,8 +590,6 @@ for a in "$@"; do
     KIND_SET=1
     ;;
   --relaunch) RELAUNCH=1 ;;
-  --borrow-worktree) want_value=borrow-worktree ;;
-  --borrow-worktree=*) BORROW_WT=${a#--borrow-worktree=} ;;
   --harness) want_value=harness ;;
   --harness=*)
     HARNESS_ARG=${a#--harness=}
@@ -693,14 +681,6 @@ case "$EFFORT" in
   ;;
 esac
 
-# A borrowed worktree is a live worktree another task owns, joined so every step of
-# one story shares one checkout. Only a task that reads may borrow, and a secondmate
-# is the opposite of that: it owns a whole firstmate home of its own.
-if [ -n "$BORROW_WT" ] && [ "$KIND" = secondmate ]; then
-  echo "error: --borrow-worktree does not apply to a secondmate spawn; a secondmate owns its own home" >&2
-  exit 1
-fi
-
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
 # so every axis this block resolves for a fresh spawn instead comes from that
 # task's own durable record below. Contradicting it on the command line is a
@@ -720,10 +700,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
   }
   [ "$YOLO_SET" -eq 0 ] || {
     echo "error: --relaunch reuses the task's recorded yolo posture; --yolo cannot override it" >&2
-    exit 1
-  }
-  [ -z "$BORROW_WT" ] || {
-    echo "error: --relaunch reuses the task's recorded worktree; --borrow-worktree cannot override it" >&2
     exit 1
   }
 else
@@ -1463,13 +1439,6 @@ if [ "$RELAUNCH" -eq 0 ]; then
     echo "error: backend=cmux does not support --secondmate spawns yet" >&2
     exit 1
   fi
-  # The orca backend allocates its own managed worktree before a borrower could
-  # join one, and teardown leaves a borrowed worktree untouched, so that
-  # allocation would leak permanently. Refuse here, before anything is allocated.
-  if [ "$BACKEND" = orca ] && [ -n "$BORROW_WT" ]; then
-    echo "error: --borrow-worktree does not apply to a backend=orca spawn; orca allocates its own worktree" >&2
-    exit 1
-  fi
   if [ "$BACKEND" = orca ]; then
     fm_backend_orca_runtime_check || exit 1
   fi
@@ -1996,36 +1965,6 @@ if [ "$RAW_LAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
   case "$HARNESS:$LAUNCH" in
   claude*:*__CLAUDESETTINGS__* | claude*:*--settings*) ;;
   claude*:*) echo "warn: raw claude launch command has no __CLAUDESETTINGS__ placeholder, so this crewmate will not signal turn-end; add --settings __CLAUDESETTINGS__ to it" >&2 ;;
-  esac
-fi
-
-# Sharing a worktree is safe only when each agent's turn-end and busy-state
-# signals are keyed on its own task id and stored outside the checkout. Where
-# they are keyed on the worktree instead, the borrower's signal silently
-# replaces the owning task's and leaves firstmate blind to that task's turns, so
-# refuse rather than break the owner's supervision quietly.
-#
-# claude, codex, pi, and pi-signed all key on the task id, claude since its hooks
-# moved to state/ and onto --settings. Every other harness is refused because
-# nobody has measured it: opencode still writes a fixed-name plugin into the
-# worktree, grok and kimi key their hook on the workspace path, which two
-# co-located agents resolve identically, and the rest bind to per-workspace
-# transcripts or read the pane alone. Lifting any of them needs its own live
-# two-agent experiment; docs/verification/claude-colocation.md covers only
-# claude. A relaunch of a borrower keeps its recorded borrowed_worktree=1, so
-# the same gate applies to it.
-SPAWN_BORROWED=0
-[ -z "$BORROW_WT" ] || SPAWN_BORROWED=1
-if [ "$RELAUNCH" -eq 1 ] && [ "$(fm_meta_get "$RELAUNCH_META" borrowed_worktree)" = 1 ]; then
-  SPAWN_BORROWED=1
-fi
-if [ "$SPAWN_BORROWED" = 1 ]; then
-  case "$HARNESS" in
-  claude* | codex* | pi | pi-signed) ;;
-  *)
-    echo "error: harness $HARNESS has no verified way to signal turn-end from a shared worktree, so joining another task's worktree would hijack that task's turn-end signal; use claude, codex, pi, or pi-signed for a worktree-sharing spawn" >&2
-    exit 1
-    ;;
   esac
 fi
 
@@ -3581,36 +3520,6 @@ if [ "$RELAUNCH" -eq 1 ]; then
     fi
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ -n "$BORROW_WT" ] && [ "$KIND" != secondmate ]; then
-  # Join the owning task's live worktree instead of allocating one. It must already
-  # be a worktree root and, like any task worktree, distinct from the primary
-  # checkout; validate before the pane moves so a bad path never reaches an agent.
-  WT=$(cd "$BORROW_WT" 2>/dev/null && pwd -P) || {
-    echo "error: --borrow-worktree path does not exist: $BORROW_WT" >&2
-    exit 1
-  }
-  validate_spawn_worktree "--borrow-worktree" "$T"
-  spawn_send_text_line "$WT_TARGET" "cd $(printf '%q' "$WT")"
-
-  # Sending the cd is not the same as arriving there. If it never takes effect -
-  # the pane's shell is not ready yet, the backend drops the line, the path goes
-  # away between validation and execution - the agent would launch with
-  # --dangerously-skip-permissions in the primary checkout while state/<id>.meta
-  # claims the borrowed worktree. Confirm the pane's own cwd before launching, and
-  # fail loudly rather than let that mismatch through.
-  borrow_arrived=
-  for _ in $(seq 1 "${FM_BORROW_CD_POLLS:-60}"); do
-    p=$(spawn_current_path "$WT_TARGET" || true)
-    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT" ]; then
-      borrow_arrived=1
-      break
-    fi
-    sleep 1
-  done
-  if [ -z "$borrow_arrived" ]; then
-    echo "error: the pane did not enter the borrowed worktree $WT in time (last path '${p:-none}'); refusing to launch to avoid tangling the primary checkout. Inspect window $T" >&2
-    exit 1
-  fi
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
@@ -3767,10 +3676,6 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >>"$EXCL"
 }
-# A borrower writes nothing into the worktree it joined, so its turn-end signal
-# must be one that lives outside it. The harness gate above already refused every
-# harness that cannot do that, so every branch below installs a signal keyed on the
-# task id and stored outside the worktree.
 if [ "$RELAUNCH" -eq 1 ]; then
   # Retire the previous incarnation's per-task harness wiring before arming the
   # new one. Without this, a harness switch would leave the old adapter's hook
@@ -3848,8 +3753,8 @@ if [ "$KIND" != secondmate ]; then
     # command, the same shape pi's extension below uses. The worktree location this
     # used to occupy, .claude/settings.local.json, has one fixed name, so a second
     # agent joining the worktree overwrote the first agent's hook and left
-    # supervision unable to tell whose turn ended. Keeping the declaration per task
-    # id is what makes co-location safe (docs/verification/claude-colocation.md).
+    # supervision unable to tell whose turn ended. The declaration is therefore
+    # keyed on the task id (docs/verification/claude-colocation.md).
     # Nothing may recreate that worktree file: --settings MERGES with it rather
     # than replacing it, so a leftover copy fires the other agent's hook on every
     # turn of this one - a false wake that makes an idle agent look alive.
@@ -4242,9 +4147,6 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
-  # borrowed_worktree=1 means worktree= belongs to another task. Teardown must
-  # never return, detach, or prune it, and must leave the owner's hook files alone.
-  [ -z "$BORROW_WT" ] || echo "borrowed_worktree=1"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
