@@ -1,0 +1,64 @@
+scratch=/tmp/fm-live.oA5ik6 (live home untouched)
+=== S1: lock held by another live session -> never blocked
+lock: held by live harness pid 721599
+mode=--claude stop#1 rc=0 
+mode=--claude stop#2 rc=0 
+mode=--claude stop#3 rc=0 
+mode=--claude stop#4 rc=0 
+mode=--claude stop#5 rc=0 
+mode=--claude stop#6 rc=0 
+mode=--claude stop#7 rc=0 
+mode=--claude stop#8 rc=0 
+mode=--claude stop#9 rc=0 
+mode=--claude stop#10 rc=0 
+mode=default stop#1 rc=0 
+mode=default stop#2 rc=0 
+mode=default stop#3 rc=0 
+mode=default stop#4 rc=0 
+mode=default stop#5 rc=0 
+mode=default stop#6 rc=0 
+mode=default stop#7 rc=0 
+mode=default stop#8 rc=0 
+mode=default stop#9 rc=0 
+mode=default stop#10 rc=0 
+=== S2: hard cap vs frozen/reset epoch (reclaimable lock -> guarded)
+stop#1 rc=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+  cap: session=capsess count=1 alarmed=0 
+stop#2 rc=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+  cap: session=capsess count=2 alarmed=0 
+stop#3 rc=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+  cap: session=capsess count=3 alarmed=0 
+(reset epoch budget file)
+stop#4 rc=0 {"systemMessage":"FIRSTMATE TURN-END GUARD HARD CAP REACHED: this stop was blocked 3 times in a row and supervision is still off, so the guard now lets this ses
+  cap: session=capsess count=3 alarmed=1 
+stop#5 rc=0 
+  cap: session=capsess count=3 alarmed=1 
+stop#6 rc=0 
+  cap: session=capsess count=3 alarmed=1 
+-- supervision healthy (no in-flight tasks):
+stop rc=0 
+  cap file exists? no
+after re-break: stop rc=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+=== S3: unclaimed spare holds lock; real session claims via fm-lock.sh; guard at Stop
+lock: stale (pid 729239 dead, not a harness, or an unclaimed standby)
+guard stop (spare holder must not make it stand down): rc=2 ●━━━━━━━━━━━━━━━━━/home/thibyann001/.no-mistakes/evidence/01M3BSRM1XBWRXFY555KNVSSYA/live-drive.sh: line 26: /tmp/fm-live.NAL6mj/s3/state/.lock: No such file or directory
+/home/thibyann001/.no-mistakes/evidence/01M3BSRM1XBWRXFY555KNVSSYA/live-drive.sh: line 27: syntax error near unexpected token `)'
+/home/thibyann001/.no-mistakes/evidence/01M3BSRM1XBWRXFY555KNVSSYA/live-drive.sh: line 27: `ess --claude)"'
+ acquired: harness pid 729678
+rc=0
+holder=729678
+lock: held by live harness pid 729678
+=== S4 (approximation, no reboot): running bg-spare-shaped holder, primary session start claims
+    PID COMMAND
+ 729911 claude bg-spare --bg-spare /tmp/claim.sock 300
+lock: stale (pid 729911 dead, not a harness, or an unclaimed standby)
+primary pid=729969
+lock acquired: harness pid 729969
+claim-rc=0
+holder=729969
+stop#1 rc=2
+stop#2 rc=2
+stop#3 rc=2
+stop#4 rc=0
+stop#5 rc=0
+stop#6 rc=0

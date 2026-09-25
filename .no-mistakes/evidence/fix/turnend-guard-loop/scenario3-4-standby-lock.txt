@@ -1,0 +1,16 @@
+(eval):9: no matches found: /tmp/fmlive.KGvT/fix/state/.turnend-claude-*
+== A: unclaimed standby (spare:true record) runs fm-lock.sh during pre-warm SessionStart
+error: this is an unclaimed Claude Code standby (pid 745101), not a session in use; it does not take the fleet lock. If this session is now in use, run bin/fm-lock.sh again to claim it
+  fm-lock exit=1
+  lock file: 737426
+== B: standby held the lock from an old build (write its pid), check status
+  lock: stale (pid 745101 dead, not a harness, or an unclaimed standby)
+== C: guard in a read-only-looking session while standby holds lock -> must be GUARDED (lock reclaimable)
+  guard exit=2 (2 = session is guarded, not treated as read-only)
+== D: primary claude-ancestry session start claims the lock via fm-lock.sh
+lock acquired: harness pid 745520
+  fm-lock exit=0 primary pid=745520
+  lock file now: 745520 (standby pid 745101)
+== E: standby is claimed by a client (spare flag dropped) -> same process can now claim
+  claimed standby record now: {"pid":745101,"sessionId":"0c003a9b-98bb-4b07-88b4-18bfd530c9db","procStart":"502133","kind":"bg"}
+  lock: held by live harness pid 745101

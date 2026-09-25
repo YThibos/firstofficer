@@ -1,0 +1,37 @@
+== base: lock held by live foreign harness pid 735252 (claude); 5 tasks in flight, no watcher
+  --claude stop 1: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 2: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 3: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 4: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 5: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 6: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 7: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 8: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 9: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  --claude stop 10: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  default-mode stop: exit=2 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION
+  after holder died (stale lock, reclaimable): exit=2
+== fix: lock held by live foreign harness pid 737426 (claude); 5 tasks in flight, no watcher
+  --claude stop 1: exit=0 
+  --claude stop 2: exit=0 
+  --claude stop 3: exit=0 
+  --claude stop 4: exit=0 
+  --claude stop 5: exit=0 
+  --claude stop 6: exit=0 
+  --claude stop 7: exit=0 
+  --claude stop 8: exit=0 
+  --claude stop 9: exit=0 
+  --claude stop 10: exit=0 
+  default-mode stop: exit=0 
+  after holder died (stale lock, reclaimable): exit=2

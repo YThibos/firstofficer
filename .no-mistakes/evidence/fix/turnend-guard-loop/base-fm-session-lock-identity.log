@@ -1,0 +1,20 @@
+ok - ancestry walk resolved the versioned claude launcher to its own pid 646439
+ok - a live versioned launcher invoked as claude is a live harness
+ok - a versioned binary with no harness name in argv[0] is not a harness
+ok - an exact harness name as a whole path component of argv[0] is a harness
+ok - a process named after a harness is a live harness
+ok - a bare node interpreter running a harness script is a live harness
+ok - a dead pid is not a live harness
+ok - an unrelated live process is not a live harness
+ok - ancestry walk resolves the verified Claude session host, not the claude-named client above it
+ok - a live verified Claude session host is a live harness
+ok - a leftover session record from a recycled pid is not evidence of a harness
+ok - an unverifiable session record leaves the naming rules deciding, unchanged
+ok - a lock claimed before the re-host reads as reclaimable, not as another live session
+ok - another live session's host keeps its lock
+ok - a holder record whose procStart does not match the live process reclaims nothing
+ok - a holder with no session record keeps its lock
+ok - this session's own current host is not treated as superseded
+ok - a shared service carrying a verified session record is still not selected by the ancestry walk
+ok - a shared service carrying a verified session record is not a live harness
+not ok - an unclaimed standby was read as a live harness, so a lock it holds pins the home read-only

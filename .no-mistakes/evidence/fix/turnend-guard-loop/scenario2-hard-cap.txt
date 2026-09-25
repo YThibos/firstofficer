@@ -1,0 +1,26 @@
+(eval):2: no matches found: /tmp/fmlive.KGvT/base/state/.claude-autoarm*
+== base: no lock holder (session is guarded), 5 tasks, no watcher; epoch file frozen/reset before each stop
+  stop 1: exit=2 TURN WOULD END BLIND
+  stop 2: exit=2 TURN WOULD END BLIND
+  stop 3: exit=2 TURN WOULD END BLIND
+  stop 4: exit=2 TURN WOULD END BLIND
+  stop 5: exit=2 TURN WOULD END BLIND
+  stop 6: exit=2 TURN WOULD END BLIND
+  stop 7: exit=2 TURN WOULD END BLIND
+  stop 8: exit=2 TURN WOULD END BLIND
+(eval):2: no matches found: /tmp/fmlive.KGvT/fix/state/.claude-autoarm*
+== fix: no lock holder (session is guarded), 5 tasks, no watcher; epoch file frozen/reset before each stop
+  stop 1: exit=2 TURN WOULD END BLIND
+  stop 2: exit=2 TURN WOULD END BLIND
+  stop 3: exit=2 TURN WOULD END BLIND
+  stop 4: exit=0 HARD CAP REACHED: this stop was blocked 3 times in a row and supervision is still off
+  stop 5: exit=0 
+  stop 6: exit=0 
+  stop 7: exit=0 
+  stop 8: exit=0 
+  hard-cap file:
+    session=live-cap-sess
+    count=3
+    alarmed=1
+== fix: supervision becomes unneeded (tasks done) -> cap cleared
+  exit=0 hard-cap present: no
