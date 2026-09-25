@@ -1077,7 +1077,14 @@ housekeeping() {  # <state>
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
-      *) if escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"; then
+      *) # An idle agent waiting on its own background job is not wedged
+         # (crew_background_job_of owns the evidence and its bound): restart the
+         # persistence timer instead, so a job that ends is rechecked one window
+         # later.
+         if [ -n "$(crew_background_job_of "$task" "$state")" ]; then
+           _now > "$marker"
+           log "stale persistence deferred (idle on its own background job): $win"
+         elif escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"; then
            stale_marker_remove "$win" "$state"
          fi ;;
     esac
