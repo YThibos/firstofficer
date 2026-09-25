@@ -346,8 +346,10 @@ test_local_only_brief_publishes_one_reviewed_run_as_a_draft() {
     "local-only brief does not block when the draft setting is off"
   assert_no_grep "mark it draft" "$brief" \
     "local-only brief still converts the merge request to draft after opening it"
-  assert_grep "run /no-mistakes with \`--skip push,pr,ci\`" "$brief" \
-    "no-remote local-only brief skips validation instead of running the pipeline without publish steps"
+  assert_grep "the pipeline has nowhere to publish: skip the draft check and do not run it" "$brief" \
+    "no-remote local-only brief runs a pipeline that cannot initialize without an origin remote"
+  assert_no_grep "--skip push,pr,ci" "$brief" \
+    "no-remote local-only brief still runs the pipeline without publish steps"
   assert_grep "done: MR {url} draft, checks green" "$brief" \
     "local-only brief has no draft-ready completion gate"
   assert_grep "Open the merge request only as a draft, never mark it ready, and never merge." "$brief" \

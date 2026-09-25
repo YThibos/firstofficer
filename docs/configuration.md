@@ -206,7 +206,7 @@ providers:
 ```
 
 The worker checks this setting before its run and reports `blocked:` instead of running when it is not enabled, so no merge request ever opens ready.
-A project with no remote skips that check and runs the pipeline with `--skip push,pr,ci` before its guarded local merge.
+A project with no remote skips that check and runs no pipeline before its guarded local merge.
 The captain merges a draft merge request and tells firstmate, which then refreshes that project's clone through the guarded fleet-sync path; nothing watches the branch for that merge.
 
 ## Away-mode wedge alarm channels (config/wedge-alarm)

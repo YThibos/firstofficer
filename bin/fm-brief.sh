@@ -57,8 +57,8 @@
 # projects bin/fm-craft-rules.sh names; bin/fm-dod-lib.sh owns that contract.
 # The local-only name no longer describes that mode's delivery step, and is kept
 # deliberately; bin/fm-project-mode.sh's header owns why. A project with no remote
-# at all is the one case the name still fits: its run skips push, PR, and CI and
-# it ends at the guarded local merge.
+# at all is the one case the name still fits: it runs no pipeline and
+# ends at the guarded local merge.
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
 # The generated ship brief records the chosen mode as a fixed machine-readable
@@ -484,7 +484,7 @@ case "$MODE" in
   local-only)
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`.
-   If this project has no \`origin\` remote at all, initialize it the same way; the pipeline still validates the branch, and you take the no-remote outcome under Definition of done."
+   If this project has no \`origin\` remote at all, skip this step and take the no-remote outcome under Definition of done."
     ;;
   *)  # no-mistakes
     SETUP2="
