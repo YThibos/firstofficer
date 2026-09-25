@@ -425,5 +425,89 @@ SH
   pass "a shared service carrying a verified session record is not a live harness"
   stop_child "$daemon_pid"
 
+  # --- an unclaimed Claude Code standby never wins or holds the lock ---------
+  #
+  # The background daemon keeps pre-warmed spare session hosts ready
+  # (`claude bg-spare`), and a spare runs SessionStart while it is being
+  # pre-warmed, long before anyone uses it. It claimed the home's lock that way
+  # and then sat on it as a live verified session host, so the captain's real
+  # session started read-only. Claude Code marks an unclaimed spare
+  # "spare": true in its per-pid record and drops the flag once a client claims
+  # it; that flag, not the unchanging bg-spare argv, decides. These pin that a
+  # standby holder is reclaimable, that a real session takes over from one
+  # through fm-lock.sh, that a standby cannot claim the lock itself, and that
+  # the same process claims normally once its record no longer says spare.
+  LOCK_HOME="$TMP_ROOT/standby-home"
+  mkdir -p "$LOCK_HOME/state"
+  SPARE_UUID=0c003a9b-98bb-4b07-88b4-18bfd530c9db
+  export SPARE_UUID LOCK_HOME
+
+  # write_record <pid> <spare-json-or-empty>
+  write_record() {
+    printf '{"pid":%s,"sessionId":"%s","procStart":"%s"%s}\n' \
+      "$1" "$SPARE_UUID" "$(fm_proc_stat_field "$1" 19)" "$2" > "$CFG/sessions/$1.json"
+  }
+
+  start_child "$VERSIONED" "$VERSIONED"
+  standby_pid=$CHILD_PID
+  write_record "$standby_pid" ',"kind":"bg","spare":true'
+  if fm_harness_pid_alive "$standby_pid"; then
+    stop_child "$standby_pid"
+    fail "an unclaimed standby was read as a live harness, so a lock it holds pins the home read-only"
+  fi
+  write_record "$standby_pid" ',"kind":"bg"'
+  if ! fm_harness_pid_alive "$standby_pid"; then
+    stop_child "$standby_pid"
+    fail "a claimed standby, whose record no longer says spare, was not read as a live session"
+  fi
+  pass "an unclaimed standby is not a live lock holder, and the same host counts once claimed"
+
+  # A real session takes the lock over from a standby that holds it.
+  write_record "$standby_pid" ',"kind":"bg","spare":true'
+  printf '%s\n' "$standby_pid" > "$LOCK_HOME/state/.lock"
+  CLAIM_PROBE='
+. "$LIB"
+st=$(fm_proc_stat_field $$ 19) || exit 1
+printf "{\"pid\":%s,\"sessionId\":\"%s\",\"procStart\":\"%s\"%s}\n" \
+  "$$" "$CLAIMANT_UUID" "$st" "$OWN_FLAGS" > "$CFG/sessions/$$.json"
+FM_HOME="$LOCK_HOME" "$ROOT/bin/fm-lock.sh" >/dev/null 2>"$LOCK_HOME/claim.err"; rc=$?
+printf "%s %s %s\n" "$$" "$rc" "$(cat "$LOCK_HOME/state/.lock" 2>/dev/null || echo none)"
+'
+  CLAIMANT_UUID=9b1f7c52-3a44-4c8e-9d61-2f0e5b7a8c13
+  export CLAIM_PROBE ROOT CLAIMANT_UUID
+  out=$(OWN_FLAGS=',"kind":"interactive"' bash -c 'exec -a "$0" "$0" -c "$CLAIM_PROBE"' "$VERSIONED" 2>/dev/null) || true
+  read -r real_pid rc holder_after <<< "$out"
+  if [ "$rc" != 0 ] || [ "$holder_after" != "$real_pid" ]; then
+    stop_child "$standby_pid"
+    fail "a real session did not take the lock over from an unclaimed standby (rc=$rc, holder=$holder_after, session=$real_pid)"
+  fi
+  pass "a real session takes the fleet lock over from an unclaimed standby"
+
+  # A standby cannot claim the lock, not even a free one.
+  rm -f "$LOCK_HOME/state/.lock"
+  out=$(OWN_FLAGS=',"kind":"bg","spare":true' bash -c 'exec -a "$0" "$0" -c "$CLAIM_PROBE"' "$VERSIONED" 2>/dev/null) || true
+  read -r _ rc _ <<< "$out"
+  err=$(cat "$LOCK_HOME/claim.err" 2>/dev/null)
+  if [ "$rc" = 0 ] || [ -e "$LOCK_HOME/state/.lock" ]; then
+    stop_child "$standby_pid"
+    fail "an unclaimed standby claimed the fleet lock (rc=$rc)"
+  fi
+  case "$err" in
+    *"unclaimed Claude Code standby"*) : ;;
+    *) stop_child "$standby_pid"; fail "the standby refusal did not say why: $err" ;;
+  esac
+  # Once claimed, the same process is a live session in use and keeps the lock
+  # against another session exactly like any other live holder.
+  printf '%s\n' "$standby_pid" > "$LOCK_HOME/state/.lock"
+  write_record "$standby_pid" ',"kind":"bg"'
+  out=$(OWN_FLAGS=',"kind":"interactive"' bash -c 'exec -a "$0" "$0" -c "$CLAIM_PROBE"' "$VERSIONED" 2>/dev/null) || true
+  read -r _ rc holder_after <<< "$out"
+  if [ "$rc" = 0 ] || [ "$holder_after" != "$standby_pid" ]; then
+    stop_child "$standby_pid"
+    fail "a session took the lock from a claimed standby that is a live session in use (rc=$rc, holder=$holder_after)"
+  fi
+  stop_child "$standby_pid"
+  pass "an unclaimed standby cannot claim the lock, and a claimed one keeps it like any live session"
+
   unset CLAUDE_CONFIG_DIR
 fi

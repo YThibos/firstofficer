@@ -20,6 +20,9 @@
 # bin/fm-startup-network.sh compares that pid across its deferred sweeps; a dead
 # recorded pid is reclaimed and rewritten to this session's anchor.
 #
+# An unclaimed Claude Code standby is refused the claim, and a lock it already
+# holds reads as stale, so a session in use always wins over one.
+#
 # A live holder normally refuses the claim, with ONE exception: a holder whose
 # session is positively identified as stopped on a usage limit is taken over,
 # because that process stays alive indefinitely and would otherwise pin the
@@ -70,7 +73,7 @@ print_status() {
         echo "lock: held by a session stopped by a usage limit (pid $rest)"
         echo "lock: run bin/fm-lock.sh to take it over"
         ;;
-      stale) echo "lock: stale (pid $rest dead or not a harness)" ;;
+      stale) echo "lock: stale (pid $rest dead, not a harness, or an unclaimed standby)" ;;
       took-over-from)
         echo "lock: this session took over from a session stopped by a usage limit (previous pid ${rest%% *})"
         ;;
@@ -84,6 +87,19 @@ if [ "${1:-}" = "status" ]; then
 fi
 
 me=$(fm_session_lock_anchor_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+# An unclaimed Claude Code standby runs SessionStart while it is pre-warmed, but
+# nobody is using it yet, so it must never win the lock
+# (fm_claude_session_is_spare owns the rationale). Once claimed it is an ordinary
+# session and the same command succeeds. The standby's record belongs to its
+# session host, which a trusted Claude anchor need not be, so both are checked.
+host=$(fm_harness_ancestry_pid 2>/dev/null || true)
+for spare_pid in "$me" "$host"; do
+  [ -n "$spare_pid" ] || continue
+  if fm_claude_session_is_spare "$spare_pid"; then
+    echo "error: this is an unclaimed Claude Code standby (pid $spare_pid), not a session in use; it does not take the fleet lock. If this session is now in use, run bin/fm-lock.sh again to claim it" >&2
+    exit 1
+  fi
+done
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1

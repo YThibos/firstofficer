@@ -287,6 +287,51 @@ test_reclaims_stale_session_lock_before_arming() {
   pass "auto-arm: a demonstrably dead recorded session owner is reclaimed through fm-lock.sh before arming"
 }
 
+# A Claude Code standby (an unclaimed pre-warmed `claude bg-spare`, recorded
+# "spare": true in its per-pid record) that took the lock while pre-warming is
+# not a session in use, so the real session reclaims the home at its next Stop
+# with no manual step. A per-pid record is only trusted against /proc, so the
+# case is Linux-only.
+test_real_session_takes_over_lock_from_standby() {
+  local dir cfg standby expected_owner actual_owner status tries=0
+  if [ ! -r /proc/$$/stat ]; then
+    pass "skip: /proc unavailable, standby session records cannot be verified here"
+    return 0
+  fi
+  dir=$(make_primary_dir "$TMP_ROOT/standby-lock")
+  cfg="$TMP_ROOT/standby-claude-config"
+  mkdir -p "$cfg/sessions"
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  # The standby writes its own record, then holds as a claude-named process.
+  # exec keeps its pid and start time, so the record stays verifiable.
+  CLAUDE_CONFIG_DIR="$cfg" bash -c '
+    . "$1"
+    st=$(fm_proc_stat_field $$ 19) || exit 1
+    printf "{\"pid\":%s,\"sessionId\":\"0c003a9b-98bb-4b07-88b4-18bfd530c9db\",\"procStart\":\"%s\",\"kind\":\"bg\",\"spare\":true}\n" "$$" "$st" > "$2/sessions/$$.json"
+    exec -a claude sleep 60
+  ' _ "$dir/bin/fm-session-lock-lib.sh" "$cfg" &
+  standby=$!
+  while [ "$tries" -lt 100 ] && [ ! -f "$cfg/sessions/$standby.json" ]; do
+    tries=$((tries + 1))
+    sleep 0.02
+  done
+  printf '%s\n' "$standby" > "$dir/state/.lock"
+  printf '%s\n' '{"session_id":"real"}' \
+    | CLAUDE_CONFIG_DIR="$cfg" FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        printf "%s\n" "$$" > "$FM_HOME/state/expected-owner"
+        "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
+      ' >/dev/null 2>&1; status=$?
+  kill "$standby" 2>/dev/null || true
+  wait "$standby" 2>/dev/null || true
+  expect_code 2 "$status" "the real session must reclaim the home from the standby and rewake"
+  expected_owner=$(cat "$dir/state/expected-owner")
+  actual_owner=$(cat "$dir/state/.lock")
+  [ "$actual_owner" = "$expected_owner" ] || fail "the real session did not take the lock over from the standby: expected $expected_owner, got $actual_owner"
+  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm after taking the lock over from the standby"
+  pass "auto-arm: a real session takes the lock over from an unclaimed standby at its next Stop"
+}
+
 test_inert_when_lock_held_by_other_harness() {
   local dir other out status owner_after
   dir=$(make_primary_dir "$TMP_ROOT/other-lock")
@@ -1236,6 +1281,7 @@ test_fm_lock_status_still_works_with_shared_lib() {
 test_inert_in_child_worktree
 test_inert_without_session_lock
 test_reclaims_stale_session_lock_before_arming
+test_real_session_takes_over_lock_from_standby
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
 test_stale_lock_recovery_preserves_afk_and_need_gates
