@@ -19,7 +19,6 @@ Reaching that case would require consulting the backlog for windows the secondma
 Repeated provably-working stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
 Before any such escalation fires, `bin/fm-crew-state.sh --pipeline-liveness` is asked whether that crew's attributed run is demonstrably working, and a live run restarts the timer and clears the escalation count instead of escalating.
 The daemon's own CI monitor is the one step exempted from the activity test behind that answer, because it is a wait with no subprocess agent that writes to its step log only when the checks change state, so no-mistakes marks it `quiet` for most of a phase that can legitimately run for hours; the exemption ends as soon as those checks report green.
-A live borrower of the crew's own copy defers the escalation the same way, since a craftsmanship review requires the implementer to be idle for its whole duration.
 In the same branch that is about to escalate, the pane's own account of its quiet is consulted first: the worker's declared `paused:` or verified `captain-held` status line.
 That declaration defers the escalation to the `FM_PAUSE_RESURFACE_SECS` recheck cadence instead, because a lane waiting on something it named is silent for a reason the escalation would misreport, and the ladder would otherwise climb for as long as the wait lasts.
 A declared clearing time (`paused: ... until <UTC ISO 8601>`) that has already passed stops counting as that account, so a lane whose own wait is over, and a lane that never declared one, both keep the unchanged escalation schedule, reason and `demand-deep-inspection` wording.
@@ -267,12 +266,6 @@ The helper's header owns the exact signal detection, relocated-home limitation, 
 
 Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks leave standalone investigation reports at `data/<id>/report.md` and never push.
 The intake and authority contract in `AGENTS.md` owns when separate scout research is warranted.
-A craftsmanship review is a third, narrower crewmate shape: it produces findings and a verdict for one ship task's branch, never a code change, and `CLAUDE.md` section 7 owns where it sits in the delivery contract.
-Unlike the other two it takes no worktree of its own: `bin/fm-spawn.sh --borrow-worktree` joins the implementing task's live worktree so one story keeps one checkout, records `borrowed_worktree=1` so `bin/fm-teardown.sh` never returns, detaches, prunes, or cleans a worktree it does not own, and refuses any harness with no verified way to signal turn-end from a shared worktree.
-The owning task's teardown holds the other half of that contract and refuses while a live task still borrows its worktree, so the reviewer is torn down first; `--force` is the explicit override.
-The option is also refused on `backend=orca`, which allocates its own managed worktree.
-Sharing works because each agent's turn-end hook is keyed on its own task id and stored outside the checkout, which is why every `claude` crewmate now carries its hook on `--settings` instead of writing `<worktree>/.claude/settings.local.json`; [`docs/verification/claude-colocation.md`](verification/claude-colocation.md) holds the measurements, including why `opencode`, `grok`, and `kimi` stay refused.
-The two agents are serialised rather than concurrent, and `bin/fm-craft-review.sh record` refuses on a dirty tree, which is what makes sharing one directory safe.
 
 ## Dispatch profiles
 
@@ -299,7 +292,7 @@ When seeded with `-`, the home is a durable treehouse lease under the secondmate
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
 If returning the lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
 Seeding is transactional: if validation, cloning, initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
-`local-only` projects stay with the main First Officer, which coordinates their craftsmanship review and relays the captain's "ship it" word, and which owns the main local checkout a remote-less one must merge into.
+`local-only` projects stay with the main First Officer, which refreshes their clone when the captain reports merging a draft merge request, and which owns the main local checkout a remote-less one must merge into.
 The same project may appear in multiple secondmate homes when their scopes differ, such as issue triage versus feature development.
 Secondmates are idle by default: after startup recovery reconciles only work already in their own home, an empty queue waits silently for routed tasks, and they never self-initiate surveys or audits.
 When called with `FM_HOME=<this-firstmate-home>` or when `FM_HOME` is already set to the active firstmate home, metadata-routed `fm-send.sh` requests to a live `kind=secondmate` use the live-charter-compatible `from-firstmate` carrier owned by `bin/fm-operational-input.sh`, so the secondmate returns terse answers through status lines and detailed answers through docs plus status pointers instead of replying only in its own chat.
@@ -329,11 +322,11 @@ The `data/secondmates.md` line contract is owned by the [`secondmate-provisionin
 
 ## Delivery modes are explicit per task
 
-`no-mistakes` tasks run the full validation pipeline, `direct-PR` tasks open PRs without that pipeline, and `local-only` tasks run that pipeline with its publication and merge-request steps skipped, pass an independent craftsmanship review where the home requires one, and then publish the branch without opening a merge request.
+`no-mistakes` tasks run the full validation pipeline, `direct-PR` tasks open PRs without that pipeline, and `local-only` tasks run that same full pipeline once, which publishes the branch and opens its merge request as a draft that the captain reviews and merges.
 The `local-only` name is a deliberate historical mismatch: renaming a config enum written into every home's registry and into in-flight task metadata would need a migration and would conflict permanently with upstream merges, so `bin/fm-project-mode.sh` documents the mismatch instead.
 That name still describes the one project shape that stays unpublished, a project with no remote at all, which lands through the approved fast-forward merge in `bin/fm-merge-local.sh`.
-The reviewer is a separate crewmate that did not write the code, briefed by `bin/fm-brief.sh --craft-review` with its remit owned by the [`craftsmanship-review` skill](../.agents/skills/craftsmanship-review/SKILL.md), and `bin/fm-craft-review.sh` pins its verdict to the reviewed commit so publication is refused while any later commit is unreviewed.
-Which projects that stage runs on is a per-home choice owned by [`docs/configuration.md`](configuration.md); where it is not required the same path runs with no reviewer and no gate.
+The publishing run keeps its own review step, which no-mistakes requires before it pushes, so what reaches the remote is exactly what that review approved.
+On the projects a home lists, the captain's craftsmanship rules ride in the run's `--intent`, so that same review holds the change to them; [`docs/configuration.md`](configuration.md) owns the scope and `bin/fm-dod-lib.sh` owns the contract.
 Each task's mode and `yolo` merge posture are firstmate's decision at intake.
 The mode is passed explicitly to `bin/fm-brief.sh`, and both values are passed explicitly to `bin/fm-spawn.sh` and `bin/fm-promote.sh`; each command refuses to guess the values it consumes.
 A ship brief records its mode as a fixed machine-readable line and the spawn refuses to launch on a different one, so the worker's instructions and the recorded task delivery cannot diverge.

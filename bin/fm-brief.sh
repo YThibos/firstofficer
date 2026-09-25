@@ -5,18 +5,18 @@
 # filled in. Ship and scout `# Task` sections have two subsections Firstmate
 # fills before dispatch: `{TASK}` under `## Captain's intent` (the captain's
 # own ask plus the context needed to read it, including the substance of any
-# report, decision, or PR the ask refers to, without added speaker labels or
-# direct address) and `{FIRSTMATE_SPEC}`
+# report, decision, or PR the ask refers to, the task's full acceptance
+# criteria, and whether offline verification is accepted, without added speaker
+# labels or direct address) and `{FIRSTMATE_SPEC}`
 # under `## Firstmate spec` (build instructions, which are never the captain's
 # intent). bin/fm-dod-lib.sh owns the no-mistakes `--intent` contract those
 # subsections feed; bin/fm-spawn.sh refuses leftover placeholders and a
 # `## Captain's intent` line opening with a Captain label or address. Secondmate
-# charters and craft-review briefs still use a single `{TASK}` charter fill. Firstmate may adjust other
+# charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--branch <name>]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --craft-review <reviewed-task-id> [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --branch <name> sets the ship branch name the crewmate creates and works on
 #   (e.g. feature/JUSTMD-123). It applies only to ship briefs (not --scout or
@@ -28,12 +28,6 @@
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   It offers the Lavish review loop only when `fm-bootstrap.sh lavish-compatible`
 #   confirms the supported lavish-axi floor; otherwise it asks for a text report.
-#   --craft-review <reviewed-task-id> writes the independent craftsmanship review
-#   contract: the reviewer reads the named ship task's diff, writes findings to
-#   data/<task-id>/craftsmanship-review.md, and records the verdict that
-#   bin/fm-craft-review.sh gates publication on. It never branches, pushes,
-#   merges, or edits the code it reviews. The remit itself is owned by the
-#   craftsmanship-review skill, which the generated brief requires it to load.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -56,16 +50,15 @@
 # captain's standing posture as context, and this script never reads it:
 #   no-mistakes  implement -> /no-mistakes pipeline -> PR -> configured merge authority
 #   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> configured merge authority
-#   local-only   implement -> pipeline with push/pr/ci skipped -> independent
-#                craftsmanship review, on the projects this home requires it for
-#                (bin/fm-craft-review.sh required) -> publish the branch, no
-#                merge request. Where it is not required the brief promises no
-#                review and no gate, because a brief that describes a stage that
-#                will not run is how a worker ends up waiting for one;
-#                the captain's separate "ship it" word authorises the PR later
+#   local-only   implement -> one full /no-mistakes run that publishes the
+#                branch and opens its merge request as a draft -> the captain
+#                reviews and merges it
+# The pipeline modes add the captain's craftsmanship rules to --intent on the
+# projects bin/fm-craft-rules.sh names; bin/fm-dod-lib.sh owns that contract.
 # The local-only name no longer describes that mode's delivery step, and is kept
 # deliberately; bin/fm-project-mode.sh's header owns why. A project with no remote
-# at all is the one case the name still fits: it ends at the guarded local merge.
+# at all is the one case the name still fits: it runs no pipeline and
+# ends at the guarded local merge.
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
 # The generated ship brief records the chosen mode as a fixed machine-readable
@@ -147,16 +140,12 @@ KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
 BRANCH=""
-REVIEWED_ID=""
 MODE=
 MODE_SET=0
 POS=()
 want_value=
 brief_missing_value() {
-  case "$1" in
-    craft-review) echo "error: --craft-review requires the reviewed task id" >&2 ;;
-    *) echo "error: --$1 requires a value" >&2 ;;
-  esac
+  echo "error: --$1 requires a value" >&2
   exit 1
 }
 for a in "$@"; do
@@ -167,7 +156,6 @@ for a in "$@"; do
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
       branch) BRANCH=$a ;;
-      craft-review) REVIEWED_ID=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -176,7 +164,6 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
-    --craft-review) KIND=craft-review; want_value=craft-review ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
     --branch) want_value=branch ;;
@@ -218,16 +205,7 @@ if [ -n "$BRANCH" ] && [ "$KIND" != ship ]; then
 fi
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
-  echo "error: --herdr-lab applies only to crewmate ship, scout, or craft-review briefs" >&2
-  exit 1
-fi
-
-# A worker cannot review its own code, so the reviewer and the reviewed task can
-# never be the same task. Catching it here keeps the impossible brief from being
-# written at all, rather than leaving bin/fm-craft-review.sh to refuse the verdict
-# after a whole review has been run.
-if [ "$KIND" = craft-review ] && [ "$REVIEWED_ID" = "$ID" ]; then
-  echo "error: --craft-review cannot review its own task $ID; the reviewer must be a separate task" >&2
+  echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
   exit 1
 fi
 
@@ -253,16 +231,6 @@ shell_quote() {
 }
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
-# Every command a brief hands a crewmate resolves this home explicitly, because
-# the crewmate runs outside it and its own FM_HOME would otherwise pick the code
-# root's state and config dirs instead of the home that dispatched the task. The
-# scope file matters as much as the state dir here: the brief decides which
-# stages to promise from this home's craft-review-projects, so the gate the
-# crewmate runs must read that same file rather than whatever sits in the code
-# root.
-STATE_ENV="FM_STATE_OVERRIDE=$(shell_quote "$STATE") FM_CONFIG_OVERRIDE=$(shell_quote "$CONFIG")"
-CRAFT_REVIEW_BIN=$(shell_quote "$FM_ROOT/bin/fm-craft-review.sh")
-REVIEW_DIFF_BIN=$(shell_quote "$FM_ROOT/bin/fm-review-diff.sh")
 
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 
@@ -498,90 +466,6 @@ echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
 exit 0
 fi
 
-if [ "$KIND" = craft-review ]; then
-FINDINGS_DOC="$DATA/$ID/craftsmanship-review.md"
-FINDINGS_DOC_QUOTED=$(shell_quote "$FINDINGS_DOC")
-cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
-
-# Task
-Review the craftsmanship of ship task $REVIEWED_ID on $REPO, which has passed validation and is waiting on you before it may publish its branch.
-{TASK}
-
-$HERDR_SECTION
-
-# Your remit is owned by a skill - load it first
-Your FIRST action is to read \`$FM_ROOT/.agents/skills/craftsmanship-review/SKILL.md\`.
-It owns your complete remit: the Clean Code and domain-driven-design bar, the captain's concrete style rules, the house writing rules, and the list of AI tells to flag.
-If you cannot read it, append \`blocked: craftsmanship review remit is unreadable\` to the status file and stop.
-Never review from memory: an unreviewed branch waiting is a better outcome than a review that held the wrong bar.
-
-These boundaries hold whether or not that skill loaded:
-
-- This is NOT a defect hunt. The validation pipeline's own review, test, document, and lint steps already ran and own correctness. Your question is whether the code reads as a craftsman wrote it.
-- You never publish, never open a PR, and never merge.
-- You never edit the code you review. You report findings; the implementing worker fixes them.
-  You are sharing that worker's checkout, so this is a hard safety rule, not a preference.
-- You never record a verdict for a task you implemented yourself.
-
-# Setup
-You are in task $REVIEWED_ID's OWN worktree, on the branch it built the work on. This is deliberate: one story keeps one checkout, so every step of it happens here.
-You did not create this checkout and you do not own it. Task $REVIEWED_ID is idle while you work, and it resumes here afterwards to fix what you find.
-
-**Verify before anything else.** Run \`pwd -P\`, \`git rev-parse --show-toplevel\`, and \`git status --porcelain\`.
-The first two must agree on a worktree that is not the primary checkout firstmate operates from, and \`git status --porcelain\` must be clean apart from the untracked agent-owned files the verdict recorder already exempts.
-Uncommitted changes here mean either the implementing worker is still active in this directory or someone edited the code under review, and both break the review.
-If either check fails, append \`blocked: {which check failed and what it showed}\` to the status file and stop.
-
-This is a REVIEW task: the deliverables are a findings document and a recorded verdict, not a code change.
-Read the work under review with:
-   \`$STATE_ENV $REVIEW_DIFF_BIN $REVIEWED_ID\`
-Read enough surrounding code here to judge placement, ordering, and naming in context, not just the changed lines.
-
-# Rules
-1. Never push to any remote, never open a PR, and never merge.
-2. **Write nothing in this worktree.** Not a file, not a fix, not a scratch note, not a commit, not a branch, not a stash, and never \`git checkout\` or \`git rebase\`.
-   This is the whole reason it is safe for you to be in another task's checkout, and the verdict recorder refuses while the tree is dirty.
-   The only files you may write are the findings document, the verdict record, and the status file below, all of which live outside this worktree.
-   If you need to run something that writes, use your own temporary directory outside the worktree.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
-4. Report status by appending one line:
-   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
-   FYI progress lines; firstmate reads your pane for that.
-   Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
-   known external wait you expect to clear on its own: firstmate then leaves your idle pane alone
-   and rechecks it on a long cadence instead of treating it as a possible wedge.
-   Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
-6. A question about what the code SHOULD do is not yours to settle: it belongs to the captain's accepted
-   task criteria. Append \`needs-decision: {summary of options}\` and stop rather than turning a product
-   question into a craftsmanship finding.
-   When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
-7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
-   every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
-8. You make no commits at all here, so the repository's authorship rules never come into play for you:
-   every commit on this branch is the implementing worker's, authored in the captain's name only.
-
-$INBOX_SECTION
-
-# Definition of done
-Write every finding to \`$FINDINGS_DOC\`, each with the file and line, what reads as uncraftsmanlike, and what shape the code should take instead.
-Recommend the change; do not make it.
-
-Then record the verdict, which is what decides whether the branch may be published:
-   \`$STATE_ENV $CRAFT_REVIEW_BIN record $REVIEWED_ID --reviewer $ID --verdict pass --findings $FINDINGS_DOC_QUOTED\`
-Use \`--verdict findings\` instead when the work is not publishable yet.
-Record \`pass\` only when you would be content to maintain this code yourself; it is pinned to the exact commit you reviewed, so it cannot leak onto later work.
-Finally append \`done: craftsmanship review of $REVIEWED_ID: {pass or findings}, {one-line conclusion}\` to the status file and stop.
-EOF
-echo "scaffolded: $BRIEF (craft-review of $REVIEWED_ID; replace {TASK})"
-exit 0
-fi
-
 # Ship task: shape Setup / Rule 1 by this task's explicit delivery mode, validated
 # above, and render the Definition of done from its single owner, bin/fm-dod-lib.sh,
 # which bin/fm-promote.sh renders too so a promoted scout receives the same contract.
@@ -600,7 +484,7 @@ case "$MODE" in
   local-only)
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`.
-   If this project has no \`origin\` remote at all, the pipeline has nowhere to push: skip stage 2's validation run and take the no-remote outcome at the publish stage instead."
+   If this project has no \`origin\` remote at all, skip this step and take the no-remote outcome under Definition of done."
     ;;
   *)  # no-mistakes
     SETUP2="
@@ -608,7 +492,7 @@ case "$MODE" in
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH_NAME") || exit 1
-DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH_NAME" "$REPO" "$STATE" "$CONFIG") || exit 1
+DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH_NAME" "$REPO" "$CONFIG") || exit 1
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.

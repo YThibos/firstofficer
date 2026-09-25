@@ -137,10 +137,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/craftsmanship-review/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/decision-hold-lifecycle/SKILL.md",
       "audience": "agent-runtime"
     },

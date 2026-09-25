@@ -179,8 +179,8 @@ PROMOTION_ASK_USER_BLOCK=
 if [ "$MODE" = no-mistakes ] || [ "$MODE" = local-only ]; then
   PROMOTION_ASK_USER_BLOCK=$(fm_ask_user_escalation_block "$DATA" "$ID")
 fi
-# local-only's contract names the branch it publishes and asks this home's
-# craft-review scope whether the independent review gates that publication.
+# The contract names the branch it publishes and asks this home's craft-rules
+# scope whether the pipeline modes carry the captain's craftsmanship rules.
 PROMOTE_PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2-)
 PROMOTE_PROJECT=${PROMOTE_PROJECT##*/}
 PROMOTE_CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
@@ -211,7 +211,7 @@ EOF
     printf '%s\n' "$PROMOTION_ASK_USER_BLOCK"
   fi
   printf '\n'
-  fm_dod_block "$MODE" "$ID" "fm/$ID" "$PROMOTE_PROJECT" "$STATE" "$PROMOTE_CONFIG"
+  fm_dod_block "$MODE" "$ID" "fm/$ID" "$PROMOTE_PROJECT" "$PROMOTE_CONFIG"
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }

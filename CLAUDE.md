@@ -132,14 +132,9 @@ If fast-path risk needs more rigour, escalate whether to use no-mistakes instead
 
 - **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
 - **direct-PR** has the worker push and open a PR without the pipeline, then waits for the configured merge authority.
-- **local-only** keeps that registry name but no longer means unpublished: the worker validates, passes an independent craftsmanship review where this home requires one, then publishes its branch and opens no merge request.
+- **local-only** keeps that registry name but no longer means unpublished: one full pipeline run validates, publishes the branch, and opens its merge request as a draft that the captain reviews and merges; a project with no remote instead ends at the guarded local merge path.
 
-`bin/fm-craft-review.sh required <project>` answers whether that review applies, from this home's private configuration; an unconfigured home requires it everywhere, and the boundary is by-project, never a per-change judgement.
-Where it applies it is the one contract-defined independent reviewer, so it is mandatory rather than invented rigour: the worker runs the pipeline with its publication and merge-request steps skipped, stops so you dispatch a reviewer that did not write the code, and fixes its findings before publishing.
-Where it does not, that delivery runs end to end with no reviewer and no gate.
-The captain's separate "ship it" word is what authorises the merge request afterwards, and a project with no remote at all instead ends at the guarded local merge path.
-`bin/fm-brief.sh --craft-review` generates that reviewer's instructions and the `craftsmanship-review` skill owns its remit; publication is refused while `bin/fm-craft-review.sh verify` has no pass verdict for the exact commit.
-One story keeps one local copy: spawn the reviewer into the implementing task's own copy with `--borrow-worktree`, only once that worker has stopped, because the two are serialised and never both active there.
+`bin/fm-craft-rules.sh applies <project>` answers, from this home's private configuration, whether the captain's craftsmanship rules ride in that project's `--intent`; the pipeline's own review enforces them, so no separate craftsmanship reviewer runs.
 
 Delivery mode and `yolo` are orthogonal.
 `yolo` governs merge authority only: with it off the captain approves every PR merge and local-only landing, with it on firstmate merges green, in-scope work itself, and destructive, irreversible, and security-sensitive merges still escalate.
@@ -177,7 +172,7 @@ A status line is a wake event, not current state: use `bin/fm-crew-state.sh` whe
 3. `check:` - act on the named poll result, including merges, contribution signals, and X-mode events; load `bearings` on a contributions wake or when filing work linked to an upstream issue.
 4. `heartbeat:` - review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
-Refresh a clone through the guarded fleet-sync path when any wake reports a merged PR for a project cloned in this home.
+Refresh a clone through the guarded fleet-sync path when any wake reports a merged PR, or the captain says a merge request was merged, for a project cloned in this home.
 A secondmate's idle endpoint is healthy; parent supervision relies on its routed status rather than treating a quiet pane as stale.
 Waiting on a healthy cycle is silent: empty polls, elapsed time, and no-change updates are not captain-facing progress.
 Never broadly kill watchers, especially never `pkill -f bin/fm-watch.sh`, because that can kill sibling firstmate homes; a forced repair uses the home-scoped owner path emitted by supervision instructions.
@@ -246,7 +241,7 @@ Preserve durable identifiers, dependencies, and completion artifact links, and r
 ## 11. Crewmate briefs
 
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
-Use its scaffold as the contract: fill `## Captain's intent` with the captain's own ask, stated boundaries, and the context needed to read it, never widened into a general goal, and `## Firstmate spec` with only the build instructions that ask requires; spawn refuses either placeholder left unfilled.
+Use its scaffold as the contract: fill `## Captain's intent` with the captain's own ask, stated boundaries, the context needed to read it, the full acceptance criteria, and whether offline verification is accepted, never widened into a general goal, and `## Firstmate spec` with only the build instructions that ask requires; spawn refuses either placeholder left unfilled.
 Append a mid-task captain ask to `## Captain's intent` and steer the worker; keep additions task-specific and alter generated sections only when the task genuinely differs from the standard shape.
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
@@ -270,7 +265,6 @@ Agent-only reference skills, which the captain does not invoke:
 - `bootstrap-diagnostics` - on any actionable diagnostic line in the digest's bootstrap or network-checks section, or a `BOOTSTRAP_INFO:` line reporting an interrupted cleanup that may have left a worker or local copy behind.
 - `diagnostic-reasoning` - on section 7's trigger.
 - `ask-user-authority` - before deciding any ask-user finding, whatever the project's `yolo` posture.
-- `craftsmanship-review` - before dispatching or judging the independent craftsmanship review that stands between validation and publication.
 - `quota-array-dispatch` - on section 4's trigger.
 - `harness-adapters` - on section 4's trigger.
 - `firstmate-orca` - before switching to Orca, spawning or supervising Orca-backed work, smoke-testing it, or reconciling Orca-backed task state or metadata.

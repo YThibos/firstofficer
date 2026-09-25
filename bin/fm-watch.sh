@@ -1075,7 +1075,7 @@ clear_write_tracking() {  # <window-key>
 # A window whose task has no running pipeline never gets an `alive` answer at
 # all and behaves exactly as it did before.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> [<task>]
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=${5:-} since age n reason evidence borrower
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=${5:-} since age n reason evidence
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -1097,13 +1097,6 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           date +%s > "$since_file"
           rm -f "$escalation_file"
           triage_log "absorbed $label (pipeline still working, escalation deferred): $win"
-          return
-        fi
-        borrower=$(live_borrower_of "$task")
-        if [ -n "$borrower" ]; then
-          date +%s > "$since_file"
-          rm -f "$escalation_file"
-          triage_log "absorbed $label (idle for live borrower $borrower, escalation deferred): $win"
           return
         fi
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then

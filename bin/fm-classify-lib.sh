@@ -1989,52 +1989,6 @@ crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
 }
 
-# Print the task id of a LIVE borrower of <task>'s worktree, or nothing.
-#
-# A craftsmanship review joins the implementing task's own copy so one story
-# keeps one checkout, and the two are deliberately serialised: the implementer
-# is required to be idle for the whole review. Its pane therefore renders
-# nothing for many minutes by design, which is exactly the shape the wedge timer
-# exists to catch, so without this the reviewed task wedge-escalates every
-# window throughout its own review.
-#
-# The borrow is already recorded: bin/fm-spawn.sh writes borrowed_worktree=1
-# into the borrower's own metadata, beside the worktree it joined. Only a
-# confidently alive borrower counts: a borrower whose agent is gone, and equally
-# one whose liveness cannot be read at all, proves nothing about why the owner
-# is quiet. The borrower is itself a watched window, so its own liveness keeps
-# being judged on the ordinary path, which is where a review that really has
-# stopped surfaces. A task with no borrower yields nothing here and is untouched.
-#
-# Backend liveness and the metadata reads are both owned by bin/fm-backend.sh.
-# Every unanswerable question therefore lands the same way - a caller that has
-# not sourced it, a backend that cannot say - because this suppresses an alarm,
-# and suppressing one on a question nobody could answer is the single wrong
-# direction to fail in.
-live_borrower_of() {  # <task> [state-dir]
-  local task=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt meta borrower bwt target backend alive
-  [ -n "$task" ] && [ -n "$state" ] || return 0
-  command -v fm_backend_agent_alive >/dev/null 2>&1 || return 0
-  wt=$(fm_meta_get "$state/$task.meta" worktree)
-  [ -n "$wt" ] || return 0
-  for meta in "$state"/*.meta; do
-    [ -e "$meta" ] || continue
-    borrower=$(basename "$meta"); borrower=${borrower%.meta}
-    [ "$borrower" != "$task" ] || continue
-    [ "$(fm_meta_get "$meta" borrowed_worktree)" = 1 ] || continue
-    bwt=$(fm_meta_get "$meta" worktree)
-    [ "$bwt" = "$wt" ] || continue
-    backend=$(fm_backend_of_meta "$meta")
-    target=$(fm_backend_target_of_meta "$meta")
-    [ -n "$target" ] || continue
-    alive=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || alive=unknown
-    [ "$alive" = alive ] || continue
-    printf '%s' "$borrower"
-    return 0
-  done
-  return 0
-}
-
 # Directories excluded from the worktree write probe below, and the depth it walks.
 # The excluded set is everything a supervisor read or a package manager can write
 # without the crew doing any work - .git first, so firstmate's own read-only git
