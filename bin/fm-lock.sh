@@ -4,6 +4,9 @@
 # which lives as long as the firstmate session - unlike the transient subshell
 # PID of any one tool call, which is dead moments after it is written.
 #
+# An unclaimed Claude Code standby is refused the claim, and a lock it already
+# holds reads as stale, so a session in use always wins over one.
+#
 # A live holder normally refuses the claim, with ONE exception: a holder whose
 # session is positively identified as stopped on a usage limit is taken over,
 # because that process stays alive indefinitely and would otherwise pin the
@@ -50,7 +53,7 @@ print_status() {
         echo "lock: held by a session stopped by a usage limit (pid $rest)"
         echo "lock: run bin/fm-lock.sh to take it over"
         ;;
-      stale) echo "lock: stale (pid $rest dead or not a harness)" ;;
+      stale) echo "lock: stale (pid $rest dead, not a harness, or an unclaimed standby)" ;;
       took-over-from)
         echo "lock: this session took over from a session stopped by a usage limit (previous pid ${rest%% *})"
         ;;
@@ -64,6 +67,14 @@ if [ "${1:-}" = "status" ]; then
 fi
 
 me=$(fm_harness_ancestry_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+# An unclaimed Claude Code standby runs SessionStart while it is pre-warmed, but
+# nobody is using it yet, so it must never win the lock
+# (fm_claude_session_is_spare owns the rationale). Once claimed it is an ordinary
+# session and the same command succeeds.
+if fm_claude_session_is_spare "$me"; then
+  echo "error: this is an unclaimed Claude Code standby (pid $me), not a session in use; it does not take the fleet lock. If this session is now in use, run bin/fm-lock.sh again to claim it" >&2
+  exit 1
+fi
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1

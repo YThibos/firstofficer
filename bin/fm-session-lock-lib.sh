@@ -89,11 +89,11 @@ fm_proc_stat_field() {
   printf '%s' "${fields[$index]}"
 }
 
-# Print the session id Claude Code currently records for pid $1, or fail when
-# there is no record that can be TRUSTED for that pid. Claude Code keeps one
-# such record per session process at <config-root>/sessions/<pid>.json, holding
-# that session's current sessionId and the procStart of the process it belongs
-# to.
+# Print the path of the per-pid record Claude Code currently keeps for pid $1,
+# or fail when there is no record that can be TRUSTED for that pid. Claude Code
+# keeps one such record per session process at <config-root>/sessions/<pid>.json,
+# holding that session's current sessionId and the procStart of the process it
+# belongs to.
 #
 # A pid is reused, so the record is only trusted when its procStart matches the
 # live process's own start value in /proc/<pid>/stat; anything else is a leftover
@@ -101,8 +101,8 @@ fm_proc_stat_field() {
 # other host that verification cannot be performed at all and every record is
 # therefore unverifiable, which every caller treats exactly like an absent one -
 # leaving existing behaviour untouched there.
-fm_claude_recorded_session_id() {
-  local pid=$1 record started recorded id
+fm_claude_trusted_record() {
+  local pid=$1 record started recorded
   started=$(fm_proc_stat_field "$pid" 19) || return 1
   record="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$pid.json"
   [ -f "$record" ] && [ -r "$record" ] || return 1
@@ -110,6 +110,14 @@ fm_claude_recorded_session_id() {
     's/.*"procStart"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\).*/\1/p' \
     "$record" 2>/dev/null | head -n 1)
   [ -n "$recorded" ] && [ "$recorded" = "$started" ] || return 1
+  printf '%s' "$record"
+}
+
+# Print the session id in pid $1's trusted per-pid record, or fail when there is
+# no trusted record or it names no session.
+fm_claude_recorded_session_id() {
+  local record id
+  record=$(fm_claude_trusted_record "$1") || return 1
   id=$(sed -n \
     's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
     "$record" 2>/dev/null | head -n 1)
@@ -141,6 +149,26 @@ fm_claude_recorded_session_id() {
 # as they did before.
 fm_claude_session_host() {
   fm_claude_recorded_session_id "$1" >/dev/null 2>&1
+}
+
+# True when pid $1 is an UNCLAIMED Claude Code standby: a pre-warmed spare
+# session host (`claude bg-spare`) the background daemon keeps ready for the
+# next session to claim, whose trusted per-pid record still carries
+# "spare": true.
+#
+# A standby runs the project's SessionStart hooks while it is being pre-warmed,
+# long before anyone uses it, so without this it claims the home's session lock
+# and then sits on it indefinitely: it never takes a turn, never exits, and
+# reads as a live verified session host, so the captain's real session starts
+# read-only. Claude Code drops the flag from the record the moment a client
+# claims the standby, so a claimed one is an ordinary session host and nothing
+# here applies to it. Its argv cannot tell the two apart, because a claimed
+# standby keeps its `bg-spare` command line for the rest of the session; the
+# record is the only signal, and an untrusted or absent record answers no.
+fm_claude_session_is_spare() {
+  local record
+  record=$(fm_claude_trusted_record "$1" 2>/dev/null) || return 1
+  grep -q '"spare"[[:space:]]*:[[:space:]]*true' "$record" 2>/dev/null
 }
 
 # Print the pid of the CURRENT process's own verified Claude session host, by
@@ -347,9 +375,10 @@ EOF
 # A verified Claude session host counts, because the walk above records one and
 # a holder it just recorded must not read back as stale to every guard: a
 # session host is named after its release version, so no naming rule matches it.
-# A superseded host of THIS session is the one live process that never counts,
-# whatever its name: the home it holds is this session's own across a re-host,
-# so it is reclaimable rather than held by someone else.
+# A superseded host of THIS session never counts, whatever its name: the home it
+# holds is this session's own across a re-host, so it is reclaimable rather than
+# held by someone else. An unclaimed standby never counts either, because it is
+# not a session anyone is using (fm_claude_session_is_spare).
 # A process shared across sessions is rejected before the host check as well as
 # before the naming rules, so a lock recording one stays reclaimable by every
 # route.
@@ -357,6 +386,7 @@ fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
   fm_claude_superseded_own_host "$pid" && return 1
+  fm_claude_session_is_spare "$pid" && return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)
   fm_harness_shared_service "$comm" "$args" && return 1
@@ -610,7 +640,8 @@ fm_session_limit_stopped() {
 #   owned <pid>                held by the session this call runs in
 #   limit-stopped <pid>        held by a live session stopped on a usage limit
 #   held <pid>                 held by another live session
-#   stale <pid>                held by a pid that is dead or not a harness
+#   stale <pid>                held by a pid that is dead, not a harness, or an
+#                              unclaimed standby
 # A takeover recorded for THIS session adds a second line after "owned",
 # "took-over-from <pid> <iso8601>"; no other reader is told it took anything.
 fm_session_lock_report() {

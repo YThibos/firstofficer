@@ -379,6 +379,22 @@ Widening it to every non-alphanumeric character was rejected because it would br
 `docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins every half deterministically, including a resumed-session case that fails without that start-time condition, a replaced-session case that fails without the per-pid cross-check, and a quoted-session-id case that fails without the discrete argv read.
 That suite's fixture holders are real processes carrying the observed argv, so each session id under test is read from a live process rather than supplied to the code under test.
 
+On 2026-09-25 with Claude Code 2.1.282, a home's lock was found held by an unclaimed Claude Code standby, which is why the captain's real session started read-only and the turn-end guard then blocked it in a loop.
+The background daemon keeps pre-warmed spare session hosts, and its own log records each one and each claim:
+
+```sh
+grep -E 'bg (spawned|claimed-spare|spare spawned|settled)' ~/.claude/daemon.log
+cat ~/.claude/sessions/15705.json ~/.claude/sessions/7940.json
+tr '\0' ' ' < /proc/7940/cmdline
+```
+
+Observed result: the lock holder pid 4434 hosted session `a1d94548`, logged `bg spawned a1d94548 (spare)`, which ran SessionStart and never received a prompt, so no transcript exists for it.
+Standbys claimed for a real session are logged `bg claimed-spare <id> (fleet)`, and their per-pid record carries no `spare` field, while standbys that ran SessionStart without being used carry `"kind":"bg"` and `"spare":true`.
+Pid 7940, a claimed standby hosting a real working session, still shows `claude bg-spare --bg-spare <...>.claim.sock` as its argv, so the argv cannot separate a standby from a session in use and the record's flag is the signal.
+`fm_claude_session_is_spare()` in `bin/fm-session-lock-lib.sh` reads that flag from the `procStart`-verified record; run read-only against the live processes, pid 15705 (`"spare":true`) was not a live holder and pid 7940 (claimed) was.
+A standby that has not started its session has no per-pid record at all and is decided by the naming rules, which is safe because such a process has not run SessionStart and cannot hold the lock.
+`docs/session-lock.md` owns the contract, and `tests/fm-session-lock-identity.test.sh` and `tests/fm-claude-stop-autoarm.test.sh` pin it over real processes and verified records.
+
 The Claude product live path ran with Claude Code 2.1.219 on 2026-07-24:
 
 ```sh
