@@ -1016,7 +1016,7 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
       direct-PR)
         rule="1. Never push to the default branch (push only your \`fm/$id\` branch). Never merge a PR." ;;
       local-only)
-        rule="1. Never push to the default branch (publish only your \`fm/$id\` branch, and only at the publish stage below). Never open a PR or merge request, and never merge." ;;
+        rule="1. Never push to the default branch (publish only your \`fm/$id\` branch, through the pipeline run below). Open the merge request only as a draft, never mark it ready, and never merge." ;;
       *)
         rule='1. Never push to the default branch. Never merge a PR.' ;;
     esac
