@@ -1,0 +1,35 @@
+== pane_current_command: claude
+    PID    PPID    PGID TT           ELAPSED COMMAND         COMMAND
+1001175 1001170 1001175 pts/14         00:01 claude          claude /tmp/fmlive.k0bJ/agent.sh /tmp/fmlive.k0bJ/wt/src /tmp/fmlive.k0bJ/fm-suite.pid shell > 
+1001176 1001175 1001176 ?              00:01 bash            bash -c sleep 900; true
+== S4a own detached shell in worktree subdir: '1001176' (want 1001176)
+== S4b same job asked for a task whose worktree is another dir: '' (want empty)
+== S4c detached non-shell helper (1001475) under claude in that other task's worktree: '' (want empty)
+== S4d detached shell (1001626) in other task dir with non-harness parent: '' (want empty)
+== warm-up (startup recovery wake, first pane hash)
+   watcher alive after 8s: no wake
+   (acked startup recovery wake, rerunning)
+   watcher alive after 8s: no wake
+== S1 first stale sighting
+   (acked startup recovery wake, rerunning)
+   watcher alive after 10s: no wake
+==    stale-since=1790342782
+== S1 at threshold (idle 500s, 2 prior escalations)
+   (acked startup recovery wake, rerunning)
+   watcher alive after 10s: no wake
+==    stale-since before=1790342308 after=1790342810; escalation row: cleared
+   triage: [2026-09-25T15:26:22+0200] absorbed non-terminal stale (idle on its own background job pid 1001176): live:fm-suite
+   triage: [2026-09-25T15:26:50+0200] absorbed non-terminal stale (idle on its own background job pid 1001176, escalation deferred): live:fm-suite
+== S2 job 1001176 ends, worker stays idle
+   (acked startup recovery wake, rerunning)
+   watcher exited with wake:
+   out: stale: live:fm-suite (idle 502s, possible wedge, escalation 1)
+== S3 busy pane past turn bound with a live job
+==    classifier sees job: '1027513'
+   watcher alive after 5s: no wake
+   (acked startup recovery wake, rerunning)
+   watcher exited with wake:
+   out: stale: live:fm-suite (idle 502s, possible wedge, escalation 2)
+== S5 away-mode daemon housekeeping
+   with job: marker before=1790342335 after=1790342836; escalations: none
+   job ended: escalations: stale persisted 500s (possible wedge): live:fm-suite

@@ -1,0 +1,25 @@
+== Scenario 4: classifier attribution (real processes) ==
+    PID    PPID    PGID TT           ELAPSED COMMAND         COMMAND
+1044601 1044600 1044601 ?              00:12 bash            bash -c sleep 3000; true
+suite (job cwd /tmp/fmlive.hsXJ/wt/src): [1044601]
+other (no job in its copy): []
+cat: /tmp/fmlive.hsXJ/helper.pid: No such file or directory
+error: list of process IDs must follow -p
+
+Usage:
+ ps [options]
+
+ Try 'ps --help <simple|list|output|threads|misc|all>'
+  or 'ps --help <s|l|o|t|m|a>'
+ for additional help text.
+
+For more details see ps(1).
+other with detached NON-shell helper under claude in its copy: []
+    PID    PPID    PGID TT       COMMAND
+1049978 1049976 1049978 ?        bash
+other with detached shell under NON-agent parent in its copy: []
+-- retry non-shell helper case --
+    PID    PPID    PGID TT       COMMAND
+1051273 1051261 1051261 ?        claude
+1051275 1051273 1051275 ?        sleep
+other with detached NON-shell helper under claude in its copy: []

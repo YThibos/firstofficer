@@ -1,0 +1,8 @@
+== Scenario 2: job pid 1044601 killed at 2026-09-25T15:31:29+02:00; pane still idle ==
+> waiting for the background test suite
+stale: fmt:fm-suite (idle 28s, possible wedge, escalation 1)
+watcher exit=0 after 1s
+-- triage log tail --
+[2026-09-25T15:30:29+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:30:46+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:31:01+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite

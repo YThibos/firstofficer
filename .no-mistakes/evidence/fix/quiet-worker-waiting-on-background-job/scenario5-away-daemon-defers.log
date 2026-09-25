@@ -1,0 +1,6 @@
+== Scenario 5: sourced bin/fm-supervise-daemon.sh housekeeping, real tmux window fmt:fm-away, job pid 1214343 ==
+> waiting for the background test suite
+marker before=1790342684 (aged 500s, threshold 240s)
+marker after=1790343184  escalations=[]
+-- killing job, re-aging marker --
+marker after=removed  escalations=[stale persisted 500s (possible wedge): fmt:fm-away]

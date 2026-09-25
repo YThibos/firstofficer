@@ -1,0 +1,18 @@
+== Scenario 3: busy pane fmt:fm-busy (pi busy event recorded), live detached job pid 1168223 in its worktree, FM_BUSY_TURN_MAX_SECS=5 ==
+Working...
+stale: fmt:fm-busy (idle 15s, possible wedge, escalation 1)
+run1 exit=0 after 17s
+stale: fmt:fm-busy (idle 17s, possible wedge, escalation 2)
+run2 exit=0 after 18s
+stale: fmt:fm-busy (idle 15s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+run3 exit=0 after 15s
+job still alive: yes
+-- triage log --
+[2026-09-25T15:30:14+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:30:29+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:30:46+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:31:01+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:31:57+0200] absorbed benign signal: /tmp/fmlive.hsXJ/home/state/busy.status
+[2026-09-25T15:31:57+0200] absorbed busy (no completed turn) timer reset: fmt:fm-busy
+[2026-09-25T15:32:14+0200] absorbed busy (no completed turn) timer reset: fmt:fm-busy
+[2026-09-25T15:32:32+0200] absorbed busy (no completed turn) timer reset: fmt:fm-busy

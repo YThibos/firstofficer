@@ -1,0 +1,13 @@
+== Scenario 1: real fm-watch.sh, real tmux pane fmt:fm-suite, FM_STALE_ESCALATE_SECS=15, two 75s runs ==
+pane:
+> waiting for the background test suite
+watcher runs: both reached timeout (exit 124) with no wake emitted
+[2026-09-25T15:28:52+0200] absorbed non-terminal stale (idle on its own background job pid 1044601): fmt:fm-suite
+[2026-09-25T15:29:09+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:29:26+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:29:43+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:29:58+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:30:14+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:30:29+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:30:46+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
+[2026-09-25T15:31:01+0200] absorbed non-terminal stale (idle on its own background job pid 1044601, escalation deferred): fmt:fm-suite
