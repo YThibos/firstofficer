@@ -197,7 +197,7 @@ This fork's captain lists exactly `JustMasterData` and `JustAuth`.
 ## Draft merge requests for local-only delivery
 
 A `local-only` task opens its merge request as a draft through the no-mistakes PR step.
-Set the draft default in the no-mistakes global configuration (`~/.no-mistakes/config.yaml`) for the forges this home publishes to, for example:
+The draft default is a prerequisite: set it in the no-mistakes global configuration (`~/.no-mistakes/config.yaml`) or the repo config for the forges this home publishes to, for example:
 
 ```yaml
 providers:
@@ -205,7 +205,8 @@ providers:
     draft_pull_requests: true
 ```
 
-The worker still confirms the draft state on the forge and marks it draft itself when the default is not set.
+The worker checks this setting before its run and reports `blocked:` instead of running when it is not enabled, so no merge request ever opens ready.
+A project with no remote skips that check and runs the pipeline with `--skip push,pr,ci` before its guarded local merge.
 The captain merges a draft merge request and tells firstmate, which then refreshes that project's clone through the guarded fleet-sync path; nothing watches the branch for that merge.
 
 ## Away-mode wedge alarm channels (config/wedge-alarm)

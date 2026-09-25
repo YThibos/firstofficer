@@ -303,7 +303,8 @@ EOF
 # local-only in this fork: one pipeline run validates, publishes the branch, and
 # opens the merge request as a draft that the captain reviews and merges. The
 # run keeps its review step, so what it pushes is exactly what it reviewed. A
-# project with no remote ends at the guarded local merge instead.
+# project with no remote runs the pipeline without its publish steps and ends at
+# the guarded local merge instead.
 fm_dod_local_only() {  # <branch> <project> <config-dir>
   local branch=$1 project=$2 config=$3
   cat <<EOF
@@ -316,12 +317,13 @@ Work these stages in order on your branch \`$branch\`.
 
 1. Implement and commit.
    Keep the branch a clean fast-forward onto the current default branch - if the default branch has advanced, rebase onto it.
-2. Run /no-mistakes on the branch with no step skipped, passing \`--intent\` per the rule below.
-   That one run reviews, tests, documents, lints, pushes, opens the merge request, and watches CI, so there is no separate publish run.
-3. Confirm on the forge that the merge request is a draft; if it opened ready, mark it draft with the forge's own CLI before you report.
+2. Before the run, check that the no-mistakes configuration opens merge requests as drafts for this project's forge: \`providers.<forge>.draft_pull_requests: true\` in the global \`~/.no-mistakes/config.yaml\` or the repo config.
+   If it is not enabled, append \`blocked: no-mistakes does not open merge requests as drafts for this forge\` to the status file and stop without running.
+3. Run /no-mistakes on the branch with no step skipped, passing \`--intent\` per the rule below.
+   That one run reviews, tests, documents, lints, pushes, opens the merge request as a draft, and watches CI, so there is no separate publish run.
 4. At the CI-ready return point, append \`done: MR {url} draft, checks green\` to the status file and stop.
 
-If this project has no remote at all, the pipeline has nowhere to publish: do not run it, append \`done: ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
+If this project has no remote at all, skip the draft check and run /no-mistakes with \`--skip push,pr,ci\` so review, tests, and lint still run, then append \`done: ready in branch $branch\` instead, and the configured merge authority approves before firstmate merges it into the local default branch through the guarded fast-forward path.
 
 EOF
   fm_dod_pipeline_gates "$project" "$config"

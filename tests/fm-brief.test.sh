@@ -338,12 +338,16 @@ test_local_only_brief_publishes_one_reviewed_run_as_a_draft() {
 
   assert_grep "Run /no-mistakes on the branch with no step skipped" "$brief" \
     "local-only brief does not validate and publish through one full run"
-  assert_no_grep "--skip" "$brief" \
-    "local-only brief still skips pipeline steps, so the publishing run would lack its own review"
   assert_grep "opens its merge request as a **draft**" "$brief" \
     "local-only brief does not open the merge request as a draft"
-  assert_grep "Confirm on the forge that the merge request is a draft" "$brief" \
-    "local-only brief does not make the worker confirm the draft state"
+  assert_grep "draft_pull_requests: true" "$brief" \
+    "local-only brief does not preflight the no-mistakes draft setting before the run"
+  assert_grep "blocked: no-mistakes does not open merge requests as drafts" "$brief" \
+    "local-only brief does not block when the draft setting is off"
+  assert_no_grep "mark it draft" "$brief" \
+    "local-only brief still converts the merge request to draft after opening it"
+  assert_grep "run /no-mistakes with \`--skip push,pr,ci\`" "$brief" \
+    "no-remote local-only brief skips validation instead of running the pipeline without publish steps"
   assert_grep "done: MR {url} draft, checks green" "$brief" \
     "local-only brief has no draft-ready completion gate"
   assert_grep "Open the merge request only as a draft, never mark it ready, and never merge." "$brief" \
