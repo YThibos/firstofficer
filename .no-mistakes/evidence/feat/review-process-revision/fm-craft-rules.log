@@ -1,0 +1,4 @@
+ok - fm-craft-rules.sh: listed projects carry the rules, literally matched
+ok - fm-craft-rules.sh: an absent scope means everywhere, an all-comment one nowhere
+ok - fm-craft-rules.sh: malformed calls exit 2, so they can never read as no
+ok - fm-craft-rules.sh: print renders the rules block

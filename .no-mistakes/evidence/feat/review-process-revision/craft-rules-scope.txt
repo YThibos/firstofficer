@@ -1,0 +1,18 @@
+$ fm-craft-rules.sh applies JustMasterData
+craftsmanship rules apply to JustMasterData
+exit=0
+$ fm-craft-rules.sh applies JustAuth
+craftsmanship rules apply to JustAuth
+exit=0
+$ fm-craft-rules.sh applies Other
+craftsmanship rules do not apply to Other (not listed in /tmp/tmp.OEqACYBany/config/craft-rules-projects)
+exit=1
+$ applies (no arg)
+error: applies takes exactly one project name
+exit=2
+$ (no config file) applies Other
+craftsmanship rules apply to Other (no readable /tmp/tmp.rXohtEc8fH/config/craft-rules-projects, so they apply everywhere)
+exit=0
+$ (all-comment file) applies JustAuth
+craftsmanship rules do not apply to JustAuth (not listed in /tmp/tmp.rXohtEc8fH/config/craft-rules-projects)
+exit=1

@@ -1,0 +1,8 @@
+ok - a single transient stale pane_current_path read is not accepted as the worktree
+ok - an already-settled pane confirms on the next read, not a whole extra cycle
+ok - a transient primary-checkout pane read is not accepted as the worktree
+ok - a pane stuck on the primary checkout fails loudly at the deadline
+ok - a respawn does not inherit the previous session's idle clock
+ok - a claude spawn keeps its turn-end hook outside the worktree and carries it on the launch
+ok - a raw claude launch is warned when it would silently lose its turn-end signal
+# all fm-spawn-worktree-settle tests passed
