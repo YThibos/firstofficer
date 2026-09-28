@@ -1987,6 +1987,41 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
   pass "AFK nonterminal working:+merged keeps wedge aging and re-escalates at bound"
 }
 
+# Away-mode half of the background-job evidence (crew_background_job_of): an
+# aged stale marker for a worker idle on its own background job restarts its
+# persistence timer instead of reaching the captain as a possible wedge, and
+# escalates on the next aged recheck once the job has ended.
+test_afk_stale_persistence_deferred_while_idle_on_background_job() {
+  local dir state fakebin win pane key wt ids agent child marker_before
+  dir=$(make_supercase afk-bg-job-wedge)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-suite-w1"; pane="$dir/pane.txt"; wt="$dir/task-copy"
+  mkdir -p "$wt"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$win" "$wt" > "$state/suite-w1.meta"
+  printf 'working: running the full suite\n' > "$state/suite-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "suite-w1" | tr ':/.' '___')
+  ids=$(start_fake_agent_job "$dir" claude "$wt" detached-shell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" agent "away-mode fixture"
+
+  marker_before=$(( $(date +%s) - 500 ))
+  echo "$marker_before" > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || { stop_fake_agent_job "$agent" "$child"; fail "a worker idle on its own background job escalated as a wedge: $(cat "$state/.subsuper-escalations")"; }
+  [ "$(cat "$state/.subsuper-stale-$key" 2>/dev/null || echo 0)" -gt "$marker_before" ] \
+    || { stop_fake_agent_job "$agent" "$child"; fail "the persistence timer was not restarted, so the job's end would never be rechecked"; }
+
+  stop_fake_agent_job "$agent" "$child"
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  grep -q 'possible wedge' "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "the worker did not escalate once its background job had ended"
+  pass "AFK stale persistence is deferred while the worker is idle on its own background job"
+}
+
 test_afk_genuine_done_still_terminal_stale() {
   local dir state out
   dir=$(make_supercase afk-genuine-done-stale)
@@ -2861,6 +2896,7 @@ test_permanent_classification_failure_is_reported_and_acknowledged
 test_catchall_scan_surfaces_a_masked_event
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
+test_afk_stale_persistence_deferred_while_idle_on_background_job
 test_afk_genuine_done_still_terminal_stale
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending
