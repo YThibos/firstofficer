@@ -1,0 +1,25 @@
+$ bin/fm-craft-rules.sh applies JustMasterData   # scope file lists JustMasterData, JustAuth
+craftsmanship rules apply to JustMasterData
+exit=0
+
+$ bin/fm-craft-rules.sh applies onboarding
+craftsmanship rules do not apply to onboarding (not listed in /tmp/tmp.4LnpjyQq4K/home/config/craft-rules-projects)
+exit=1
+
+$ bin/fm-craft-rules.sh applies JustAuth-legacy   # prefix must not match
+craftsmanship rules do not apply to JustAuth-legacy (not listed in /tmp/tmp.4LnpjyQq4K/home/config/craft-rules-projects)
+exit=1
+
+$ bin/fm-craft-rules.sh applies anything   # no scope file at all
+craftsmanship rules apply to anything (no readable /tmp/tmp.4LnpjyQq4K/home/config/craft-rules-projects, so they apply everywhere)
+exit=0
+
+$ bin/fm-craft-rules.sh applies "" ; bin/fm-craft-rules.sh verify x   # malformed must never read as no
+error: applies takes exactly one project name
+exit=2
+error: expected applies <project-name> or print
+exit=2
+
+$ bin/fm-brief.sh t-craft proj --mode craftsmanship-review   # retired brief kind
+error: --mode must be one of no-mistakes, direct-PR, local-only (got 'craftsmanship-review')
+exit=1
