@@ -19,12 +19,9 @@
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
 #   direct-PR              push + PR via gh-axi, no pipeline
-#   local-only             pipeline with push/pr/ci skipped -> independent
-#                          craftsmanship review where this home requires it for
-#                          the project (bin/fm-craft-review.sh required) ->
-#                          publish the branch, no merge request -> the captain's
-#                          separate "ship it" word -> PR -> configured merge
-#                          authority
+#   local-only             one full pipeline run -> branch published and merge
+#                          request opened as a draft -> the captain reviews and
+#                          merges it
 #   no-mistakes-prod-only  a conditional policy, not a task mode: firstmate
 #                          classifies each task's surface at intake (the
 #                          project-management skill owns that classification).

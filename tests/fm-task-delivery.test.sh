@@ -392,11 +392,11 @@ STUB
   # The faster paths keep their own contracts rather than inheriting the pipeline's.
   assert_grep "Do NOT run /no-mistakes" "$payload" \
     "promoted direct-PR worker lost its no-pipeline contract"
-  # local-only in this fork publishes the branch and stops short of the merge request.
-  assert_grep "Do NOT open a PR or merge request" "$TMP_ROOT/promote-dod/payload-promote-dod-local-only" \
-    "promoted local-only worker lost its no-merge-request contract"
-  assert_grep "publish your branch" "$TMP_ROOT/promote-dod/payload-promote-dod-local-only" \
-    "promoted local-only worker was not told to publish its branch"
+  # local-only in this fork publishes through one full run as a draft merge request.
+  assert_grep "Open the merge request only as a draft, never mark it ready, and never merge." "$TMP_ROOT/promote-dod/payload-promote-dod-local-only" \
+    "promoted local-only worker lost its draft-only merge-request rule"
+  assert_grep "Run /no-mistakes on the branch with no step skipped" "$TMP_ROOT/promote-dod/payload-promote-dod-local-only" \
+    "promoted local-only worker was not told to publish through one full run"
   assert_no_grep "Do NOT push, do NOT open a PR, do NOT merge" "$TMP_ROOT/promote-dod/payload-promote-dod-local-only" \
     "promoted local-only worker still received the unpublished contract"
   assert_no_grep "no-mistakes axi respond" "$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr" \

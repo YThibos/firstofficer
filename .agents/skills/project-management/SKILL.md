@@ -40,8 +40,8 @@ Choose that posture when adding or creating the project:
 
 - `no-mistakes` runs the full validation pipeline before a PR.
 - `direct-PR` pushes and opens a PR without the no-mistakes pipeline.
-- `local-only` runs that pipeline with its publication and merge-request steps skipped, passes an independent craftsmanship review where this home requires one for the project, then publishes the branch and leaves the merge request to the captain's separate "ship it" word.
-  `bin/fm-craft-review.sh required <project>` is the answer, and its header owns the scope rule; adding a project never sets that scope as a side effect.
+- `local-only` runs that pipeline once to publish the branch and open its merge request as a draft that the captain reviews and merges.
+  Whether the captain's craftsmanship rules ride in its `--intent` is a separate per-home scope, `bin/fm-craft-rules.sh applies <project>`; adding a project never sets that scope as a side effect.
 - `no-mistakes-prod-only` is a conditional policy rather than one flat mode: genuinely internal-only tooling, automation, contributor or operator process, and release or submission work ships `direct-PR`, while product-facing, mixed, and uncertain work ships `no-mistakes`.
 
 The `local-only` name no longer describes its delivery step, and that mismatch is deliberate: `bin/fm-project-mode.sh`'s header owns why the enum value is kept.

@@ -2,8 +2,8 @@
 
 Audience: maintainer verification.
 
-This record supports the current guarantee that two `claude` agents may share one worktree, which `bin/fm-spawn.sh --borrow-worktree` relies on to place the independent craftsmanship reviewer in the implementing task's own checkout.
-It also supports why that same option still refuses `opencode`, `grok`, and `kimi`.
+This record supports the current guarantee that every `claude` crewmate carries its turn-end hook on `--settings`, keyed on its task id, and never writes `<worktree>/.claude/settings.local.json`.
+The measurements put two agents in one worktree, which is exactly where a per-worktree hook declaration breaks.
 Operator behaviour stays in [`docs/architecture.md`](../architecture.md) and the `harness-adapters` skill.
 
 Verified 2026-08-18 with Claude Code 2.1.234, the only agent CLI installed on the verifying machine.
@@ -91,22 +91,8 @@ Shared and worth knowing:
 - Both agents raise the folder-trust prompt independently on first launch in an untrusted worktree, and both panes showed it at once.
   Post-spawn dialog handling must clear it per pane; sending Enter to each pane cleared both.
 - One worktree means one git index, so concurrent commits from two agents contend on `index.lock`.
-  That is a property of sharing a checkout rather than of claude, and the craftsmanship reviewer avoids it by only reading.
+  That is a property of sharing a checkout rather than of claude.
 - `claude --continue` resolves the most recent conversation in the current directory, which is ambiguous with two sessions in one cwd.
   Firstmate never resumes claude, so this stays out of reach.
 
 The tracked `.claude/settings.json` primary guards exempt themselves from linked worktrees through `fm_primary_scope_matches`, so they stay inert in crew task worktrees whether one agent is present or two.
-
-## Why the other three stay refused
-
-Nothing below was measured, and the claude result does not transfer to any of it.
-
-`opencode` writes `<worktree>/.opencode/plugins/fm-turn-end.js`, a fixed-name file inside the worktree, which is claude's old problem shape.
-Its launch template already delivers configuration through the environment, so an env-delivered plugin is plausible, but whether opencode accepts a plugin that way is untested.
-
-`grok` and `kimi` have a different shape and need a different fix.
-Both already keep the hook outside the worktree, as a global hook plus a worktree-resident identity pointer, and both resolve that pointer from the workspace path.
-Two co-located agents share one workspace root, resolve the same pointer, and would touch the same marker, so relocation is not the missing piece for either.
-They need per-agent identity, which requires knowing what their hook processes actually receive.
-
-Answering any of the three needs its own live two-agent experiment on a machine where that CLI is installed.

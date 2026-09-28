@@ -69,7 +69,8 @@
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
-# A task whose meta carries borrowed_worktree=1 (bin/fm-spawn.sh --borrow-worktree)
+# A task whose meta carries borrowed_worktree=1 (written by the retired craftsmanship-review
+# borrow flow; no spawn path sets it any more, and this stays for records already on disk)
 # carves out of that check and out of every worktree mutation: it joined a worktree
 # another live task owns, so the branch, the commits, and the turn-end hook there
 # are that owner's, and the owner's own teardown is what checks and returns them.
