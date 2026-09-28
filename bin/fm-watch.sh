@@ -1074,8 +1074,15 @@ clear_write_tracking() {  # <window-key>
 # times in a row, and a crew demonstrably working in between breaks the row.
 # A window whose task has no running pipeline never gets an `alive` answer at
 # all and behaves exactly as it did before.
-wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> [<task>]
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=${5:-} since age n reason evidence borrower
+#
+# A pane idle at its prompt is also asked, after the borrower, whether its own
+# agent is waiting on a background job it started in its worktree - a test
+# suite, or a backgrounded drive call (crew_background_job_of owns the evidence
+# and its bound). That defers exactly as a live pipeline does. A busy pane is
+# never asked, because its own foreground command has the same process shape
+# and a hung foreground call is what the busy-turn bound exists to catch.
+wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> [<task>] [idle|busy]
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=${5:-} pane=${6:-idle} since age n reason evidence borrower job
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -1105,6 +1112,15 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           rm -f "$escalation_file"
           triage_log "absorbed $label (idle for live borrower $borrower, escalation deferred): $win"
           return
+        fi
+        if [ "$pane" = idle ]; then
+          job=$(crew_background_job_of "$task" "$STATE")
+          if [ -n "$job" ]; then
+            date +%s > "$since_file"
+            rm -f "$escalation_file"
+            triage_log "absorbed $label (idle on its own background job pid $job, escalation deferred): $win"
+            return
+          fi
         fi
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then
           wedge_defer_writing "$win" "$since_file" "$label" "$age"
@@ -1353,7 +1369,7 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
     handle_paused_stale "$win" "$task" "$h"
     return 0
   fi
-  wedge_timer_check "$win" "$since_file" "busy (no completed turn)" "$escalation_file" "$task"
+  wedge_timer_check "$win" "$since_file" "busy (no completed turn)" "$escalation_file" "$task" busy
   return 1
 }
 
@@ -2683,15 +2699,29 @@ EOF
           #     Surface immediately so firstmate inspects the inconclusive state
           #     (it may be done via an interactive menu that wrote no done: status,
           #     waiting on a decision, or wedged) instead of leaving the finish to
-          #     wait out the timer.
+          #     wait out the timer - unless the worker declared no wait and its
+          #     idle agent is visibly waiting on its own background job
+          #     (crew_background_job_of), which is absorbed like `working` so the
+          #     wedge timer, not an immediate wake, owns that quiet stretch.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             task=$(window_to_task "$w" "$STATE")
-            case "$(pause_state_class "$w" "$task")" in
+            stale_class=$(pause_state_class "$w" "$task")
+            stale_job=
+            if [ "$stale_class" = none ] \
+              && ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+              stale_job=$(crew_background_job_of "$task" "$STATE")
+              [ -z "$stale_job" ] || stale_class=working
+            fi
+            case "$stale_class" in
               working)
                 clear_pause_tracking "$key"
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
-                triage_log "absorbed non-terminal stale (provably working): $w"
+                if [ -n "$stale_job" ]; then
+                  triage_log "absorbed non-terminal stale (idle on its own background job pid $stale_job): $w"
+                else
+                  triage_log "absorbed non-terminal stale (provably working): $w"
+                fi
                 ;;
               paused)
                 handle_paused_stale "$w" "$task" "$h"

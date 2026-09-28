@@ -2035,6 +2035,111 @@ live_borrower_of() {  # <task> [state-dir]
   return 0
 }
 
+# Longest a single background job may keep a quiet worker off the wedge alarm,
+# measured from when the job started. A forgotten long-lived job - a dev server,
+# a `tail -f` - must not hide a worker that wedged beside it for ever, so past
+# this bound the job is no evidence and the ordinary escalation resumes. The
+# default comfortably covers a full test suite or a long CI wait. A value that is
+# not a positive integer is not a bound, so the default applies instead.
+FM_BG_JOB_MAX_SECS=${FM_BG_JOB_MAX_SECS:-7200}
+
+# Seconds from a `ps -o etime=` value, [[dd-]hh:]mm:ss; empty when unparseable.
+fm_etime_secs() {  # <etime>
+  local e=$1 d=0 h=0 m=0 s=0 rest
+  case "$e" in *-*) d=${e%%-*}; e=${e#*-} ;; esac
+  rest=$e
+  s=${rest##*:}; rest=${rest%:*}
+  [ "$rest" != "$e" ] || return 0
+  m=${rest##*:}
+  case "$rest" in *:*) h=${rest%%:*} ;; esac
+  case "$d$h$m$s" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' $(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))
+}
+
+# Print the pid of a live background job crew <id>'s own agent started inside
+# its recorded worktree, or nothing.
+#
+# A worker that starts a long command in the background - a full test suite,
+# or the `no-mistakes axi run` drive call its brief tells it to background -
+# goes back to its prompt and renders nothing until that command finishes. Its
+# pane is then legitimately static for as long as the job runs, which is exactly
+# the shape the wedge timer exists to catch, so without this it wedge-escalated
+# every window for the whole wait (2026-09-25: more than ten escalations across
+# a 50-minute CI wait whose run the pipeline-liveness read could not attribute).
+#
+# The evidence is kernel process structure, never anything a pane renders. A
+# job counts only when every one of these holds for one process:
+#   - it is a shell (bin/fm-agent-process-lib.sh owns that vocabulary), so a
+#     harness's long-lived helper - an MCP server, a language server - never
+#     reads as work in progress;
+#   - it leads its own process group and has no controlling terminal: the
+#     harness detached it as a command of its own, rather than it being the
+#     pane's login shell or something typed at a terminal;
+#   - its parent is a verified harness process, so it is the agent's own job;
+#   - its working directory is inside this task's recorded worktree, which is
+#     what attributes it to THIS worker when several run at once;
+#   - it started no more than FM_BG_JOB_MAX_SECS ago.
+# Verified on Claude Code, whose Bash tool, foreground and background alike,
+# runs each command as a detached `<shell> -c` child of the claude process
+# (docs/verification/runtime-backends.md). A harness whose commands do not take
+# that shape simply never answers, so its workers escalate exactly as before.
+#
+# Callers must ask only about a pane that is idle at its prompt and only at the
+# moment an escalation would otherwise fire: a busy pane's own foreground command
+# has the same shape, and a hung foreground call is exactly what the busy-turn
+# bound must still catch. A kind=secondmate task is excluded outright because
+# its home runs its own supervision in background shells whether or not the mate
+# is doing anything, the same reason the worktree write probe excludes it.
+#
+# Every unanswerable question lands on no evidence - no worktree, no classifier,
+# an unreadable process table or working directory - because this suppresses an
+# alarm, and that is the one direction an unanswerable question may never decide.
+# Cost: one `ps` of the process table, plus one working-directory read for each
+# detached shell whose parent is a harness.
+crew_background_job_of() {  # <id> [state-dir]
+  local id=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt kind max
+  local pid etime pcomm comm age cwd
+  [ -n "$id" ] && [ -n "$state" ] || return 0
+  wt=$(grep '^worktree=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ -n "$wt" ] && [ -d "$wt" ] || return 0
+  wt=$(cd "$wt" 2>/dev/null && pwd -P) || return 0
+  kind=$(grep '^kind=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ "$kind" != secondmate ] || return 0
+  if ! command -v fm_agent_process_classify_name >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-agent-process-lib.sh
+    . "$_FM_CLASSIFY_LIB_DIR/fm-agent-process-lib.sh" 2>/dev/null || return 0
+  fi
+  max=$FM_BG_JOB_MAX_SECS
+  case "$max" in ''|*[!0-9]*|0) max=7200 ;; esac
+  while IFS=$'\t' read -r pid etime pcomm comm; do
+    [ "$(fm_agent_process_classify_name "$comm")" = shell ] || continue
+    [ "$(fm_agent_process_classify_name "$pcomm")" = agent ] || continue
+    age=$(fm_etime_secs "$etime")
+    [ -n "$age" ] && [ "$age" -le "$max" ] || continue
+    if [ -d "/proc/$pid" ]; then
+      cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+    else
+      cwd=$(fm_run_timed 5 lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1 || true)
+    fi
+    case "$cwd" in
+      "$wt"|"$wt"/*) printf '%s' "$pid"; return 0 ;;
+    esac
+  done < <(LC_ALL=C ps -A -o pid= -o ppid= -o pgid= -o etime= -o tty= -o comm= 2>/dev/null \
+    | awk '{
+        c = $6; for (i = 7; i <= NF; i++) c = c " " $i
+        comm[$1] = c; ppid[$1] = $2; pgid[$1] = $3; et[$1] = $4; tty[$1] = $5
+      }
+      END {
+        for (p in comm) {
+          if (pgid[p] != p) continue
+          if (tty[p] != "?" && tty[p] != "??" && tty[p] != "-") continue
+          if (!(ppid[p] in comm)) continue
+          printf "%s\t%s\t%s\t%s\n", p, et[p], comm[ppid[p]], comm[p]
+        }
+      }')
+  return 0
+}
+
 # Directories excluded from the worktree write probe below, and the depth it walks.
 # The excluded set is everything a supervisor read or a package manager can write
 # without the crew doing any work - .git first, so firstmate's own read-only git

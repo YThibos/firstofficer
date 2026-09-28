@@ -169,6 +169,7 @@ Classify each wake this way:
 - `stale` with a terminal status or bare legacy captain-relevant line -> escalate.
   Nonterminal progress remains transient even when its prose contains a legacy free-text token or its seen-status marker already matches, so record a marker and self-handle.
   If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge.
+  An idle agent visibly waiting on its own background job restarts that timer instead (`docs/architecture.md` owns the evidence).
   This bounds wedge-detection latency to the threshold plus a tick: a delay, never a loss.
   Healthy crewmates are autonomous and do not wait on firstmate mid-task.
 - `heartbeat` -> self-handle.
