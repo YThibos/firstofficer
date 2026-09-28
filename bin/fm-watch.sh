@@ -1077,7 +1077,8 @@ clear_write_tracking() {  # <window-key>
 #
 # A pane idle at its prompt is also asked whether its own agent is waiting on a
 # background job it started in its worktree - a test suite, or a backgrounded
-# drive call (crew_background_job_of owns the evidence and its bound). That defers exactly as a live pipeline does. A busy pane is
+# drive call (crew_background_job_of owns the evidence and its bound). That
+# defers exactly as a live pipeline does. A busy pane is
 # never asked, because its own foreground command has the same process shape
 # and a hung foreground call is what the busy-turn bound exists to catch.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> [<task>] [idle|busy]
