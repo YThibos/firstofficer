@@ -187,7 +187,7 @@ Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, r
 
 ## Craftsmanship-rules scope (config/craft-rules-projects)
 
-The captain's craftsmanship rules ride in the no-mistakes `--intent` of every pipeline-mode ship task on the projects this home lists in local, gitignored `config/craft-rules-projects`, one literal project name per non-empty, non-comment line.
+The captain's craftsmanship rules ride in the no-mistakes `--intent` of every ship task that runs the pipeline, in both `no-mistakes` and `local-only` mode, on the projects this home lists in local, gitignored `config/craft-rules-projects`, one literal project name per non-empty, non-comment line.
 The pipeline's own review then holds the change to them, so no separate craftsmanship reviewer runs.
 Names are matched literally, and there is no per-change exemption: a project is in the set or it is not.
 An absent or unreadable file means the rules apply everywhere; a file holding only comments means nowhere.
