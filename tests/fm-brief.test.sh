@@ -346,10 +346,17 @@ test_local_only_brief_publishes_one_reviewed_run_as_a_draft() {
     "local-only brief does not block when the draft setting is off"
   assert_no_grep "mark it draft" "$brief" \
     "local-only brief still converts the merge request to draft after opening it"
-  assert_grep "the pipeline has nowhere to publish: skip the draft check and do not run it" "$brief" \
+  assert_grep "the pipeline has nowhere to publish: run no pipeline at all" "$brief" \
     "no-remote local-only brief runs a pipeline that cannot initialize without an origin remote"
   assert_no_grep "--skip push,pr,ci" "$brief" \
     "no-remote local-only brief still runs the pipeline without publish steps"
+  local no_remote_line gates_line
+  no_remote_line=$(grep -n "done: ready in branch feature/JUSTMD-9" "$brief" | head -1 | cut -d: -f1)
+  gates_line=$(grep -n "You drive no-mistakes by responding to its gates" "$brief" | head -1 | cut -d: -f1)
+  [ -n "$no_remote_line" ] && [ -n "$gates_line" ] && [ "$no_remote_line" -lt "$gates_line" ] \
+    || fail "no-remote outcome must terminate the contract before the gate-driving instructions a no-remote task can never use"
+  assert_grep "Nothing below this stage applies to that outcome" "$brief" \
+    "no-remote local-only brief does not exclude the pipeline stages and gate contract from the no-remote outcome"
   assert_grep "done: MR {url} draft, checks green" "$brief" \
     "local-only brief has no draft-ready completion gate"
   assert_grep "Open the merge request only as a draft, never mark it ready, and never merge." "$brief" \
