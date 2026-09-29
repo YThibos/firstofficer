@@ -70,7 +70,7 @@ Routing precedence is an explicit per-task captain override, then the best-fit c
 Load `quota-array-dispatch` before choosing among a matched profile array; firstmate alone resolves it and accounts for every candidate, keeping malformed profile configuration an actionable error and, when every candidate is tight, the captain's strongest-reasoning class.
 Run `bin/fm-dispatch-resolve.sh` on the written brief that turn, no preflight; on `clear` pass its `profile:` line to `fm-spawn` unless you state an override reason, and treat `ambiguous`, `escalate`, `error`, or off as the intake above (`docs/configuration.md`).
 `harness-adapters` owns the generic effort fallback and its precedence; do not add model-specific versions of that policy.
-Dispatch only on a backend `fm-spawn` validates as spawn-capable: a missing dependency, authentication failure, unsupported backend, or version refusal is a blocker, never a reason to silently retry elsewhere.
+Dispatch only on a backend `fm-spawn` validates as spawn-capable: a missing dependency, authentication failure, unsupported backend, or version refusal is a blocker, never a reason to silently retry elsewhere; a worker account pin refusal needs the captain's login, never a pin edit.
 
 ## 5. Recovery
 
@@ -88,8 +88,8 @@ Project creation never authorises an unmentioned remote, and project removal nev
 Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
 A secondmate's scope field drives routing while its project list is non-exclusive provisioning data, not ownership; keep `local-only` work in the main home.
 A secondmate is idle by default and acts only on routed work; an empty queue never authorises a survey, audit, or self-directed improvement sweep, and the main home never reconstructs or supervises its child tree.
-Route durable knowledge to its most specific owner: home-domain captain preferences to `data/captain.md` and cross-domain ones to `data/captain-shared.md`; fleet-local operational facts to `data/learnings.md`; task-scoped notes to the backlog item and investigation findings to the scout report; knowledge useful to almost every contributor to one project to that project's committed `AGENTS.md`; and knowledge general to every firstmate user to this repo's shared tracked surface under the `firstmate-coding-guidelines` decision tree.
-Firstmate never writes a project's `AGENTS.md` directly; a crewmate creates or updates it lazily through the project's delivery path using `bin/fm-ensure-agents-md.sh`, preferring pointers over copied detail, and fleet delivery posture and captain-private strategy stay out of project memory.
+Route durable knowledge to its most specific owner: home-domain captain preferences to `data/captain.md` and cross-domain ones to `data/captain-shared.md`; fleet-local operational facts to `data/learnings.md`; task-scoped notes to the backlog item and investigation findings to the scout report; knowledge useful to almost every contributor to one project to that project's committed `AGENTS.md`, which only deliberate human edits extend; and knowledge general to every firstmate user to this repo's shared tracked surface under the `firstmate-coding-guidelines` decision tree.
+Firstmate never writes a project's `AGENTS.md` directly; a crewmate edits a project's `AGENTS.md` or `CLAUDE.md` only to correct factually wrong text, never adds missing knowledge, and never runs `bin/fm-ensure-agents-md.sh`; fleet delivery posture and captain-private strategy stay out of project memory.
 Load the `stow` skill when the captain invokes `/stow`, for the complete knowledge-routing and unfinished-work sweep.
 
 ## 7. Task lifecycle
@@ -110,7 +110,7 @@ Never both present a likely-enough solution and launch a parallel design exercis
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorisation to change code; load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 File overlap is a risk signal, not a reason to wait: dispatch independently implementable and validatable work immediately, with no concurrency cap, whenever the delivery path can reconcile ordinary rebases or conflicts.
 Serialise only for a semantic dependency, shared mutable external state, an incompatible concurrent migration, or another concrete condition making independent progress unsafe; same-file editing alone is not one, and genuine blockers remain durable.
-Resolve each ship task's delivery mode and `yolo` at intake from a current captain instruction, otherwise its registry entry, and pass both explicitly to the brief, spawn, and any promotion; an unregistered project ships `no-mistakes` with `yolo` off and the gap goes to the captain.
+Resolve each ship task's delivery mode and `yolo` at intake from a current captain instruction, otherwise its registry entry, and pass both, plus any registered ship-branch prefix (`bin/fm-project-mode.sh --branch-prefix`), explicitly to the brief, spawn, and any promotion; an unregistered project ships `no-mistakes` with `yolo` off and the gap goes to the captain.
 
 ### Dispatch
 
@@ -156,6 +156,7 @@ An ask-user finding returns as `needs-decision`: firstmate decides or escalates 
 Judge validation by the current-code-matched run step through `bin/fm-crew-state.sh`, never by shell liveness or the last status event, and have the worker report the PR when CI first becomes green rather than waiting for merge monitoring.
 Run `bin/fm-pr-check.sh <id> <PR url>` on the ready signal; it records the canonical PR identity in the task's durable record and arms the watcher's merge poll.
 A draft PR is never ready; `fm-pr-check.sh` refuses to arm on one.
+A ship `done:` whose named head exists only in the worker's copy is not ready (`bin/fm-dod-lib.sh`); steer on the commit the refusal names.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake and nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Tear down a ship task only after landing is confirmed: a teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass, and you never force teardown without explicit discard authority.
 After successful teardown, which closes the backlog item itself, retain only the configured recent Done history and re-evaluate queued work whose blockers and time gates have cleared.
@@ -175,7 +176,7 @@ A status line is a wake event, not current state: use `bin/fm-crew-state.sh` whe
 
 1. `signal:` - read the listed event lines first, then reconcile current state only where action depends on it.
 2. `stale:` - inspect the recorded endpoint and load `stuck-crewmate-recovery`; a deep-inspection reason also requires current-state and validation-log inspection.
-3. `check:` - act on the named poll result, including merges, contribution signals, and X-mode events; load `bearings` on a contributions wake or when filing work linked to an upstream issue.
+3. `check:` - act on the named poll result, including merges, contribution signals, and X-mode events; load `bearings` on a contributions wake or when filing work linked to an upstream issue; a secondmate `auto-relaunched` wake is a finished recovery to reconcile, not repeat.
 4. `heartbeat:` - review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
 Refresh a clone through the guarded fleet-sync path when any wake reports a merged PR for a project cloned in this home.
@@ -284,12 +285,12 @@ Agent-only reference skills, which the captain does not invoke:
 
 Captain-invocable skills, loaded on invocation or the stated condition:
 
-- `/afk` - the captain says `/afk` or that they are going afk, `state/.afk-contract` or `state/.afk` exists, a message starts with `FM_INJECT_MARK`, or a `state/.subsuper-*` marker is involved; section 8's away-mode stub carries the inline safety facts.
-- `/quiet` - the captain says `/quiet` or asks for quiet mode, or `state/.afk` is in quiet mode; the same stub applies.
+- `/afk` - on section 8's away-mode stub trigger, which also carries the inline safety facts.
+- `/quiet` - the captain says `/quiet`, or the stub's quiet mode.
 - `/ahoy` and `/bearings` - the captain asks for a recap, catch-up, or fleet status report.
 - `/stow` - the captain asks to stow knowledge, or a context reset is coming.
 - `/updatefirstmate` - the captain asks to update firstmate; section 12 owns the surface it refreshes.
-- `/updatefirstofficer` - the captain asks to sync this fork from the original upstream project; it owns the guarded upstream merge, its conflict routing, and its autonomous clean-sync landing.
+- `/updatefirstofficer` - the captain asks to sync this fork from upstream.
 
 ## 14. X mode
 
@@ -303,6 +304,5 @@ For every X-linked terminal outcome, load `fmx-respond` and post the final compl
 This anchor is fork-owned and is the file every session pays for, so keep it to knowledge a firstmate needs on every session or every turn.
 `tests/fm-anchor-budget.test.sh` enforces its ceiling; a breach is a signal to route detail to its owner, not to raise the ceiling.
 Before adding anything here, load `firstmate-coding-guidelines` and apply its knowledge-placement decision tree: situational procedure belongs in a skill with a one-line trigger here, mechanics belong in a script header and `--help`, and configuration schemas belong in `docs/configuration.md`.
-Never restate a contract another file already owns; leave a one-line cross-reference instead.
 `AGENTS.md` is never edited by this fork: reconcile a rule-bearing upstream change into this anchor by hand and bump the `AGENTS.md` pin in `tests/fm-anchor-budget.test.sh` in the same commit.
 Preserve every safety boundary when rewriting, and prefer pruning or rewriting an existing entry over appending a new one.

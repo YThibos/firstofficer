@@ -2,9 +2,11 @@
 # Perform the approved local merge for a local-only ship task: fast-forward the
 # project's default branch to the branch the crewmate actually built the work on.
 #
-# That branch is resolved, not constructed: `bin/fm-task-branch-lib.sh` owns the
-# order (the task worktree's checked-out branch first, the retired `fm/<task-id>`
-# name only when it is genuinely present) and refuses loudly when neither resolves.
+# A ship branch recorded in state/<task-id>.meta (branch=) wins when present.
+# Otherwise the branch is resolved, not constructed: `bin/fm-task-branch-lib.sh`
+# owns the order (the task worktree's checked-out branch first, the retired
+# `fm/<task-id>` name only when it is genuinely present) and refuses loudly when
+# neither resolves.
 #
 # This is firstmate's merge gate-action (the captain's merge authority applied
 # locally instead of via a GitHub PR). It is the one sanctioned exception to hard
@@ -102,7 +104,16 @@ default_branch() {
   return 1
 }
 
-BRANCH=$(fm_task_branch "$ID" "$WT" "$PROJ") || exit 1
+BRANCH=$(grep '^branch=' "$META" | tail -n 1 | cut -d= -f2- || true)
+if [ -n "$BRANCH" ]; then
+  if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+    echo "error: task $ID has an invalid recorded ship branch '$BRANCH'" >&2
+    exit 1
+  fi
+  git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
+else
+  BRANCH=$(fm_task_branch "$ID" "$WT" "$PROJ") || exit 1
+fi
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
@@ -147,4 +158,6 @@ fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+# Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
+[ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
