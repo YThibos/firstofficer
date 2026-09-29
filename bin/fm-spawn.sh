@@ -241,6 +241,17 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
+#   The path must also be a worktree of the spawning project's own clone.
+#   Treehouse keys a pool by repository name, so another clone of the same
+#   repository shares it; while `treehouse get` chooses, every slot belonging to
+#   another clone is held busy by a short-lived placeholder process, reported
+#   once per home, and released as soon as the pane has its slot, so the pool
+#   can only hand out this clone's slot or create a new one.
+#   Every refusal before the task record is published closes the endpoint the
+#   spawn created (Herdr projections and Orca terminals through their own exact
+#   rollback), which also ends the pane's `treehouse get` shell and so returns
+#   its slot: a refused spawn leaves no window, lease, or record behind, and an
+#   immediate retry of the same id starts clean.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -1189,6 +1200,8 @@ ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
 HERDR_PROJECTION_ABORT_CLEANUP=0
+SPAWN_ENDPOINT_ABORT_CLEANUP=0
+SPAWN_TREEHOUSE_FENCE_PIDS=()
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
 HERDR_PROJECTION_ABORT_SEEDED_PANE=
@@ -1247,8 +1260,41 @@ parse_orca_worktree_result() {
   fi
 }
 
+# A fresh endpoint belongs to no task record until that record is published, so
+# a refusal before then must close it here: nothing else ever will. Closing the
+# pane also ends the interactive `treehouse get` shell inside it, which is what
+# returns its pool slot, so a refused spawn leaves neither a window nor a lease
+# behind and an immediate retry starts clean. Herdr's projected tab and Orca's
+# terminal have their own exact rollback above and are never armed here.
+spawn_endpoint_abort_close() {
+  local tab_id=
+  [ "$BACKEND" = zellij ] && tab_id=${ZELLIJ_TAB_ID:-}
+  if [ "$BACKEND" = tmux ] && [ -n "${WID:-}" ]; then
+    tmux kill-window -t "$WID" 2>/dev/null && return 0
+  fi
+  fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null
+}
+
+# Placeholder processes that keep other clones' pool slots busy while this
+# spawn's `treehouse get` picks a slot (see spawn_treehouse_fence_foreign_slots).
+spawn_treehouse_fence_release() {
+  local pid
+  for pid in "${SPAWN_TREEHOUSE_FENCE_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  SPAWN_TREEHOUSE_FENCE_PIDS=()
+}
+
 spawn_abort_cleanup() {
   local status=$?
+  spawn_treehouse_fence_release
+  if [ "$SPAWN_ENDPOINT_ABORT_CLEANUP" = 1 ]; then
+    SPAWN_ENDPOINT_ABORT_CLEANUP=0
+    if ! spawn_endpoint_abort_close; then
+      echo "warning: could not close refused spawn endpoint $T for $ID; close it by hand before retrying" >&2
+    fi
+  fi
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
     [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] &&
     [ -n "$SPAWN_META_TMP" ] &&
@@ -3301,11 +3347,42 @@ spawn_worktree_isolated() { # <path>
 }
 
 validate_spawn_worktree() { # <source> <inspect-target>
-  local source=$1 inspect_target=$2
+  local source=$1 inspect_target=$2 wt_common proj_common
   if ! spawn_worktree_isolated "$WT"; then
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${SPAWN_WT_TOP:-none}'; spawning project '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
+  # Isolated is not enough: the copy must belong to this project's own clone.
+  # A worktree of another clone of the same repository (a shared Treehouse
+  # pool hands those out) would record a copy this home's teardown and trust
+  # checks cannot recognise as the task's own.
+  wt_common=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+    wt_common=$(cd "$wt_common" 2>/dev/null && pwd -P) || wt_common=
+  proj_common=$(git -C "$PROJ_ABS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+    proj_common=$(cd "$proj_common" 2>/dev/null && pwd -P) || proj_common=
+  if [ -z "$wt_common" ] || [ "$wt_common" != "$proj_common" ]; then
+    echo "error: $source yielded '$WT', which is a worktree of another clone ('${wt_common:-unresolvable}'), not of project '$PROJ_ABS'; refusing to launch" >&2
+    exit 1
+  fi
+}
+
+# Keep every slot of this project's Treehouse pool that belongs to ANOTHER clone
+# busy while this spawn's `treehouse get` chooses, so the pool can only hand out
+# one of this clone's slots or create a new one. Treehouse counts a slot as in
+# use while any process runs inside it, so a placeholder process per foreign
+# slot is enough; it is released as soon as the pane has its slot, and by the
+# abort cleanup on any refusal. Each foreign slot is reported once per home.
+spawn_treehouse_fence_foreign_slots() {
+  local slot reported="$STATE/.treehouse-foreign-slots-reported"
+  while IFS= read -r slot; do
+    [ -n "$slot" ] || continue
+    ( cd "$slot" && exec sleep 300 ) >/dev/null 2>&1 &
+    SPAWN_TREEHOUSE_FENCE_PIDS+=("$!")
+    if ! grep -qxF -- "$slot" "$reported" 2>/dev/null; then
+      echo "warning: skipping Treehouse pool slot $slot: it is a worktree of another clone of this repository, not of $PROJ_ABS; return or destroy it from that clone to reclaim it" >&2
+      printf '%s\n' "$slot" >>"$reported" 2>/dev/null || true
+    fi
+  done < <(fm_treehouse_foreign_slots "$PROJ_ABS")
 }
 
 # A pooled slot whose only deviation is a submodule gitlink is stale, not dirty:
@@ -3639,6 +3716,7 @@ else
     # rename-critical worktree-detection steps below; the persisted window= handle
     # stays $T (the name form), which is safe now that rename is disabled.
     WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    SPAWN_ENDPOINT_ABORT_CLEANUP=1
     WT_TARGET="$WID"
     ;;
   herdr)
@@ -3810,6 +3888,7 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    [ "$HERDR_PROJECTED" = 1 ] || SPAWN_ENDPOINT_ABORT_CLEANUP=1
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
@@ -3822,6 +3901,7 @@ EOF
       exit 1
     fi
     T="$ZELLIJ_SES:$ZELLIJ_PANE_ID"
+    SPAWN_ENDPOINT_ABORT_CLEANUP=1
     ;;
   cmux)
     fm_backend_cmux_container_ensure || exit 1
@@ -3834,6 +3914,7 @@ EOF
       exit 1
     fi
     T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
+    SPAWN_ENDPOINT_ABORT_CLEANUP=1
     ;;
   orca)
     set +e
@@ -4271,6 +4352,7 @@ elif [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  spawn_treehouse_fence_foreign_slots
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -4326,11 +4408,13 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
+    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); its window was closed" >&2
     exit 1
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+  # The pane holds its slot now, so the other clones' slots need no fence.
+  spawn_treehouse_fence_release
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable
@@ -4346,7 +4430,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # through metadata publication, so no other spawn or return sees a half-claim.
   if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
     if ! fm_treehouse_slot_owner_claim "$WT" "$ID" "$FM_HOME"; then
-      echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; inspect window $T" >&2
+      echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; its window was closed" >&2
       exit 1
     fi
     SPAWN_SLOT_CLAIMED=1
@@ -4377,7 +4461,7 @@ spawn_assert_agent_worktree
 # than launching a worker that would wedge. Refusing here rather than beside the
 # arm keeps this in the same class as the two worktree refusals just above: no
 # temp root, no retired relaunch wiring and no busy record exists yet to strand,
-# so the refusal names the endpoint the same way they do and leaves nothing else
+# and the abort cleanup closes the fresh endpoint, so the refusal leaves nothing
 # behind.
 # agy gates a fresh worktree behind its own folder-trust dialog and honours a
 # trustedWorkspaces entry written ahead of launch (bin/fm-agy-trust.sh), so the
@@ -4396,7 +4480,7 @@ claude*)
     spawn_trust_args=("$WT" "$PROJ_ABS")
   fi
   if ! "$FM_ROOT/bin/fm-claude-trust.sh" "${spawn_trust_args[@]}" >/dev/null; then
-    echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; inspect window $T" >&2
+    echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; its window was closed" >&2
     exit 1
   fi
   ;;
@@ -4994,6 +5078,9 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   fi
   SPAWN_META_TMP=
+  # The published record now names this endpoint, so the record's own
+  # lifecycle owns it from here, not the refusal rollback.
+  SPAWN_ENDPOINT_ABORT_CLEANUP=0
 fi
 
 # Fuse the backlog In-flight transition into the publication that just created
