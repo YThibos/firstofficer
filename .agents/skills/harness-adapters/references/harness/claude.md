@@ -56,12 +56,11 @@ Styled capture stays internal to the boolean detector; `fm-peek` and model-facin
 The spawn disables Claude's `/bug` and `/feedback` model-drafted feedback flow for every Claude worker and secondmate, preventing a fleet-launched agent from queuing or submitting a bug report on the captain's behalf.
 The controls are scoped to the launched process and never modify the captain's global Claude settings; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns their exact mechanics and defense-in-depth rationale.
 
-## Worktree sharing
+## Hook placement
 
-Claude can share a worktree with another Claude agent, which is what lets a craftsmanship reviewer join the implementing task's checkout through `fm-spawn.sh --borrow-worktree`.
 The spawn writes each worker's busy-state and turn-end hooks, together with the launch policy, to `state/<task-id>.claude-settings.json` and passes that file with `--settings`, so the declaration is keyed on the task id like the markers it touches.
 Nothing may write `<worktree>/.claude/settings.local.json` again: `--settings` merges with that file rather than replacing it, so a stray copy fires another task's hook on every turn of this one and makes an idle agent look alive.
-`../../../docs/verification/claude-colocation.md` owns the measurements and what else two co-located agents share.
+`../../../docs/verification/claude-colocation.md` owns the measurements.
 
 ## Task control channel
 

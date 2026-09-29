@@ -531,18 +531,29 @@ Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_
 
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 
-## Craftsmanship-review scope (config/craft-review-projects)
+## Craftsmanship-rules scope (config/craft-rules-projects)
 
-The independent craftsmanship review on the `local-only` delivery path runs on the projects this home lists in local, gitignored `config/craft-review-projects`, one literal project name per non-empty, non-comment line.
-Names are matched literally, so a project never drifts into or out of the set by resembling another one, and there is no per-change exemption: a project is in the set or it is not.
+The captain's craftsmanship rules ride in the no-mistakes `--intent` of every ship task that runs the pipeline, in both `no-mistakes` and `local-only` mode, on the projects this home lists in local, gitignored `config/craft-rules-projects`, one literal project name per non-empty, non-comment line.
+The pipeline's own review then holds the change to them, so no separate craftsmanship reviewer runs.
+Names are matched literally, and there is no per-change exemption: a project is in the set or it is not.
+An absent or unreadable file means the rules apply everywhere; a file holding only comments means nowhere.
+This fork's captain lists exactly `JustMasterData` and `JustAuth`.
+`bin/fm-craft-rules.sh` owns the decision and the rules text, and its header owns the mechanics.
 
-An absent file means the review is required for every `local-only` project, not for none.
-A file that exists but cannot be read is treated exactly like an absent one, so a wrong mode or owner can never read as "not required".
-A home that has never configured this has said nothing, and the safe reading of silence about a safety step is that it still applies, so narrowing the set is always a deliberate written act; a file holding only comments is how a home says "nowhere" out loud.
+## Draft merge requests for local-only delivery
 
-`bin/fm-craft-review.sh required <project-name>` is the single owner of the decision and prints the reason either way.
-`bin/fm-craft-review.sh verify <task-id>` reads it before gating publication, and `bin/fm-brief.sh` reads it so a generated `local-only` brief promises only the stages that will actually run.
-Where the review is required nothing about it changes; where it is not, the delivery runs end to end with no reviewer and no gate.
+A `local-only` task opens its merge request as a draft through the no-mistakes PR step.
+The draft default is a prerequisite: set it in the no-mistakes global configuration (`~/.no-mistakes/config.yaml`) or the repo config for the forges this home publishes to, for example:
+
+```yaml
+providers:
+  gitlab:
+    draft_pull_requests: true
+```
+
+The worker checks this setting before its run and reports `blocked:` instead of running when it is not enabled, so no merge request ever opens ready.
+A project with no remote skips that check and runs no pipeline before its guarded local merge.
+The captain merges a draft merge request and tells firstmate, which then refreshes that project's clone through the guarded fleet-sync path; nothing watches the branch for that merge.
 
 ## Away-mode wedge alarm channels (config/wedge-alarm)
 
@@ -2324,6 +2335,7 @@ FM_SECONDMATE_LIVENESS_SECS=60   # seconds between watcher probes of each regist
 FM_SECONDMATE_LIVENESS_TIMEOUT=120   # seconds bounding one watcher-driven relaunch, so a wedged spawn cannot stall the poll; zero or invalid values use 120
 FM_SECONDMATE_LIVENESS_MAX_ATTEMPTS=3   # automatic relaunch attempts allowed per mate inside the window before the watcher parks auto-relaunch behind state/.secondmate-relaunch-bound-<id> and escalates once; a later live probe clears the marker and restores the full attempt budget (the ledger keeps its history behind a `rearmed` row); zero or invalid values use 3
 FM_SECONDMATE_LIVENESS_WINDOW_SECS=3600   # window the relaunch bound counts state/.secondmate-relaunch-<id> attempt lines over; the file is also the durable per-mate relaunch record; zero or invalid values use 3600
+FM_BG_JOB_MAX_SECS=7200            # longest one background job of a worker's own agent may keep that worker's idle pane off the wedge escalation, measured from when the job started, so a forgotten long-lived job cannot hide a wedge for ever; a value that is not a positive integer falls back to the default
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_LIMIT_PARK_REGEX=               # optional global override for every harness-scoped parked-by-usage-limit footer matcher; unset uses each recorded harness's verified signature, and a harness with none never classifies as parked
 FM_LIMIT_PARK_TAIL_LINES=12        # non-blank pane lines, counted from the bottom, searched for that footer, so transcript output quoting a past banner is never read as the pane's current state

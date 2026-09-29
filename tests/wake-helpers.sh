@@ -62,18 +62,6 @@ make_case() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
-# Per-target overrides let one case hold several windows in different states -
-# a reviewer working beside the idle implementer whose copy it borrowed, say.
-# The bare FM_FAKE_TMUX_* variables remain the answer for every window that has
-# no override, so every existing single-window case is unaffected.
-target_key() {
-  printf 'FM_FAKE_TMUX_%s_%s' "$1" "$(printf '%s' "${2:-}" | tr -c 'A-Za-z0-9' '_')"
-}
-per_target() {  # <suffix> <target>; echoes the override value, if any
-  local name
-  name=$(target_key "$1" "$2")
-  printf '%s' "${!name:-}"
-}
 if [ "${1:-}" = "list-windows" ]; then
   if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
     for w in $FM_FAKE_TMUX_WINDOWS; do printf '%s\n' "${w#*:}"; done
@@ -82,14 +70,6 @@ if [ "${1:-}" = "list-windows" ]; then
   fi
   exit 0
 fi
-target_of() {  # echo the value following -t in the argument list
-  local prev="" a t=""
-  for a in "$@"; do
-    [ "$prev" = "-t" ] && t=$a
-    prev=$a
-  done
-  printf '%s' "$t"
-}
 if [ "${1:-}" = "capture-pane" ]; then
   if [ -n "${FM_FAKE_TMUX_CAPTURE_COUNT_FILE:-}" ]; then
     _capture_count=$(cat "$FM_FAKE_TMUX_CAPTURE_COUNT_FILE" 2>/dev/null || echo 0)
@@ -108,20 +88,14 @@ if [ "${1:-}" = "capture-pane" ]; then
       _prev=$_arg
     done
   fi
-  t=$(target_of "$@")
-  f=$(per_target CAPTURE "$t")
-  [ -n "$f" ] || f=${FM_FAKE_TMUX_CAPTURE:-}
-  [ -z "$f" ] || cat "$f"
+  if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ]; then
+    cat "$FM_FAKE_TMUX_CAPTURE"
+  fi
   exit 0
 fi
 if [ "${1:-}" = "display-message" ]; then
   case "$*" in
-    *pane_current_command*)
-      c=$(per_target CURRENT_COMMAND "$(target_of "$@")")
-      [ -n "$c" ] || c=${FM_FAKE_TMUX_CURRENT_COMMAND:-}
-      printf '%s\n' "$c"
-      exit 0
-      ;;
+    *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
   esac
 fi
 exit 1
@@ -402,4 +376,60 @@ dead_pid() {
     p=$((p + 1))
   done
   printf '%s\n' "$p"
+}
+
+# --- fake harness agent with one child process ------------------------------
+# The real process shape a harness gives a background job, with no harness, for
+# the crew_background_job_of regressions (bin/fm-classify-lib.sh).
+# Start one fake agent named <agent-name> in <cwd>, give it one child of <shape>,
+# and print "<agent-pid> <child-pid>":
+#   detached-shell     a shell leading its own session, no terminal: a job
+#   detached-nonshell  a non-shell leading its own session: a long-lived helper
+#   attached-shell     a shell left in the agent's own process group
+start_fake_agent_job() {  # <dir> <agent-name> <cwd> <shape>
+  local dir=$1 name=$2 cwd=$3 shape=$4 bin pidfile i=0
+  bin="$dir/agents/$name"
+  pidfile="$dir/agents/$name.$shape.child"
+  mkdir -p "$dir/agents"
+  cat > "$bin" <<'SH'
+#!/bin/bash
+cd "$1" || exit 1
+case "$2" in
+  detached-shell) perl -e 'use POSIX (); POSIX::setsid(); exec "bash", "-c", "sleep 120; true"' </dev/null >/dev/null 2>&1 & ;;
+  detached-nonshell) perl -e 'use POSIX (); POSIX::setsid(); exec "sleep", "120"' </dev/null >/dev/null 2>&1 & ;;
+  attached-shell) bash -c 'sleep 120; true' </dev/null >/dev/null 2>&1 & ;;
+esac
+echo $! > "$3"
+wait
+SH
+  chmod +x "$bin"
+  rm -f "$pidfile"
+  "$bin" "$cwd" "$shape" "$pidfile" </dev/null >/dev/null 2>&1 &
+  while [ ! -s "$pidfile" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  # Let the child finish its setsid and exec before anyone reads its shape.
+  sleep 0.3
+  printf '%s %s' "$!" "$(cat "$pidfile" 2>/dev/null)"
+}
+
+stop_fake_agent_job() {  # <agent-pid> <child-pid>
+  kill "$2" "$1" 2>/dev/null || true
+  wait "$1" 2>/dev/null || true
+}
+
+# The shape assertions every case below depends on: without them a platform
+# that names a script process after its interpreter, or a setsid that silently
+# failed, would turn every "not reported" assertion vacuous.
+assert_fake_job_shape() {  # <agent-pid> <child-pid> <expect: agent|other> <label>
+  local agent=$1 child=$2 expect=$3 label=$4 comm got
+  if ! command -v fm_agent_process_classify_name >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-agent-process-lib.sh
+    . "$ROOT/bin/fm-agent-process-lib.sh"
+  fi
+  comm=$(ps -o comm= -p "$agent" 2>/dev/null)
+  got=$(fm_agent_process_classify_name "$comm")
+  if [ "$got" != "$expect" ]; then
+    stop_fake_agent_job "$agent" "$child"
+    fail "$label: the fake agent process reads as '$got' (comm '$comm'), not '$expect', so the case would prove nothing"
+  fi
+  kill -0 "$child" 2>/dev/null || { stop_fake_agent_job "$agent" "$child"; fail "$label: the fake agent's child is not running"; }
 }

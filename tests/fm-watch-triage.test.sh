@@ -2496,144 +2496,182 @@ test_deferral_clears_the_escalation_count() {
   pass "a deferral clears the escalation count, so the row demand-deep-inspection counts is broken"
 }
 
-# --- an implementer borrowed by a live reviewer is expected to be idle -------
-# A craftsmanship review joins the implementing task's own copy and the two are
-# serialised, so the implementer is REQUIRED to be idle for the whole review.
-# Its pane escalated every window throughout. live_borrower_of is the decision
-# that tells that apart from a wedge; it is pinned here as a function because
-# the state it reads is metadata, not anything the watcher loop contributes.
-test_live_borrower_of_suppresses_only_a_real_live_borrow() {
-  local dir state fakebin owner_wt other_wt got
-  dir=$(make_case live-borrower); state="$dir/state"; fakebin="$dir/fakebin"
-  owner_wt="$dir/owner-copy"; other_wt="$dir/other-copy"
-  mkdir -p "$owner_wt" "$other_wt"
-  printf 'window=test:fm-impl\nkind=ship\nworktree=%s\n' "$owner_wt" > "$state/impl.meta"
+# --- a worker idle on its own background job is waiting, not wedged ----------
+# A worker that backgrounds a long command - a full test suite, or the drive
+# call its brief tells it to background - sits at its prompt with a static pane
+# for as long as the job runs. On 2026-09-25 that raised more than ten
+# possible-wedge escalations across one 50-minute CI wait. These tests build the
+# real process shape a harness gives such a job, with no harness: a fake agent
+# process named after a verified harness that starts a detached shell in its
+# worktree and waits on it (start_fake_agent_job in tests/wake-helpers.sh).
+test_crew_background_job_of_classifier() {
+  local dir state wt other ids agent child got
+  dir=$(make_case bg-job-classifier); state="$dir/state"
+  wt="$dir/task-copy"; other="$dir/other-copy"
+  mkdir -p "$wt/src" "$other"
+  printf 'window=test:fm-bg\nkind=ship\nworktree=%s\n' "$wt" > "$state/bg.meta"
 
-  # No borrower at all: the ordinary path must be untouched.
-  [ -z "$(live_borrower_of impl "$state")" ] || fail "a task with no borrower reported one"
+  # No job at all: nothing to report.
+  [ -z "$(crew_background_job_of bg "$state")" ] || fail "a task with no background job reported one"
 
-  # A reviewer that borrowed a DIFFERENT copy says nothing about this task.
-  printf 'window=test:fm-elsewhere\nkind=ship\nworktree=%s\nborrowed_worktree=1\n' \
-    "$other_wt" > "$state/elsewhere.meta"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-elsewhere" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
-    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state" | grep -q . \
-    && fail "a borrower of another worktree was reported as this task's borrower"
+  # The suppressing shape: the agent's own detached shell, inside the worktree
+  # (a subdirectory counts, since commands routinely run from one).
+  ids=$(start_fake_agent_job "$dir" claude "$wt/src" detached-shell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" agent "detached shell"
+  got=$(crew_background_job_of bg "$state")
+  [ "$got" = "$child" ] || { stop_fake_agent_job "$agent" "$child"; fail "the agent's own background job was not reported (got '${got:-none}', want $child)"; }
 
-  # A live reviewer holding THIS copy is the suppressing case.
-  printf 'window=test:fm-review\nkind=ship\nworktree=%s\nborrowed_worktree=1\n' \
-    "$owner_wt" > "$state/review.meta"
-  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-review" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
-    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
-  [ "$got" = review ] || fail "a live borrower of this task's own copy was not reported (got: '${got:-none}')"
+  # The same job past the age bound no longer explains the quiet.
+  sleep 2.2
+  got=$(FM_BG_JOB_MAX_SECS=1 bash -c '. "$1"; crew_background_job_of bg "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$state")
+  [ -z "$got" ] || { stop_fake_agent_job "$agent" "$child"; fail "a job older than FM_BG_JOB_MAX_SECS was still reported ($got)"; }
 
-  # A borrower whose agent has confidently exited explains nothing, so the owner
-  # goes back to the ordinary path and a stalled review is still caught.
-  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-review" FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
-    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
-  [ -z "$got" ] || fail "a borrower whose agent had exited was still treated as live (got: '$got')"
+  # A secondmate home runs its own supervision in background shells whether or
+  # not the mate is doing anything, so its record never counts.
+  printf 'window=test:fm-bg\nkind=secondmate\nworktree=%s\n' "$wt" > "$state/bg.meta"
+  got=$(crew_background_job_of bg "$state")
+  printf 'window=test:fm-bg\nkind=ship\nworktree=%s\n' "$wt" > "$state/bg.meta"
+  [ -z "$got" ] || { stop_fake_agent_job "$agent" "$child"; fail "a secondmate's background shell was reported as its job ($got)"; }
 
-  # A borrower whose backend cannot answer the liveness question at all explains
-  # nothing either. zellij has no recovery classifier, so it is the reachable
-  # shape of that: an unreadable answer must leave the owner on the ordinary
-  # path, because suppressing an alarm is the one direction an unanswerable
-  # question may never decide.
-  printf 'window=test:fm-review\nkind=ship\nworktree=%s\nborrowed_worktree=1\nbackend=zellij\n' \
-    "$owner_wt" > "$state/review.meta"
-  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-review" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
-    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
-  [ -z "$got" ] || fail "a borrower whose liveness could not be read was treated as live (got: '$got')"
+  # Another worker's job is attributed to that worker, never to this one.
+  printf 'window=test:fm-bg-other\nkind=ship\nworktree=%s\n' "$other" > "$state/bg-other.meta"
+  got=$(crew_background_job_of bg-other "$state")
+  stop_fake_agent_job "$agent" "$child"
+  [ -z "$got" ] || fail "a job in another worker's copy was reported as this worker's ($got)"
 
-  # A borrow is only ever read from the borrower's own record: an ordinary task
-  # sharing the path without the flag is not one.
-  rm -f "$state/review.meta"
-  printf 'window=test:fm-sibling\nkind=ship\nworktree=%s\n' "$owner_wt" > "$state/sibling.meta"
-  got=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-sibling" FM_FAKE_TMUX_CURRENT_COMMAND=claude \
-    bash -c '. "$1"; . "$2"; live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
-  [ -z "$got" ] || fail "a task with no borrowed_worktree flag was treated as a borrower (got: '$got')"
+  # A detached helper that is not a shell - the shape of an MCP or language
+  # server a harness keeps for its whole session - is not work in progress.
+  ids=$(start_fake_agent_job "$dir" claude "$wt" detached-nonshell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" agent "detached helper"
+  got=$(crew_background_job_of bg "$state")
+  stop_fake_agent_job "$agent" "$child"
+  [ -z "$got" ] || fail "a detached non-shell helper was reported as a background job ($got)"
 
-  # The liveness target is not always the `window` field: orca records its own
-  # terminal, which is why the derivation belongs to fm-backend.sh rather than
-  # being re-rolled here. The backend adapter is stubbed so the target actually
-  # asked about is observable; orca's real classifier answers `unverified` for
-  # every target and could never tell the two fields apart.
-  rm -f "$state/sibling.meta"
-  printf 'window=test:fm-review\nterminal=orca-term-7\nkind=ship\nworktree=%s\nborrowed_worktree=1\nbackend=orca\n' \
-    "$owner_wt" > "$state/review.meta"
-  got=$(FM_TEST_TARGET_LOG="$dir/asked-target" bash -c '. "$1"; . "$2"
-    fm_backend_agent_alive() { printf "%s" "$2" > "$FM_TEST_TARGET_LOG"
-      [ "$2" = orca-term-7 ] && printf alive || printf dead; }
-    live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
-  [ "$(cat "$dir/asked-target" 2>/dev/null)" = orca-term-7 ] \
-    || fail "an orca borrower's liveness was asked about the wrong target (got: '$(cat "$dir/asked-target" 2>/dev/null)')"
-  [ "$got" = review ] || fail "a live orca borrower of this task's own copy was not reported (got: '${got:-none}')"
+  # A shell the agent did not detach is not one of its jobs.
+  ids=$(start_fake_agent_job "$dir" claude "$wt" attached-shell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" agent "attached shell"
+  [ "$(ps -o pgid= -p "$child" | tr -d ' ')" != "$child" ] \
+    || { stop_fake_agent_job "$agent" "$child"; fail "the attached-shell fixture leads its own group, so it proves nothing"; }
+  got=$(crew_background_job_of bg "$state")
+  stop_fake_agent_job "$agent" "$child"
+  [ -z "$got" ] || fail "a shell left in the agent's own process group was reported as a job ($got)"
 
-  # An unresolvable target still fails safe: no borrower, so the owner alarm fires.
-  printf 'kind=ship\nworktree=%s\nborrowed_worktree=1\nbackend=orca\n' "$owner_wt" > "$state/review.meta"
-  got=$(bash -c '. "$1"; . "$2"
-    fm_backend_agent_alive() { printf alive; }
-    live_borrower_of impl "$3"' _ \
-    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-classify-lib.sh" "$state")
-  [ -z "$got" ] || fail "a borrower with no resolvable liveness target was reported (got: '$got')"
+  # The same detached shell under a parent that is not a verified harness is
+  # somebody else's job.
+  ids=$(start_fake_agent_job "$dir" plainproc "$wt" detached-shell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" other "non-harness parent"
+  got=$(crew_background_job_of bg "$state")
+  stop_fake_agent_job "$agent" "$child"
+  [ -z "$got" ] || fail "a detached shell under a non-harness parent was reported as the worker's job ($got)"
 
-  pass "live_borrower_of reports only a live borrower of this task's own copy"
+  pass "crew_background_job_of reports only the agent's own live detached shell inside its worktree"
 }
 
-# --- the watcher defers the owner's escalation while a borrower is live ------
-# The end-to-end half of the case above: the implementer's own window is stale
-# past the threshold with a reviewer live in its copy, and must not escalate.
-# The reviewer's own window is watched exactly as before, so a review that
-# really has stopped is still caught there.
-test_live_borrower_defers_owner_wedge_escalation() {
-  local dir state fakebin out owner_wt window rwindow key pane_hash sig pid since_before since_after
-  dir=$(make_case borrower-defer); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; owner_wt="$dir/owner-copy"
-  mkdir -p "$owner_wt"
-  window="test:fm-impl"; rwindow="test:fm-review"
-  printf 'waiting on the review' > "$dir/idle.txt"
-  printf 'reading files... esc to interrupt' > "$dir/busy.txt"
-  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$owner_wt" > "$state/impl.meta"
-  printf 'window=%s\nkind=ship\nworktree=%s\nborrowed_worktree=1\n' \
-    "$rwindow" "$owner_wt" > "$state/review.meta"
-  printf 'done: validated, ready for craftsmanship review\n' > "$state/impl.status"
-  sig=$(seen_sig "$state/impl.status"); printf '%s' "$sig" > "$state/.seen-impl_status"
+# The watcher half: an idle pane whose agent is waiting on its own job neither
+# surfaces on first sight nor wedge-escalates at the threshold, and the moment
+# the job ends the ordinary escalation fires.
+test_background_job_defers_idle_wedge_escalation() {
+  local dir state fakebin out capture_file window key wt ids agent child pid since_before since_after sig
+  dir=$(make_case bg-job-defer); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; wt="$dir/task-copy"
+  mkdir -p "$wt"
+  window="test:fm-suite"
+  printf '> waiting for the background test suite' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/suite.meta"
+  printf 'working: fix implemented, running the full suite\n' > "$state/suite.status"
+  sig=$(seen_sig "$state/suite.status"); printf '%s' "$sig" > "$state/.seen-suite_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
-  pane_hash=$(hash_text "waiting on the review")
-  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '%s' "$(hash_text '> waiting for the background test suite')" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  # No pipeline is attributed and the pane is idle: before this evidence the
+  # first sight surfaced at once and every later window wedge-escalated.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · idle'
+  ids=$(start_fake_agent_job "$dir" claude "$wt" detached-shell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" agent "watcher fixture"
+
+  # First sight: absorbed onto the wedge timer instead of surfacing.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; stop_fake_agent_job "$agent" "$child"
+    fail "the first sight of a worker idle on its own background job woke firstmate: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ -s "$state/.stale-since-$key" ] || { stop_fake_agent_job "$agent" "$child"; fail "the first sight did not start the wedge timer"; }
+  [ ! -s "$state/.wake-queue" ] || { stop_fake_agent_job "$agent" "$child"; fail "the first sight enqueued a wake"; }
+  ack_stopped_cycle "$state" || { stop_fake_agent_job "$agent" "$child"; fail "could not acknowledge the intentional first-sight stop"; }
+
+  # At the threshold, with two escalations already in the row: deferred, timer
+  # restarted, row broken.
   since_before=$(( $(date +%s) - 500 ))
   echo "$since_before" > "$state/.stale-since-$key"
-  # The implementer looks finished and idle, which is exactly what it is meant
-  # to look like during the review, and no pipeline is running for it.
-  export FM_FAKE_CREW_STATE='state: unknown · source: none · idle'
-  export FM_FAKE_TMUX_WINDOWS="$window $rwindow"
-  export FM_FAKE_TMUX_CAPTURE_test_fm_impl="$dir/idle.txt"
-  export FM_FAKE_TMUX_CAPTURE_test_fm_review="$dir/busy.txt"
-  export FM_FAKE_TMUX_CURRENT_COMMAND=claude
-
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  printf '2\n' > "$state/.wedge-escalations-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"
-    unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND
-    fail "watcher wedge-escalated an implementer whose copy a live reviewer holds: $(cat "$out")"
+    reap "$pid"; stop_fake_agent_job "$agent" "$child"
+    fail "a worker idle on its own background job was wedge-escalated: $(cat "$out")"
   fi
-  since_after=$(cat "$state/.stale-since-$key" 2>/dev/null || echo 0)
   reap "$pid"
-  [ ! -e "$state/.wedge-escalations-$key" ] \
-    || { unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND; fail "a borrowed implementer advanced the escalation count toward demand-deep-inspection"; }
-  [ "$since_after" -gt "$since_before" ] \
-    || { unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND; fail "the wedge timer was not restarted, so the deferral would never be re-examined"; }
-  unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_CAPTURE_test_fm_impl FM_FAKE_TMUX_CAPTURE_test_fm_review FM_FAKE_TMUX_CURRENT_COMMAND
-  pass "an implementer whose copy a live reviewer holds does not wedge-escalate"
+  since_after=$(cat "$state/.stale-since-$key" 2>/dev/null || echo 0)
+  [ ! -s "$state/.wake-queue" ] || { stop_fake_agent_job "$agent" "$child"; fail "a deferred escalation enqueued a wake"; }
+  [ ! -e "$state/.wedge-escalations-$key" ] || { stop_fake_agent_job "$agent" "$child"; fail "the deferral left the escalation row in place"; }
+  [ "$since_after" -gt "$since_before" ] || { stop_fake_agent_job "$agent" "$child"; fail "the wedge timer was not restarted, so the deferral would never be re-examined"; }
+  grep -F "background job pid $child" "$state/.watch-triage.log" >/dev/null \
+    || { stop_fake_agent_job "$agent" "$child"; fail "the deferral did not name the job it relied on"; }
+  ack_stopped_cycle "$state" || { stop_fake_agent_job "$agent" "$child"; fail "could not acknowledge the intentional deferral stop"; }
+
+  # The job ends and the worker stays silent: the next threshold escalates.
+  stop_fake_agent_job "$agent" "$child"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "a worker whose background job had ended did not escalate"
+  grep -F "possible wedge, escalation 1" "$out" >/dev/null \
+    || fail "the first escalation after the job ended was not a fresh possible wedge: $(cat "$out")"
+  pass "a worker idle on its own background job is absorbed and deferred, and escalates once the job ends"
+}
+
+# A busy pane is never excused by a job: its own foreground command has the same
+# process shape, and a hung foreground call is what the busy-turn bound catches.
+test_background_job_never_excuses_a_busy_pane_past_its_bound() {
+  local dir state fakebin out capture_file window key wt ids agent child pid sig
+  dir=$(make_case bg-job-busy); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; wt="$dir/task-copy"
+  mkdir -p "$wt"
+  window="test:fm-busy-job"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\nworktree=%s\n' "$window" "$wt" > "$state/busy-job.meta"
+  record_pi_busy "$state" busy-job
+  printf 'working: setup complete\n' > "$state/busy-job.status"
+  sig=$(seen_sig "$state/busy-job.status"); printf '%s' "$sig" > "$state/.seen-busy-job_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$(hash_text "Working...")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/busy-job.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  ids=$(start_fake_agent_job "$dir" claude "$wt" detached-shell); agent=${ids% *}; child=${ids#* }
+  assert_fake_job_shape "$agent" "$child" agent "busy fixture"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 100; then
+    reap "$pid"; stop_fake_agent_job "$agent" "$child"
+    fail "a busy pane past its turn-age bound was excused by a background job"
+  fi
+  stop_fake_agent_job "$agent" "$child"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the busy pane did not flag a possible wedge: $(cat "$out")"
+  pass "a background job never excuses a busy pane past its completed-turn bound"
 }
 
 # --- non-terminal stale, crew NOT provably working: surfaced immediately ------
@@ -7016,8 +7054,9 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_live_pipeline_defers_wedge_escalation
 test_stopped_pipeline_still_escalates
 test_deferral_clears_the_escalation_count
-test_live_borrower_of_suppresses_only_a_real_live_borrow
-test_live_borrower_defers_owner_wedge_escalation
+test_crew_background_job_of_classifier
+test_background_job_defers_idle_wedge_escalation
+test_background_job_never_excuses_a_busy_pane_past_its_bound
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
 test_gone_endpoint_reports_once_instead_of_escalating_forever

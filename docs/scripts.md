@@ -76,7 +76,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-project-mode.sh`     | Resolve a project's registered delivery posture, forge binding, or ship-branch prefix from `data/projects.md` for fleet sync, home seeding, and the forge agreement a ship spawn or scout promotion applies |
 | `fm-forge-detect.sh`     | Propose a clone's forge binding from its origin remote for project-add intake, never recording it |
 | `fm-merge-local.sh`      | Fast-forward the local default branch of a `local-only` project with no remote, after approval |
-| `fm-craft-review.sh`     | Decide which projects the independent craftsmanship review runs on, record its verdict, and refuse publication of an unreviewed commit |
+| `fm-craft-rules.sh`      | Decide which projects carry the captain's craftsmanship rules in their no-mistakes intent, and print those rules |
 | `fm-review-diff.sh`      | Review a crewmate branch or resolved PR head against the authoritative base          |
 | `fm-task-branch-lib.sh`  | Shared resolution of a task's branch from its worktree, with the retired `fm/<id>` name as fallback |
 | `fm-marker-lib.sh`       | Compatibility entry point for the from-firstmate carrier owned by `fm-operational-input.sh` |
