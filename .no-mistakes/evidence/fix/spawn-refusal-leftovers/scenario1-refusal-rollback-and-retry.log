@@ -1,0 +1,37 @@
+# setup: slot 1 = retired clone (foreign), slots 2,3 dirty, pool dir made read-only so treehouse get cannot create a slot
+A new version of treehouse is available: v2.3.0 → v3.1.0
+
+open /tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/treehouse-state.json.tmp-bb4ed4f11e1a046e: permission denied
+$ [FIX] fm-spawn.sh justauth-optional-claims-scout projects/JustAuth --scout
+error: treehouse get did not enter an isolated worktree within 60s (last seen '/tmp/fmlive.h1dy/fm/projects/JustAuth': it is the spawning project itself; spawning project '/tmp/fmlive.h1dy/fm/projects/JustAuth'); its window was closed
+EXIT=1
+$ tmux list-windows
+home /tmp/fmlive.h1dy
+$ treehouse status
+A new version of treehouse is available: v2.3.0 → v3.1.0
+
+open /tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/treehouse-state.json.tmp-369a83bf9f4889b1: permission denied
+$ lingering treehouse get / fence processes
+none
+none
+$ ls fm/state
+fence-again.busy-gen
+fence-again.busy-state
+fence-again.claude-settings.json
+home-summary.json
+justauth-optional-claims-scout.busy-gen
+justauth-optional-claims-scout.busy-state
+justauth-optional-claims-scout.claude-settings.json
+# restore: pool writable, slot 2 cleaned
+$ [FIX] immediate retry, same id
+spawned justauth-optional-claims-scout harness=claude kind=scout window=firstmate:fm-justauth-optional-claims-scout worktree=/tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/2/JustAuth
+EXIT=0
+$ tmux list-windows
+home /tmp/fmlive.h1dy
+fm-justauth-optional-claims-scout /tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/2/JustAuth
+A new version of treehouse is available: v2.3.0 → v3.1.0
+
+1     available    ~/.treehouse/JustAuth-ce499d/1/JustAuth
+2     in-use       ~/.treehouse/JustAuth-ce499d/2/JustAuth
+                   zsh (89925), sleep (90455)
+3     dirty        ~/.treehouse/JustAuth-ce499d/3/JustAuth

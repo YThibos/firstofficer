@@ -1,0 +1,45 @@
+$ treehouse status (start)
+A new version of treehouse is available: v2.3.0 → v3.1.0
+
+1     available    ~/.treehouse/JustAuth-ce499d/1/JustAuth
+$ [FIX e6ddefd, harness=claude] fm-spawn.sh justauth-optional-claims-scout projects/JustAuth --scout
+warning: skipping Treehouse pool slot /tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/1/JustAuth: it is a worktree of another clone of this repository, not of /tmp/fmlive.h1dy/fm/projects/JustAuth; return or destroy it from that clone to reclaim it
+spawned justauth-optional-claims-scout harness=claude kind=scout window=firstmate:fm-justauth-optional-claims-scout worktree=/tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/2/JustAuth
+EXIT=0
+$ tmux list-windows
+home /tmp/fmlive.h1dy
+fm-justauth-optional-claims-scout /tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/2/JustAuth
+$ treehouse status
+A new version of treehouse is available: v2.3.0 → v3.1.0
+
+1     available    ~/.treehouse/JustAuth-ce499d/1/JustAuth
+2     in-use       ~/.treehouse/JustAuth-ce499d/2/JustAuth
+                   zsh (75789), sleep (77781)
+$ pgrep fence sleeps
+75117 /usr/bin/zsh -c source /home/thibyann001/.claude/shell-snapshots/snapshot-zsh-1790670551685-xry6pu.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'L=$(cat /tmp/fmlive.path); E=/home/thibyann001/.no-mistakes/evidence/01M3P4FKJ0XXPN687A82FV4QJE; W=/home/thibyann001/.no-mistakes/worktrees/04c39aeaee8f/01M3P4FKJ0XXPN687A82FV4QJE; cd $L; export HOME=$L/uh; bin/tmux kill-server; /bin/sleep 2; rm -f fm/state/*.meta fm/state/.*spawn* 2>/dev/null st(){ (cd fm/projects/JustAuth; treehouse status 2>&1|grep -vi update); } { echo '"'"'$ treehouse status (start)'"'"'; st echo '"'"'$ [FIX e6ddefd, harness=claude] fm-spawn.sh justauth-optional-claims-scout projects/JustAuth --scout'"'"'; FM_SPAWN_NO_GUARD=1 ./drive.sh $W/bin/fm-spawn.sh justauth-optional-claims-scout $L/fm/projects/JustAuth --scout; /bin/sleep 2 echo '"'"'$ tmux list-windows'"'"'; bin/tmux list-windows -t firstmate -F '"'"'#{window_name} #{pane_current_path}'"'"' echo '"'"'$ treehouse status'"'"'; st; echo '"'"'$ pgrep fence sleeps'"'"'; pgrep -af '"'"'sleep 300'"'"' || echo none echo '"'"'$ worktree common dir'"'"'; for d in uh/.treehouse/JustAuth-*/*/JustAuth; do echo "$d -> $(git -C $d rev-parse --path-format=absolute --git-common-dir)"; done echo '"'"'$ cat state meta'"'"'; cat fm/state/justauth-optional-claims-scout.meta echo '"'"'$ [FIX] second spawn beside the same foreign slot'"'"'; FM_SPAWN_NO_GUARD=1 ./drive.sh $W/bin/fm-spawn.sh fence-again $L/fm/projects/JustAuth --scout; st; } 2>&1 | tee $E/scenario2-foreign-slot-fenced.log' < /dev/null && pwd -P >| /tmp/claude-972f-cwd
+75170 /usr/bin/zsh -c source /home/thibyann001/.claude/shell-snapshots/snapshot-zsh-1790670551685-xry6pu.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'L=$(cat /tmp/fmlive.path); E=/home/thibyann001/.no-mistakes/evidence/01M3P4FKJ0XXPN687A82FV4QJE; W=/home/thibyann001/.no-mistakes/worktrees/04c39aeaee8f/01M3P4FKJ0XXPN687A82FV4QJE; cd $L; export HOME=$L/uh; bin/tmux kill-server; /bin/sleep 2; rm -f fm/state/*.meta fm/state/.*spawn* 2>/dev/null st(){ (cd fm/projects/JustAuth; treehouse status 2>&1|grep -vi update); } { echo '"'"'$ treehouse status (start)'"'"'; st echo '"'"'$ [FIX e6ddefd, harness=claude] fm-spawn.sh justauth-optional-claims-scout projects/JustAuth --scout'"'"'; FM_SPAWN_NO_GUARD=1 ./drive.sh $W/bin/fm-spawn.sh justauth-optional-claims-scout $L/fm/projects/JustAuth --scout; /bin/sleep 2 echo '"'"'$ tmux list-windows'"'"'; bin/tmux list-windows -t firstmate -F '"'"'#{window_name} #{pane_current_path}'"'"' echo '"'"'$ treehouse status'"'"'; st; echo '"'"'$ pgrep fence sleeps'"'"'; pgrep -af '"'"'sleep 300'"'"' || echo none echo '"'"'$ worktree common dir'"'"'; for d in uh/.treehouse/JustAuth-*/*/JustAuth; do echo "$d -> $(git -C $d rev-parse --path-format=absolute --git-common-dir)"; done echo '"'"'$ cat state meta'"'"'; cat fm/state/justauth-optional-claims-scout.meta echo '"'"'$ [FIX] second spawn beside the same foreign slot'"'"'; FM_SPAWN_NO_GUARD=1 ./drive.sh $W/bin/fm-spawn.sh fence-again $L/fm/projects/JustAuth --scout; st; } 2>&1 | tee $E/scenario2-foreign-slot-fenced.log' < /dev/null && pwd -P >| /tmp/claude-972f-cwd
+$ worktree common dir
+uh/.treehouse/JustAuth-ce499d/1/JustAuth -> /tmp/fmlive.h1dy/retired/JustAuth/.git
+uh/.treehouse/JustAuth-ce499d/2/JustAuth -> /tmp/fmlive.h1dy/fm/projects/JustAuth/.git
+$ cat state meta
+window=firstmate:fm-justauth-optional-claims-scout
+endpoint_task_id=justauth-optional-claims-scout
+worktree=/tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/2/JustAuth
+project=/tmp/fmlive.h1dy/fm/projects/JustAuth
+harness=claude
+kind=scout
+tasktmp=/tmp/fm-justauth-optional-claims-scout
+model=default
+effort=default
+busy_gen=g1790670710.76571.1295
+spawn_gen=s1790670710.75194.520
+$ [FIX] second spawn beside the same foreign slot
+spawned fence-again harness=claude kind=scout window=firstmate:fm-fence-again worktree=/tmp/fmlive.h1dy/uh/.treehouse/JustAuth-ce499d/3/JustAuth
+EXIT=0
+A new version of treehouse is available: v2.3.0 → v3.1.0
+
+1     available    ~/.treehouse/JustAuth-ce499d/1/JustAuth
+2     in-use       ~/.treehouse/JustAuth-ce499d/2/JustAuth
+                   zsh (75789), sleep (77781)
+3     in-use       ~/.treehouse/JustAuth-ce499d/3/JustAuth
+                   zsh (78270), sleep (78921)
