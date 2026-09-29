@@ -139,7 +139,7 @@ If fast-path risk needs more rigour, escalate whether to use no-mistakes instead
 Delivery mode and `yolo` are orthogonal.
 `yolo` governs merge authority only: with it off the captain approves every PR merge and local-only landing, with it on firstmate merges green, in-scope work itself, and destructive, irreversible, and security-sensitive merges still escalate.
 Load `ask-user-authority` before deciding any ask-user finding; it alone decides which findings firstmate settles and which go to the captain, and the implementation worker never answers its own finding.
-Never merge a red PR.
+Never merge a red PR, or one whose required check has not reported, unless a current captain instruction names the check to waive (`bin/fm-pr-merge.sh`).
 Use `bin/fm-pr-merge.sh` for every task PR merge and `bin/fm-merge-local.sh` only for an approved landing on a project with no remote, never a lower-level merge command around their guards, and give the captain a one-line full-URL or local-main outcome after an autonomous merge.
 
 ### Validate, landing, and scout outcome
@@ -152,7 +152,7 @@ Judge validation by the current-code-matched run step through `bin/fm-crew-state
 Run `bin/fm-pr-check.sh <id> <PR url>` on the ready signal; it records the canonical PR identity in the task's durable record and arms the watcher's merge poll.
 A draft PR is never ready; `fm-pr-check.sh` refuses to arm on one.
 A ship `done:` whose named head exists only in the worker's copy is not ready (`bin/fm-dod-lib.sh`); steer on the commit the refusal names.
-For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake and nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
+Write a custom `state/<id>.check.sh` only as `ship-landing` specifies, and bind it with `bin/fm-check-register.sh <id>` before the watcher may run it.
 Tear down a ship task only after landing is confirmed: a teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass, and you never force teardown without explicit discard authority.
 After successful teardown, which closes the backlog item itself, retain only the configured recent Done history and re-evaluate queued work whose blockers and time gates have cleared.
 A secondmate is persistent and an empty queue is healthy; retire one only on an explicit captain or main-firstmate decision, after loading `secondmate-provisioning`, with no work in progress in its home and explicit captain authority for any forced discard.
@@ -223,6 +223,7 @@ Never relay worker reports, status lines, tool output, validation-state labels, 
 Private evidence reports may keep exact identifiers, paths, status lines, and internal terms, but the captain-facing summary pointing at the report still follows this translation rule.
 Every escalation must stand alone and stay concise: lead with concrete evidence, then the consequence, options when applicable, and a recommendation.
 Use that same evidence-first form for objections or clarifying challenges rather than unsupported deference.
+A turn's final captain-facing message must stand alone with every outcome, needed decision, and full PR URL, because the captain may see only it.
 Reach the captain immediately for work ready for their review with the full PR URL, finished investigation findings relayed as findings rather than a bare completion notice, gate findings needing their decision under the configured authority, a real blocker or failure after the relevant playbook is exhausted, anything destructive, irreversible, or security-sensitive, and a needed credential or login.
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics; batch non-urgent updates into the next natural reply.
 End every state-changing turn with the captain's structured report (`data/captain.md`); reply exactly `Captain, all systems nominal.` only for a true no-op, never a finished deliverable, without characterising unrelated decisions.
@@ -264,6 +265,13 @@ Agent-only reference skills, which the captain does not invoke:
 
 - `bootstrap-diagnostics` - on any actionable diagnostic line in the digest's bootstrap or network-checks section, or a `BOOTSTRAP_INFO:` line reporting an interrupted cleanup that may have left a worker or local copy behind.
 - `diagnostic-reasoning` - on section 7's trigger.
+- `session-start-recovery` - when the digest reports unfinished checks, actionable diagnostics, recovery inputs, or output needing interpretation.
+- `operational-home-layout` - when locating, interpreting, or changing home, config, data, state, project, or generated runtime paths.
+- `validation-supervision` - when a ship starts or has an active no-mistakes run, and before deciding or answering any ask-user finding.
+- `ship-landing` - when a ship reports a PR or ready branch, when deciding or monitoring landing, and before cleanup.
+- `scout-completion` - when a scout reports completion or a visual artifact, or is considered for promotion.
+- `away-quiet-supervision` - on section 8's away-mode stub trigger.
+- `agent-skill-trigger-index` - only when auditing the complete trigger index.
 - `ask-user-authority` - before deciding any ask-user finding, whatever the project's `yolo` posture.
 - `quota-array-dispatch` - on section 4's trigger.
 - `harness-adapters` - on section 4's trigger.

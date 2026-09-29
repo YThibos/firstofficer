@@ -30,11 +30,15 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-path-lib.sh" "$dir/bin/fm-path-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
-  chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh"
+  cp "$ROOT/bin/fm-afk-contract.sh" "$dir/bin/fm-afk-contract.sh"
+  cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/fm-classify-lib.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$dir/bin/fm-timeout-lib.sh"
+  chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh" "$dir/bin/fm-afk-contract.sh"
 }
 
 make_primary_dir() {
@@ -942,6 +946,55 @@ test_abandoned_owner_claim_is_reclaimed_and_rearms() {
   pass "auto-arm: an abandoned owner claim is reclaimed so a lapsed cycle re-arms"
 }
 
+# An interrupted reclaim leaves the abandoned-claim mutex linked to a dead
+# owner. The next reclaim must reap it directly, never by nesting another
+# .steal.steal mutex around it.
+test_abandoned_claim_reclaim_reaps_dead_steal_without_nesting() {
+  local dir out status pid holder lnbin lnlog i
+  dir=$(make_primary_dir "$TMP_ROOT/abandoned-claim-dead-steal")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_owner "$dir" "$pid"
+  record_autoarm_epoch "$dir" 464 "$pid" rewake
+  FM_STATE_OVERRIDE="$dir/state" bash -c '
+    . "$1"
+    fm_lock_try_create "$2" || exit 7
+    exec sleep 30
+  ' _ "$dir/bin/fm-wake-lib.sh" "$dir/state/.claude-autoarm.lock.steal" >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -s "$dir/state/.claude-autoarm.lock.steal/pid" ]; do
+    sleep 0.02
+    i=$((i + 1))
+  done
+  kill -KILL "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  assert_present "$dir/state/.claude-autoarm.lock.steal" "fixture did not leave a dead-owner steal mutex"
+  lnbin="$dir/lnbin"
+  lnlog="$dir/ln.log"
+  mkdir -p "$lnbin"
+  cat > "$lnbin/ln" <<'SH'
+#!/usr/bin/env bash
+last=
+for arg do last=$arg; done
+printf '%s\n' "$last" >> "$FM_TEST_LN_LOG"
+exec /bin/ln "$@"
+SH
+  chmod +x "$lnbin/ln"
+  : > "$lnlog"
+  out=$(PATH="$lnbin:$PATH" FM_TEST_LN_LOG="$lnlog" run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a dead-owner steal mutex must not keep an abandoned claim unrecoverable"
+  [ -e "$dir/state/arm-ran" ] || fail "dead-owner steal mutex left the home unarmed with work in flight"
+  ! grep -q '\.steal\.steal$' "$lnlog" \
+    || fail "reclaiming past a dead steal owner created a nested steal marker: $(tr '\n' ' ' < "$lnlog")"
+  assert_absent "$dir/state/.claude-autoarm.lock.steal" "reclaim left the dead steal mutex behind"
+  pass "auto-arm: an abandoned-claim reclaim reaps a dead steal mutex without nesting"
+}
+
 test_arming_claim_with_fresh_beacon_is_never_reclaimed() {
   local dir out status pid
   dir=$(make_primary_dir "$TMP_ROOT/arming-claim")
@@ -1470,6 +1523,24 @@ test_host_handback_under_away_record_is_not_a_return() {
   pass "auto-arm: a wake the host hands back under the away record says it is automatic supervision, not a return"
 }
 
+# Quiet mode's record is a present captain (bin/fm-afk-contract.sh AWAY OR
+# QUIET), so a wake the host hands back beside it carries no away note.
+test_host_handback_beside_a_quiet_record_carries_no_away_note() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/host-handback-quiet")
+  mkdir -p "$dir/config"
+  : > "$dir/config/supervision-host"
+  : > "$dir/state/task.meta"
+  FM_HOME="$dir" FM_AFK_MODE=quiet "$ROOT/bin/fm-afk-contract.sh" enter --words 'keep routine wakes off my main' >/dev/null 2>&1 \
+    || fail "fixture: could not record quiet mode"
+  write_host_fixture "$dir" handed-back
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a wake the host hands back must rewake main"
+  assert_contains "$out" "signal: fixture.status" "the handed-back wake must carry its reason line"
+  assert_not_contains "$out" "not a return" "a present captain's rewake must not call itself away-posture supervision"
+  pass "auto-arm: a wake the host hands back beside a quiet record carries no away note"
+}
+
 test_plain_arm_banner_keeps_its_wake_line_cap() {
   local dir out expected
   dir=$(make_primary_dir "$TMP_ROOT/plain-banner")
@@ -1539,6 +1610,50 @@ test_host_crash_is_retried_then_reported() {
   pass "auto-arm: a host that died without a close is retried, then reported as a failure"
 }
 
+# A model running the hook by hand mid-turn (for example to read its help) is a
+# tool process under the lock-owning session with no Stop payload. Any argument
+# must print help or refuse before anything is armed, since the host or arm it
+# starts would be owned by that short-lived process.
+test_arguments_never_arm() {
+  local dir arg rc out before after before_contents after_contents status
+  dir=$(make_primary_dir "$TMP_ROOT/help-mode")
+  mkdir -p "$dir/config"
+  : > "$dir/config/supervision-host"
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  write_host_fixture "$dir" boundary
+  # The fake session writes state/.lock itself; everything else must be untouched.
+  for arg in --help -h --bogus; do
+    before=$(find "$dir/state" -mindepth 1 ! -name .lock | sort)
+    before_contents=$(find "$dir/state" -type f ! -name .lock -exec cksum {} + | sort)
+    rc=0
+    out=$(FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        "$FM_HOME/bin/fm-claude-stop-autoarm.sh" "$1" </dev/null 2>"$FM_HOME/help-stderr"
+      ' _ "$arg") || rc=$?
+    after=$(find "$dir/state" -mindepth 1 ! -name .lock | sort)
+    after_contents=$(find "$dir/state" -type f ! -name .lock -exec cksum {} + | sort)
+    case "$arg" in
+      --bogus)
+        expect_code 2 "$rc" "an unknown argument must be refused"
+        assert_contains "$(cat "$dir/help-stderr")" "unknown argument: --bogus" "the refusal must name the argument"
+        ;;
+      *)
+        expect_code 0 "$rc" "$arg must exit 0"
+        assert_contains "$out" "Usage: fm-claude-stop-autoarm.sh" "$arg must print usage to stdout"
+        ;;
+    esac
+    [ ! -e "$dir/state/host-ran" ] || fail "$arg started the supervision host"
+    [ ! -e "$dir/state/arm-ran" ] || fail "$arg ran the arm"
+    [ "$before" = "$after" ] || fail "$arg changed state: before=[$before] after=[$after]"
+    [ "$before_contents" = "$after_contents" ] || fail "$arg changed state file contents: before=[$before_contents] after=[$after_contents]"
+  done
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "the ordinary Stop path must still rewake from the host"
+  assert_present "$dir/state/host-ran" "the ordinary Stop path did not run the host in the same home"
+  pass "auto-arm: --help, -h, and an unknown argument arm nothing; the Stop path still arms"
+}
+
 test_fm_lock_status_still_works_with_shared_lib() {
   local out
   out=$(FM_HOME="$TMP_ROOT/lock-status-home" bash "$ROOT/bin/fm-lock.sh" status 2>&1)
@@ -1572,6 +1687,7 @@ test_arms_for_registered_custom_check_without_inflight
 test_single_flight_admits_exactly_one_owner
 test_term_mid_arm_commits_failure_and_rewakes
 test_abandoned_owner_claim_is_reclaimed_and_rearms
+test_abandoned_claim_reclaim_reaps_dead_steal_without_nesting
 test_arming_claim_with_fresh_beacon_is_never_reclaimed
 test_fresh_arming_claim_with_stale_beacon_is_never_reclaimed
 test_claim_not_named_by_the_ledger_is_never_reclaimed
@@ -1593,9 +1709,11 @@ test_long_poll_grace_reaches_arm_wrapper
 test_host_absent_flag_keeps_the_arm
 test_host_boundary_rewakes_with_the_host_line
 test_host_handback_under_away_record_is_not_a_return
+test_host_handback_beside_a_quiet_record_carries_no_away_note
 test_plain_arm_banner_keeps_its_wake_line_cap
 test_host_handback_carries_every_host_line
 test_host_stand_down_is_silent
 test_host_crash_is_retried_then_reported
+test_arguments_never_arm
 test_fm_lock_status_still_works_with_shared_lib
 test_stands_down_only_on_pi_code_transcript_path

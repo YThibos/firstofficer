@@ -76,22 +76,36 @@
 # the stop.
 #
 # A copy of this script living under a disposable no-mistakes validation
-# checkout (a path containing /.no-mistakes/worktrees/) refuses every mode with
+# checkout (a path containing /.no-mistakes/worktrees/) refuses every mode
+# outside a marked lab with
 # "watcher: FAILED - refusing to arm from a disposable validation checkout" and
 # exits 1 before touching any state: a watcher armed from there outlives the
 # validation step, holds the real home's lock, and keeps writing that home's
-# state from a checkout that is about to be deleted. Firstmate's own test suite
-# runs from exactly such a checkout during validation, so the same
-# FM_GATE_REFUSE_BYPASS=1 escape hatch tests/lib.sh already exports for
-# bin/fm-gate-refuse-lib.sh lifts this refusal for a test's sandboxed home.
+# state from a checkout that is about to be deleted. A marked stock-layout lab
+# home is disposable and permitted; ordinary tests use the sandbox bypass
+# exported by tests/lib.sh.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-gate-refuse-lib.sh
+. "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 if [ "${FM_GATE_REFUSE_BYPASS:-}" != 1 ]; then
   case "$SCRIPT_DIR/:$(cd "$SCRIPT_DIR" && pwd -P)/" in
     */.no-mistakes/worktrees/*)
-      echo "watcher: FAILED - refusing to arm from a disposable validation checkout: $SCRIPT_DIR"
-      exit 1 ;;
+      lab_root=$(cd -P -- "${FM_HOME:-/nonexistent}" 2>/dev/null && pwd -P || true)
+      state_dir=${FM_STATE_OVERRIDE:-${STATE:-${FM_HOME:-}/state}}
+      if [ -d "$state_dir" ]; then
+        resolved_state=$(cd -P -- "$state_dir" 2>/dev/null && pwd -P || true)
+      elif [ ! -e "$state_dir" ] && [ ! -L "$state_dir" ]; then
+        resolved_state=$(cd -P -- "$(dirname -- "$state_dir")" 2>/dev/null && pwd -P)/$(basename -- "$state_dir")
+      else
+        resolved_state=
+      fi
+      case "$resolved_state" in "$lab_root"/*) state_in_lab=1 ;; *) state_in_lab=0 ;; esac
+      if ! fm_gate_lab_permitted || [ "$state_in_lab" -ne 1 ]; then
+        echo "watcher: FAILED - refusing to arm from a disposable validation checkout: $SCRIPT_DIR"
+        exit 1
+      fi ;;
   esac
 fi
 # shellcheck source=bin/fm-wake-lib.sh
@@ -550,7 +564,19 @@ handle_arm_signal() {
   local signal=$1 rc=$2
   trap - HUP TERM INT
   if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
+    # The watcher installs its own cleanup traps only after acquiring and
+    # publishing the home-bound lock identity. Do not TERM it in the middle of
+    # stale-lock acquisition: that can abandon the steal mutex. Let startup
+    # reach that cleanup-ready point (or exit naturally) before forwarding TERM,
+    # but never past the startup confirmation deadline.
+    while fm_pid_alive "$child"; do
+      if fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$child" "$FM_HOME" \
+        || [ "$(date +%s)" -ge "$deadline" ]; then
+        kill -TERM "$child" 2>/dev/null || true
+        break
+      fi
+      sleep 0.02
+    done
     wait "$child" 2>/dev/null || true
   fi
   cycle_log_append "$rc" "$signal" arm-interrupted none
@@ -566,6 +592,9 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
+# date(1) exposes whole seconds. Keep the configured confirmation budget from
+# collapsing when startup begins just before the next second boundary.
+deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
 if [ -n "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ]; then
   FM_WATCH_HANDLING_SUCCESSOR=1 "$WATCH" >"$child_out" &
 else
@@ -631,9 +660,6 @@ owned_child_finished() {
 # Verify the outcome: poll until this child is the confirmed healthy watcher, or
 # until some other watcher legitimately holds the singleton (a startup race), or
 # until the child gives up. Only then print the honest line.
-# date(1) exposes whole seconds. Keep the configured confirmation budget from
-# collapsing when startup begins just before the next second boundary.
-deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
 while :; do
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then

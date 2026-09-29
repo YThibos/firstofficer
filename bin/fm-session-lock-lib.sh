@@ -21,8 +21,11 @@
 # cursor-agent and the far-too-generic legacy alias `agent`, and it runs as a
 # bundled node script. bin/fm-cursor-lib.sh is the fleet's single owner of that
 # decision, so this file delegates to it rather than widening the name match.
+_FM_SESSION_LOCK_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$_FM_SESSION_LOCK_LIB_DIR" != "${BASH_SOURCE[0]}" ] || _FM_SESSION_LOCK_LIB_DIR=.
 # shellcheck source=bin/fm-cursor-lib.sh
-. "$(dirname -- "${BASH_SOURCE[0]}")/fm-cursor-lib.sh"
+. "${_FM_SESSION_LOCK_LIB_DIR:-/}/fm-cursor-lib.sh"
+unset _FM_SESSION_LOCK_LIB_DIR
 
 # Directory this lib was sourced from, so the node helper below is found from
 # the same code root as the rest of bin/ no matter which home is being served.

@@ -101,12 +101,35 @@
 # and state/.claude-autoarm-failure-alarmed bounds the attended fail-open and
 # suppresses any later automatic continuation in that unresolved episode.
 #
-# This hook never blocks the Stop decision itself and never prints to stdout:
-# exit 0 is always silent, and exit 2 carries the rewake banner on stderr.
+# In hook mode it never blocks the Stop decision itself or prints to stdout:
+# exit 0 is silent, and exit 2 carries the rewake banner on stderr.
 # On any uncertainty such as unresolvable ancestry, malformed lock state, or
 # lock contention, it exits 0 and leaves continuity to the synchronous guard and
 # the model.
+#
+# The Stop hook passes no arguments, so any argument means a manual run: -h or
+# --help prints usage and an unknown argument is refused, both before anything
+# is sourced, read, or armed. A park started from a model's tool call would be
+# owned by that short-lived process and leave supervision down once it exits.
 set -u
+
+usage() {
+  cat <<'EOF'
+Usage: fm-claude-stop-autoarm.sh
+
+Claude Stop hook registered in .claude/settings.json; not for manual use.
+It reads the Stop payload on stdin and, in a primary home that needs
+supervision, arms the watcher or supervision host for this session.
+Exit 0 is silent; exit 2 carries a rewake banner on stderr.
+EOF
+}
+
+if [ "$#" -gt 0 ]; then
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    *) echo "error: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -411,7 +434,6 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
     grep -Eq "$ACTIONABLE_RE" "$OUT" 2>/dev/null && ACTIONABLE=1
   fi
   [ "$ACTIONABLE" -eq 1 ] && break
-
   if [ "$HOST_MODE" -eq 1 ]; then
     # The host stood down because this session or generation no longer owns
     # supervision: whoever does owns continuity now.
@@ -429,6 +451,9 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
       OUT=
       continue
     fi
+    # A failed hand-back cannot be dismissed just because its successor
+    # watcher is healthy: the close is still undelivered.
+    [ "$HOST_RC" -eq 0 ] || break
   fi
 
   # A non-actionable close is benign when another verified watcher already owns
@@ -497,7 +522,8 @@ if [ "$ACTIONABLE" -eq 1 ]; then
     else
       [ -n "$OUT" ] && grep -E '^(signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
     fi
-    if [ "$HOST_MODE" -eq 1 ] && [ -e "$STATE/.afk-contract" ]; then
+    if [ "$HOST_MODE" -eq 1 ] && [ -e "$STATE/.afk-contract" ] \
+      && [ "$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]; then
       printf 'This wake comes from automatic supervision under the away-posture record, not from the captain: it is not a return, so handle it under the away posture.\n'
     fi
     [ -z "$SUCCESSOR_FAILURE" ] || printf '%s\n' "$SUCCESSOR_FAILURE"

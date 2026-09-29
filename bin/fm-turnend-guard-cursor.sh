@@ -29,13 +29,13 @@
 #
 # SUPERVISION HOST. A home opted in with config/supervision-host
 # (docs/configuration.md "Supervision host" owns the opt-in) parks on
-# bin/fm-supervision-host.sh in the arm's place, which takes away-posture wakes
-# itself and exits only when main is needed; its header owns the output this
-# park reads. A "supervision-host:" line is actionable like a wake line, and
-# the follow-up carries every such line in order while wake lines keep the
-# eight-line cap; "supervision-host stood down:" ends the park silently; a host
-# that died without a close is retried instead of being judged by the
-# healthy-watcher predicate. Without the file nothing below changes.
+# bin/fm-supervision-host.sh in the arm's place, which takes eligible attended
+# wakes and all away wakes itself and exits only when main is needed; its
+# header owns the output this park reads. A "supervision-host:" line is
+# actionable like a wake line, and the follow-up carries every such line in
+# order while wake lines keep the eight-line cap; "supervision-host stood
+# down:" ends the park silently; a host that died without a close is retried
+# instead of being judged by the healthy-watcher predicate. Without the file nothing below changes.
 #
 # LOOP BOUNDING IS DOUBLE, because either bound alone is insufficient:
 #   - `loop_limit` in .cursor/hooks.json is Cursor's own ceiling. Once
@@ -396,7 +396,8 @@ fi
 if [ "$ACTIONABLE" -eq 1 ]; then
   if [ "$HOST_MODE" -eq 1 ]; then
     WAKE=$(awk '/^supervision-host:/ { print; next } /^(signal:|stale:|check:|heartbeat)/ && shown++ < 8' "$ARM_OUT" 2>/dev/null)
-    if [ -e "$STATE/.afk-contract" ]; then
+    if [ -e "$STATE/.afk-contract" ] \
+      && [ "$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]; then
       WAKE="$WAKE
 This wake comes from automatic supervision under the away-posture record, not from the captain: it is not a return, so handle it under the away posture."
     fi
