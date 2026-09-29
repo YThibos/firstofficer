@@ -1249,6 +1249,35 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
   [ "$project_common" = "$slot_common" ]
 }
 
+# Treehouse keys a pool by repository name, not by clone, so two clones of one
+# repository (a retired clone left on disk, a secondmate's own clone) share one
+# pool and `treehouse get` hands out whichever free slot comes first, even one
+# that is a worktree of the OTHER clone. Such a slot can never pass this
+# project's worktree checks. Prints each slot of <project-dir>'s pool that is a
+# managed slot layout but not a worktree of this clone, one per line; prints
+# nothing when the pool cannot be listed.
+fm_treehouse_foreign_slots() {  # <project-dir>
+  local project=$1 token slot pool project_common slot_common
+  [ -d "$project" ] || return 0
+  command -v treehouse >/dev/null 2>&1 || return 0
+  project_common=$(git -C "$project" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  project_common=$(CDPATH='' cd -- "$project_common" 2>/dev/null && pwd -P) || return 0
+  # shellcheck disable=SC2046 # Word-split status into tokens; paths hold no blanks in practice.
+  for token in $( (CDPATH='' cd -- "$project" && treehouse status) 2>/dev/null); do
+    case "$token" in
+      \~/*) token="$HOME/${token#\~/}" ;;
+      /*) ;;
+      *) continue ;;
+    esac
+    slot=$(CDPATH='' cd -- "$token" 2>/dev/null && pwd -P) || continue
+    pool=$(dirname "$(dirname "$slot")")
+    [ -f "$pool/treehouse-state.json" ] && [ ! -L "$pool/treehouse-state.json" ] || continue
+    slot_common=$(git -C "$slot" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || continue
+    slot_common=$(CDPATH='' cd -- "$slot_common" 2>/dev/null && pwd -P) || continue
+    [ "$slot_common" = "$project_common" ] || printf '%s\n' "$slot"
+  done
+}
+
 # Slot-owner claim: which task a Treehouse pool slot currently belongs to.
 #
 # Treehouse can record ownership durably: `treehouse get --lease --lease-holder`
