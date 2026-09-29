@@ -216,9 +216,8 @@
 #   task worktree. When an origin configuration is detected, spawn fetches it,
 #   resolves the current remote default branch, and resets to its tip. When none
 #   is detected, spawn skips that remote freshness check and launches from the
-#   clean worktree's current HEAD. Relaunch and --borrow-worktree reuse their
-#   worktree without the clean check, fetching, or resetting its base: a borrowed
-#   copy is another task's live work, which that reset would discard. An unreachable detected origin, unresolved
+#   clean worktree's current HEAD. Relaunch reuses the recorded worktree without
+#   fetching or resetting its base. An unreachable detected origin, unresolved
 #   default branch, or non-clean worktree refuses a fresh spawn rather than
 #   risking a PR based on stale history or discarding local work.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
@@ -3687,9 +3686,6 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     SPAWN_SLOT_CLAIMED=1
   fi
 fi
-# Only a slot this spawn just took from the pool is refreshed. A borrowed
-# worktree is another task's live copy: its uncommitted work is expected, and
-# resetting its branch to origin would discard that task's commits.
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi

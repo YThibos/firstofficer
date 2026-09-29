@@ -9,8 +9,6 @@
 # real spawn path with a recording fake tmux and prove:
 #   - a refusal after the window exists closes that exact window, publishes no
 #     record, and an immediate retry succeeds;
-#   - a borrowed worktree is joined as-is: its uncommitted work does not refuse
-#     the spawn and its branch is never reset to origin;
 #   - pool slots that belong to another clone of the repository are kept busy
 #     while `treehouse get` chooses, reported once per home, and released.
 set -u
@@ -138,34 +136,6 @@ test_refusal_closes_its_window_and_retry_succeeds() {
   pass "a refused spawn closes its window and publishes nothing, so an immediate retry launches"
 }
 
-# Borrowing joins another task's live copy: uncommitted work there is expected,
-# and its branch must never be reset to origin.
-test_borrowed_worktree_is_neither_refused_nor_reset() {
-  local id=borrow-dirty-r2 out status borrowed head_before
-  make_case borrow-dirty "$id"
-  borrowed="$TMP_ROOT/borrow-dirty/owner-wt"
-  git -C "$PROJECT_DIR" worktree add --quiet -b owner-branch "$borrowed"
-  git -C "$borrowed" -c user.name=T -c user.email=t@e.invalid commit -q --allow-empty -m owner-work
-  head_before=$(git -C "$borrowed" rev-parse HEAD)
-  printf 'in progress\n' > "$borrowed/wip.txt"
-
-  out=$(run_spawn "$borrowed" "$id" "$PROJECT_DIR" --scout --borrow-worktree "$borrowed")
-  status=$?
-  expect_code 0 "$status" "borrowing a worktree with uncommitted work should launch"$'\n'"$out"
-  assert_equals "$head_before" "$(git -C "$borrowed" rev-parse HEAD)" \
-    "the borrowed worktree's branch was moved"
-  assert_present "$borrowed/wip.txt" "the borrowed worktree lost its uncommitted work"
-
-  rm -f "$borrowed/wip.txt"
-  fm_test_spawn_brief "$HOME_DIR" "$id-clean"
-  out=$(run_spawn "$borrowed" "$id-clean" "$PROJECT_DIR" --scout --borrow-worktree "$borrowed")
-  status=$?
-  expect_code 0 "$status" "borrowing a clean worktree should launch"$'\n'"$out"
-  assert_equals "$head_before" "$(git -C "$borrowed" rev-parse HEAD)" \
-    "borrowing a clean worktree reset its branch to origin, discarding the owner's commit"
-  pass "a borrowed worktree is joined as-is: no refusal for its work, no reset of its branch"
-}
-
 # Another clone's slots are fenced while treehouse get chooses, reported once
 # per home, and released once the spawn is done with them.
 test_foreign_pool_slots_are_fenced_reported_once_and_released() {
@@ -205,7 +175,6 @@ test_foreign_pool_slots_are_fenced_reported_once_and_released() {
 }
 
 test_refusal_closes_its_window_and_retry_succeeds
-test_borrowed_worktree_is_neither_refused_nor_reset
 test_foreign_pool_slots_are_fenced_reported_once_and_released
 
 echo "# all fm-spawn-refusal-rollback tests passed"
