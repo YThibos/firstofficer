@@ -61,13 +61,12 @@
 # ends at the guarded local merge.
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
-# --branch-prefix <prefix> optionally overrides the ship branch's "fm/" prefix, so
-# the resolved branch is "<prefix><task-id>" instead of the default "fm/<task-id>".
+# --branch-prefix <prefix> optionally names the ship branch "<prefix><task-id>".
 # Pass an empty prefix ("--branch-prefix ''") for a bare "<task-id>" branch, or a
 # conventional prefix such as "fix/" - useful for a third-party project that does
-# not use this tooling and should not see an "fm/"-branded branch or PR. Defaults
-# to "fm/" when omitted, so every existing installation's branch names are
-# unchanged. Like --mode, this script never reads data/projects.md for it: the
+# not use this tooling and should not see an "fm/"-branded branch or PR. There is
+# no default name: with neither this flag nor --branch the brief carries the
+# {BRANCH} placeholder. Like --mode, this script never reads data/projects.md for it: the
 # registry's optional "branch=<prefix>" annotation (bin/fm-project-mode.sh's
 # header owns that format and its --branch-prefix query) is the captain's
 # standing per-project preference, and firstmate resolves it per task at intake

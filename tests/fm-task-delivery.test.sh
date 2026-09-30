@@ -1343,8 +1343,9 @@ EOF
 # selected at intake (the brief's "Ship branch:" line) and the branch this spawn
 # would create can be caught: the worktree, the record, review-diff, and the
 # local merge all inherit the recorded name. A mismatch is refused before any
-# record exists, and a brief from before briefs recorded a ship branch is only
-# acceptable on the legacy default, which warns.
+# record exists, and a brief naming no ship branch is only acceptable on a spawn
+# that names none either, which warns and leaves the worktree checkout as the
+# task's branch record.
 test_spawn_requires_the_brief_to_carry_the_selected_branch() {
   local rec home proj fakebin out status
   rec=$(make_home branch-agree "- proj [no-mistakes] - fixture (added 2026-01-01)")
@@ -1373,9 +1374,10 @@ EOF
 
   write_brief "$home" branch-agree-a3 no-mistakes
   out=$(run_spawn "$home" "$fakebin" branch-agree-a3 "$proj" claude --mode no-mistakes --yolo off)
-  assert_contains "$out" "records no ship branch; defaulting to legacy branch fm/branch-agree-a3" \
-    "the legacy default did not warn about the brief's missing ship branch"
-  assert_not_contains "$out" "branch mismatch" "the legacy default was refused as drift"
+  assert_contains "$out" "names no ship branch; the branch the worker checks out is the task's branch record" \
+    "a spawn naming no branch did not warn about the brief's missing ship branch"
+  assert_not_contains "$out" "branch mismatch" "a spawn naming no branch was refused as drift"
+  assert_not_contains "$out" "fm/branch-agree-a3" "a spawn naming no branch fell back to the retired fm/<id> name"
 
   FM_HOME="$home" "$BRIEF" branch-agree-a4 proj --mode no-mistakes --branch-prefix fix/ >/dev/null \
     || fail "a second fix/-prefixed brief should scaffold"
@@ -1411,7 +1413,8 @@ EOF
 # no contract: the brief-vs-spawn agreement above already guarantees the worker's
 # instructions match the branch this spawn selected. So the deviation is announced
 # and the spawn proceeds, while matching the registry (or its fm/ default) stays
-# quiet.
+# quiet. Only a --branch-prefix spawn is compared: a caller-owned branch name is
+# not prefix-derived.
 test_spawn_notices_a_ship_branch_against_the_registry_prefix() {
   local rec home proj fakebin out
   rec=$(make_home prefix-deviation "- proj [no-mistakes branch=fix/] - fixture (added 2026-01-01)")
@@ -1419,8 +1422,10 @@ test_spawn_notices_a_ship_branch_against_the_registry_prefix() {
 $rec
 EOF
 
-  write_brief "$home" prefix-dev-a1 no-mistakes
-  out=$(run_spawn "$home" "$fakebin" prefix-dev-a1 "$proj" claude --mode no-mistakes --yolo off)
+  FM_HOME="$home" "$BRIEF" prefix-dev-a1 proj --mode no-mistakes --branch-prefix fm/ >/dev/null \
+    || fail "an fm/-prefixed brief should scaffold"
+  fill_brief_subsections "$home/data/prefix-dev-a1/brief.md" "Run the review loop." "Ship it."
+  out=$(run_spawn "$home" "$fakebin" prefix-dev-a1 "$proj" claude --mode no-mistakes --yolo off --branch-prefix fm/)
   assert_contains "$out" "ships branch=fm/prefix-dev-a1 while proj registers the ship-branch prefix 'fix/'" \
     "no deviation notice for shipping the legacy prefix past a registered override"
   assert_contains "$out" "will read as firstmate-authored" \
@@ -1506,7 +1511,7 @@ STUB
   # Both real generation paths must end in the same contract, as they do for every
   # mode: a promoted worker is never handed a weaker one than a briefed worker.
   rm "$home/data/$id/brief.md"
-  FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes --forge gerrit >/dev/null 2>&1 \
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes --branch-prefix fm/ --forge gerrit >/dev/null 2>&1 \
     || fail "ordinary gerrit ship brief generation should succeed"
   awk '/^# Definition of done$/ { emit=1 } emit' "$home/data/$id/brief.md" > "$TMP_ROOT/forge-promote/brief-dod"
   awk '/^# Definition of done$/ { emit=1 } emit' "$payload" > "$TMP_ROOT/forge-promote/delivered-dod"

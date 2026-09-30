@@ -55,8 +55,8 @@
 # forge is none|gerrit and defaults to none; bin/fm-project-mode.sh's header owns
 # what the registry binding means, and this file owns what gerrit changes for a
 # WORKER (docs/gerrit-forge-integration.md is the design). A forge composes with
-# the two modes that publish review changes and is refused on local-only, which
-# publishes only a branch. On gerrit the worker publishes one squashed change with
+# the two modes that publish through it and is refused on local-only, whose one
+# pipeline run opens its own draft merge request. On gerrit the worker publishes one squashed change with
 # `gerrit-axi publish --squash` instead of opening a pull request: direct-PR does
 # that straight away, and no-mistakes first runs the pipeline with its three
 # forge-facing steps skipped and recovers the pipeline's own fix commits into its
@@ -136,9 +136,9 @@ EOF
 
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a
 # caller cannot reach a half-rendered contract. local-only is refused rather than
-# rendered with an inert annotation: it publishes only a branch, never a change a
-# review server sees, and a remote-less landing fast-forwards local main with
-# content the review server has never seen.
+# rendered with an inert annotation: its pipeline run opens a draft merge request
+# itself, never a change published through the forge, and a remote-less landing
+# fast-forwards local main with content the review server has never seen.
 fm_forge_valid_for_mode() {  # <forge> <mode> <caller>
   local forge=$1 mode=$2 caller=$3
   case "$forge" in
@@ -148,7 +148,7 @@ fm_forge_valid_for_mode() {  # <forge> <mode> <caller>
       return 1 ;;
   esac
   if [ "$forge" != none ] && [ "$mode" = local-only ]; then
-    echo "error: $caller: forge=$forge cannot ship mode=local-only - that mode publishes only a branch and never a review change, so a forge has no meaning there, and its landing would fast-forward local main with content the review server has never seen; ship no-mistakes or direct-PR, which publish through the forge" >&2
+    echo "error: $caller: forge=$forge cannot ship mode=local-only - that mode's pipeline run opens its own draft merge request and never publishes through a forge, so a forge has no meaning there, and its remote-less landing would fast-forward local main with content the review server has never seen; ship no-mistakes or direct-PR, which publish through the forge" >&2
     return 1
   fi
   return 0
@@ -294,9 +294,8 @@ EOF
 # the pipeline, what `--intent` may carry, and the two firstmate-specific rules.
 # Written once and shared by no-mistakes and local-only so they cannot drift
 # apart; only the two sentences about a green PR depend on the argument, because
-# on gerrit, and on a local-only run that skips pr and ci, there is no PR to
-# report.
-fm_nm_driving_block() {  # <none|gerrit|no-pr>
+# on gerrit there is no PR to report.
+fm_nm_driving_block() {  # <none|gerrit>
   local pr_return_line='' pr_reattach_clause=';'
   if [ "$1" = none ]; then
     pr_return_line="Only a drive call's return reports the green PR: \`no-mistakes axi status\` shows progress but never reports \`checks-passed\` while the ci step is still monitoring the PR for merge, so never wait on a status poll for the next gate or outcome.
@@ -336,7 +335,7 @@ EOF
 
 # The gate-driving contract every pipeline-running mode hands its worker: the
 # captain's craftsmanship rules where they apply, then the driving block.
-fm_dod_pipeline_gates() {  # <none|gerrit|no-pr> <project> <config-dir>
+fm_dod_pipeline_gates() {  # <none|gerrit> <project> <config-dir>
   fm_dod_craft_rules "$2" "$3" || return 1
   fm_nm_driving_block "$1"
 }

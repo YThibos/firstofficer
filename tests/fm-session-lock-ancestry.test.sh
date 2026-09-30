@@ -742,15 +742,7 @@ expect_phase_foreign() {  # <dir> <n> <expected-arms> <owner-pid> <label>
 # subreaper (WSL's init relay, a container or session manager) adopts it
 # instead, and the recycled-chain case below cannot be staged there at all.
 orphans_reparent_to_init() {
-  local orphan ppid i=0
-  orphan=$(bash -c 'sleep 5 >/dev/null 2>&1 & echo $!')
-  while [ "$i" -lt 40 ]; do
-    ppid=$(ps -o ppid= -p "$orphan" 2>/dev/null | tr -d ' ')
-    [ -n "$ppid" ] && break
-    sleep 0.05; i=$((i + 1))
-  done
-  kill "$orphan" 2>/dev/null
-  [ "$ppid" = 1 ]
+  [ "$(fm_orphan_reaper_pid)" = 1 ]
 }
 
 test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
