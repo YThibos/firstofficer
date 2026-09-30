@@ -46,6 +46,10 @@
 # live owner also gets a replacement before build returns, because
 # `already-armed` is not the same fact as `listening`.
 #
+# build launches the browser on the board through lavish-axi, whose own
+# LAVISH_AXI_NO_OPEN=1 it inherits: a caller that must not raise a browser
+# window sets that, and the session is still established, proved live, and armed.
+#
 # CAPTAIN'S CALL HYGIENE. A decision card is dropped when its work item, PR, or
 # structured artifact/version subject appears among the payload's own landed
 # rows, or when `bin/fm-captain-hold.sh open` reports the task is no longer an

@@ -30,6 +30,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 fm_live_gate default-on FM_BEARINGS_LAVISH_LIVE lavish-axi jq curl
 
+# This guard runs by default in every full test run, so it must never launch a
+# browser. lavish-axi honours this for every open below, the build's included,
+# and still creates, lists, and reopens the session exactly as it does with one.
+export LAVISH_AXI_NO_OPEN=1
+
 pass() { printf 'ok - %s\n' "$1"; }
 note() { printf '# %s\n' "$1"; }
 
