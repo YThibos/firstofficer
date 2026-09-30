@@ -90,7 +90,7 @@ Before making any such change, load the agent-only `firstmate-coding-guidelines`
 It has the knowledge-placement rules that keep the always-loaded anchor from regrowing after each diet pass.
 There is no reliable way for `bin/fm-brief.sh`'s scaffold to detect that a task's repo is firstmate itself, so firstmate adds this skill's load line to firstmate-repo briefs by hand.
 A crewmate picking up such a brief should load the skill even if the brief predates this instruction.
-For the same reason the generated brief's project-memory step does not apply here: `bin/fm-ensure-agents-md.sh` maintains a *project's* memory file and its `CLAUDE.md` symlink, and this repo deliberately keeps two real files instead, so running it against this repo reports a conflict by design rather than reconciling anything.
+Never run `bin/fm-ensure-agents-md.sh` against this repo: it is a manual project-initialization utility that no brief calls, it expects a *project's* `CLAUDE.md` to be the `@AGENTS.md` pointer file, and this repo deliberately keeps two distinct real files instead, so it reports a conflict by design rather than reconciling anything.
 When supervising live crewmates, keep firstmate's own long validation or build commands in the background so watcher wakes can still be handled.
 Crewmate validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in firstmate docs.
 Firstmate's wrapper still matters: crewmates route every `ask-user` finding to firstmate, which applies `ask-user-authority`, and crewmates never pass `--yes` or `-y` because either flag bypasses that check and any required captain escalation.
