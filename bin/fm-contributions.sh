@@ -257,7 +257,7 @@ gitlab() { # validated-host endpoint [glab api options]: GET only
     glab api --hostname "$host" --method GET "$@"
 }
 
-observe_gitlab() { # canonical URL, seen-token file; URL already parsed by fm_pr_url_parse -> normalized JSON
+observe_gitlab() { # canonical URL, seen-token file, any-owner seen-token file; URL already parsed by fm_pr_url_parse -> normalized JSON
   local url=$1 host=$FM_PR_HOST project mr head after author
   if ! command -v glab >/dev/null 2>&1; then
     OBSERVE_ERROR='glab is required to observe a GitLab merge request'
@@ -273,7 +273,7 @@ observe_gitlab() { # canonical URL, seen-token file; URL already parsed by fm_pr
   author=$(jq -r .author.username "$TMP/core.json")
   gitlab "$host" "$mr/notes?per_page=100" --paginate > "$TMP/notes.raw" || return 1
   # glab may print one merged array or one array per page.
-  jq -s --slurpfile seen "$2" 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
+  jq -s --slurpfile seen "$3" 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
     | def stamp: [try capture("^(?<base>.{19})(\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$") catch empty][0]
       | if . == null then null else (try (.base + "Z" | fromdateiso8601) catch null) as $epoch
         | if $epoch == null or .tz == "Z" then $epoch
@@ -335,7 +335,7 @@ observe_gitlab() { # canonical URL, seen-token file; URL already parsed by fm_pr
       observation:$observed[0]}]} | valid_record' >/dev/null
 }
 
-observe() { # canonical contribution URL, seen-token file -> normalized JSON
+observe() { # canonical contribution URL, seen-token file, any-owner seen-token file -> normalized JSON
   local url=$1 part number kind endpoint head after label
   OBSERVE_ERROR='forge observation unavailable or changed during read'
   KEEP_SEEN=0
@@ -343,7 +343,7 @@ observe() { # canonical contribution URL, seen-token file -> normalized JSON
   BUDGET_EXHAUSTED=0
   if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = gitlab ]; then
     KEEP_SEEN=1
-    observe_gitlab "$url" "$2"
+    observe_gitlab "$url" "$2" "$3"
     return
   fi
   case "$url" in https://github.com/*) ;; *) return 1 ;; esac
@@ -495,9 +495,11 @@ poll() {
     observed=0
     # Only a note unseen by every owner needs a member lookup.
     jq -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '$ARGS.positional
-      | map(. as $t | [$saved[0][] | select(.task == $t) | .records[] | select(.url == $url) | .seen // []] | first // [])
-      | reduce .[1:][] as $s (.[0]; . - (. - $s))' --args "${row[@]:1}" > "$TMP/seen.json"
-    observe "$url" "$TMP/seen.json" || observed=$?
+      | map(. as $t | [$saved[0][] | select(.task == $t) | .records[] | select(.url == $url) | .seen // []] | first // [])' \
+      --args "${row[@]:1}" > "$TMP/owner-seen.json"
+    jq 'reduce .[1:][] as $s (.[0]; . - (. - $s))' "$TMP/owner-seen.json" > "$TMP/seen.json"
+    jq 'add' "$TMP/owner-seen.json" > "$TMP/seen-any.json"
+    observe "$url" "$TMP/seen.json" "$TMP/seen-any.json" || observed=$?
     [ "$BUDGET_EXHAUSTED" -eq 0 ] || continue
     # Wake once per failure episode: only when no owner has a prior error.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \

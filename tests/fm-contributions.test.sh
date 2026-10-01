@@ -849,6 +849,22 @@ test_gitlab_resolved_note_keeps_acknowledgement() {
       || fail 'a genuine edit of a resolved GitLab note was not re-raised'
     [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 2 ] || fail 'a genuine GitLab note edit did not wake once'
   done
+  home=$(new_home gitlab-resolved-note-late-owner)
+  gitlab_home "$home"
+  jq -n '[{id:23,system:false,type:"DiffNote",body:"Please clarify",author:{id:2,username:"maintainer"},
+    updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
+    || fail 'could not acknowledge the GitLab maintainer note'
+  jq '.[0] += {resolved:true,resolved_at:"2026-09-16T09:00:00.120Z",updated_at:"2026-09-16T09:00:00.124Z"}' \
+    "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
+  printf -- '- [ ] duplicate - Filed %s (repo: sample) (kind: ship)\n' "$GITLAB_URL" >> "$home/data/backlog.md"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a resolved note with a late owner'
+  jq -e '.records[0].pending == []' "$home/data/landing/contributions.json" >/dev/null \
+    || fail 'a late owner made resolving a thread re-raise an acknowledged GitLab note'
+  jq -e '.records[0].pending | map(.token) == ["note:23:2026-09-16T08:01:00Z"]' "$home/data/duplicate/contributions.json" \
+    >/dev/null || fail 'a late owner did not receive the note under its acknowledged token'
+  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'a late owner on a resolved thread woke the supervisor again'
   pass 'resolving a GitLab thread keeps the acknowledgement while a real edit re-raises'
 }
 
