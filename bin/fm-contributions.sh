@@ -84,8 +84,8 @@
 # signal; a note whose author was over the cap or whose lookup failed stays
 # unseen for a later poll. A GitLab record keeps every token it has seen, so a
 # lookup gap never re-raises an acknowledged note. A note token carries its
-# updated_at, so an edit re-raises it; resolving its thread keeps the seen token
-# while updated_at is at most two seconds after resolved_at. poll appends
+# updated_at, so an edit re-raises it; resolving its thread keeps the newest token
+# any owner has seen while updated_at is at most two seconds after resolved_at. poll appends
 # ordinary durable check wakes through fm-wake-lib and emits only newly durable signals for the
 # authenticated check to surface.
 # ack removes
