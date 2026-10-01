@@ -669,11 +669,9 @@ case "$*" in
       merge_status:"can_be_merged",detailed_merge_status:$detailed,has_conflicts:false,author:{id:1,username:"author"},user:{can_merge:false},
       head_pipeline:{id:5,sha:$head,status:"success",started_at:"2026-09-16T07:00:00Z"}}' ;;
   "$mr/notes?per_page=100 --paginate") cat "$FORGE/notes.json" ;;
-  'projects/group%2Fsub%2Fproject/members/all/2')
+  'projects/group%2Fsub%2Fproject/members/all?per_page=100 --paginate')
     [ ! -f "$FORGE/member-forbidden" ] || { printf '{"message":"403 Forbidden"}'; exit 1; }
-    printf '{"id":2,"access_level":40}\n' ;;
-  'projects/group%2Fsub%2Fproject/members/all/3') printf '{"message":"404 Not found"}'; exit 1 ;;
-  'projects/group%2Fsub%2Fproject/members/all/4') printf '{"message":"403 Forbidden"}'; exit 1 ;;
+    printf '[{"id":2,"access_level":40},{"id":3,"access_level":10}]\n' ;;
   *) printf 'unexpected glab fixture call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
@@ -707,6 +705,8 @@ test_gitlab_merge_request_is_observed() {
     and .[0].body == "Please clarify; $(touch /tmp/never)"' >/dev/null \
     || fail 'only the project member note must become a pending signal, as inert data'
   [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'one GitLab maintainer note must wake exactly once'
+  [ "$(grep -c '/members/all' "$home/forge/glab-calls")" = 2 ] \
+    || fail 'GitLab membership must be read once per poll, independent of the number of commenters'
   ! grep -Ev '^api --hostname git\.example\.test --method GET ' "$home/forge/glab-calls" >/dev/null \
     || fail 'GitLab observation issued something other than a GET read'
   pass 'a GitLab merge request is observed through glab and a member note wakes once'
@@ -732,6 +732,7 @@ test_gitlab_forbidden_member_lookup_is_not_unavailable() {
   gitlab_home "$home"
   jq -n '[{id:30,system:false,body:"opinion",author:{id:4,username:"hidden"},updated_at:"2026-09-16T08:01:00Z"}]' \
     > "$home/forge/notes.json"
+  : > "$home/forge/member-forbidden"
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed on a forbidden member lookup'
   [ -z "$out" ] || fail "a forbidden member lookup made the merge request unavailable: $out"
   jq -e '.records[0].error == null and .records[0].pending == [] and .records[0].observation.events == []' \

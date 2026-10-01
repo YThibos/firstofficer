@@ -207,7 +207,7 @@ gitlab() { # validated-host endpoint [glab api options]: GET only
 }
 
 observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normalized JSON
-  local url=$1 host=$FM_PR_HOST project mr head after author member
+  local url=$1 host=$FM_PR_HOST project mr head after author
   if ! command -v glab >/dev/null 2>&1; then
     OBSERVE_ERROR='glab is required to observe a GitLab merge request'
     return 1
@@ -224,22 +224,20 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
   # glab may print one merged array or one array per page.
   jq -s 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end' \
     "$TMP/notes.raw" > "$TMP/notes.json" || return 1
-  : > "$TMP/members.jsonl"
-  while IFS= read -r member; do
-    case "$member" in ''|*[!0-9]*) return 1 ;; esac
-    if gitlab "$host" "projects/$project/members/all/$member" > "$TMP/member.json"; then
-      jq -ce '{id,access_level} | select((.id | type == "number") and (.access_level | type == "number"))' \
-        "$TMP/member.json" >> "$TMP/members.jsonl" || :
+  : > "$TMP/members.json"
+  if jq -e --arg author "$author" 'any(.[]; .system != true and .author.username != $author)' "$TMP/notes.json" >/dev/null; then
+    if gitlab "$host" "projects/$project/members/all?per_page=100" --paginate > "$TMP/members.raw"; then
+      jq -c '.[] | {id,access_level} | select((.id | type == "number") and (.access_level | type == "number"))' \
+        "$TMP/members.raw" > "$TMP/members.json" 2>/dev/null || : > "$TMP/members.json"
     else
       [ "$BUDGET_EXHAUSTED" -eq 0 ] || return 1
     fi
-  done < <(jq -r --arg author "$author" '[.[] | select(.system != true and .author.username != $author)
-    | .author.id | select(type == "number") | floor] | unique[]' "$TMP/notes.json")
+  fi
   gitlab "$host" "$mr" > "$TMP/after.json" || return 1
   after=$(jq -r '.sha // ""' "$TMP/after.json")
   [ "$head" = "$after" ] || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
   jq -n --arg url "$url" --slurpfile core "$TMP/core.json" --slurpfile notes "$TMP/notes.json" \
-    --slurpfile members "$TMP/members.jsonl" '
+    --slurpfile members "$TMP/members.json" '
     $core[0] as $c | $c.head_pipeline as $p
     | [$members[] | select(.access_level >= 30) | .id] as $maintainers
     | {head:$c.sha,state:(if $c.state == "merged" or $c.state == "closed" then $c.state else "open" end),
