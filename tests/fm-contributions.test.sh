@@ -612,8 +612,9 @@ test_genuine_failure_near_deadline_is_unavailable() {
     "$home/data/delivery/contributions.json" >/dev/null || fail 'a genuine forge failure left no error evidence'
   printf 'fail\n' > "$home/forge/fault"
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'repeat poll failed on a genuine forge failure'
-  [ -z "$out" ] || fail "an unchanged forge failure was reported again: $out"
-  pass 'a genuine forge failure inside the budget records the error and wakes once'
+  [ "$out" = 'contributions: observation unavailable for https://github.com/o/r/pull/8' ] \
+    || fail "an unchanged GitHub forge failure was not reported on every poll: $out"
+  pass 'a genuine forge failure inside the budget records the error and wakes on every poll'
 }
 
 test_shared_url_observed_once() {
@@ -652,6 +653,7 @@ gitlab_home() { # home: a linked GitLab merge request read through a stubbed gla
   printf 'opened\n' > "$home/forge/state"
   printf '%s\n' "$HEAD_A" > "$home/forge/head"
   printf '[]\n' > "$home/forge/notes.json"
+  printf 'mergeable\n' > "$home/forge/detailed"
   cat > "$home/fakebin/glab" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -663,12 +665,13 @@ shift 5
 mr='projects/group%2Fsub%2Fproject/merge_requests/7'
 case "$*" in
   "$mr")
-    jq -n --arg head "$(cat "$FORGE/head")" --arg state "$(cat "$FORGE/state")" '{state:$state,sha:$head,draft:false,
-      merge_status:"can_be_merged",has_conflicts:false,author:{id:1,username:"author"},user:{can_merge:false},
+    jq -n --arg head "$(cat "$FORGE/head")" --arg state "$(cat "$FORGE/state")" --arg detailed "$(cat "$FORGE/detailed")" '{state:$state,sha:$head,draft:false,
+      merge_status:"can_be_merged",detailed_merge_status:$detailed,has_conflicts:false,author:{id:1,username:"author"},user:{can_merge:false},
       head_pipeline:{id:5,sha:$head,status:"success",started_at:"2026-09-16T07:00:00Z"}}' ;;
   "$mr/notes?per_page=100 --paginate") cat "$FORGE/notes.json" ;;
   'projects/group%2Fsub%2Fproject/members/all/2') printf '{"id":2,"access_level":40}\n' ;;
   'projects/group%2Fsub%2Fproject/members/all/3') printf '{"message":"404 Not found"}'; exit 1 ;;
+  'projects/group%2Fsub%2Fproject/members/all/4') printf '{"message":"403 Forbidden"}'; exit 1 ;;
   *) printf 'unexpected glab fixture call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
@@ -721,6 +724,38 @@ test_gitlab_terminal_merge_request_needs_nobody() {
   pass 'a merged or closed GitLab merge request needs nobody, like a GitHub pull request'
 }
 
+test_gitlab_forbidden_member_lookup_is_not_unavailable() {
+  local home out
+  home=$(new_home gitlab-forbidden-member)
+  gitlab_home "$home"
+  jq -n '[{id:30,system:false,body:"opinion",author:{id:4,username:"hidden"},updated_at:"2026-09-16T08:01:00Z"}]' \
+    > "$home/forge/notes.json"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed on a forbidden member lookup'
+  [ -z "$out" ] || fail "a forbidden member lookup made the merge request unavailable: $out"
+  jq -e '.records[0].error == null and .records[0].pending == [] and .records[0].observation.events == []' \
+    "$home/data/landing/contributions.json" >/dev/null \
+    || fail "a forbidden member lookup failed the observation or counted a maintainer: $(cat "$home/data/landing/contributions.json")"
+  bearings "$home" | jq -e '.contributions.checked == 1 and .contributions.unmeasured == 0' >/dev/null \
+    || fail 'a forbidden member lookup left the merge request unmeasured'
+  pass 'a forbidden GitLab member lookup leaves the role unknown and the observation readable'
+}
+
+test_gitlab_approval_states_map_to_review_decision() {
+  local home detailed decision
+  for detailed in not_approved:REVIEW_REQUIRED requested_changes:CHANGES_REQUESTED; do
+    decision=${detailed#*:}; detailed=${detailed%%:*}
+    home=$(new_home "gitlab-$detailed")
+    gitlab_home "$home"
+    printf '%s\n' "$detailed" > "$home/forge/detailed"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail "could not poll a $detailed GitLab merge request"
+    jq -e --arg decision "$decision" '.records[0].observation.review_decision == $decision' \
+      "$home/data/landing/contributions.json" >/dev/null || fail "$detailed was not mapped to $decision"
+  done
+  bearings "$home" | jq -e '.contributions.counts.fleet == 1' >/dev/null \
+    || fail 'a GitLab merge request with requested changes was not fleet work'
+  pass 'GitLab approval states map onto the review decision'
+}
+
 test_unavailable_gitlab_notifies_once_and_stays_disclosed() {
   local home out
   home=$(new_home gitlab-unavailable)
@@ -748,7 +783,7 @@ test_unavailable_gitlab_notifies_once_and_stays_disclosed() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_gitlab_forbidden_member_lookup_is_not_unavailable test_gitlab_approval_states_map_to_review_decision test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

@@ -29,7 +29,9 @@
 # need only a glab login. Its merge request supplies state, head, draft,
 # conflict state and merge permission; the head pipeline is the one check lane,
 # named pipeline, and is omitted when it ran on another commit. GitLab has no
-# per-commit review record, so reviews and review_decision stay empty.
+# per-commit review record, so reviews stay empty; detailed_merge_status
+# not_approved and requested_changes become review_decision REVIEW_REQUIRED and
+# CHANGES_REQUESTED.
 # A verdict records the EXACT judged head, source URL, actor and summary. A
 # comment's arrival time never supplies its judged head. Record a prose verdict
 # only after its source identifies that head; otherwise leave it unbound and
@@ -45,8 +47,9 @@
 # the budget runs out mid-observation, the poll ends with that URL's records
 # untouched; only a genuine forge failure or head change records an error.
 # API failure leaves error evidence; an expired or absent observation is not
-# silence. poll prints "contributions: observation unavailable for <url>" when
-# a URL's recorded error appears or changes, not again while every owner already
+# silence. poll prints "contributions: observation unavailable for <url>" on
+# every failed read, except for a GitLab merge request: that line prints only
+# when its recorded error appears or changes, not again while every owner already
 # holds that same error; a successful read clears it and re-arms the line.
 # FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # FM_CONTRIBUTIONS_NOW supplies an ISO UTC clock for tests, otherwise UTC now.
@@ -57,7 +60,7 @@
 # contribution author) and issue transitions to ready-for-pr persist as pending
 # before any wake. GitLab has no author association, so a non-system note counts
 # when its author is not the merge request author and is a project member at
-# Developer access or above. poll appends ordinary durable check wakes through fm-wake-lib
+# Developer access or above. A member lookup that fails leaves that role unknown. poll appends ordinary durable check wakes through fm-wake-lib
 # and emits only newly durable signals for the authenticated check to surface.
 # ack removes
 # only the named pending token. A crash after enqueue can duplicate a wake but
@@ -224,11 +227,9 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
     case "$member" in ''|*[!0-9]*) return 1 ;; esac
     if gitlab "$host" "projects/$project/members/all/$member" > "$TMP/member.json"; then
       jq -ce '{id,access_level} | select((.id | type == "number") and (.access_level | type == "number"))' \
-        "$TMP/member.json" >> "$TMP/members.jsonl" || return 1
+        "$TMP/member.json" >> "$TMP/members.jsonl" || :
     else
       [ "$BUDGET_EXHAUSTED" -eq 0 ] || return 1
-      # Only a definite not-a-member answer excludes an author; any other failure is unavailable.
-      jq -e '(.message // "" | tostring | test("^404"))' "$TMP/member.json" >/dev/null 2>&1 || return 1
     fi
   done < <(jq -r --arg author "$author" '[.[] | select(.system != true and .author.username != $author)
     | .author.id | select(type == "number") | floor] | unique[]' "$TMP/notes.json")
@@ -244,7 +245,8 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
         mergeable:(if $c.has_conflicts == true or $c.merge_status == "cannot_be_merged" then "conflicting"
           elif $c.merge_status == "can_be_merged" then "mergeable" else "unknown" end),
         can_merge:($c.user.can_merge == true),
-        review_decision:"",reviews:[],
+        review_decision:({not_approved:"REVIEW_REQUIRED",requested_changes:"CHANGES_REQUESTED"}[$c.detailed_merge_status // ""] // ""),
+        reviews:[],
         checks:(if ($p | type) == "object" and $p.sha == $c.sha and ($p.status | type) == "string" then
           [{name:"pipeline",id:$p.id,started_at:($p.started_at // $p.created_at)}
             + (({success:"success",failed:"failure",canceled:"cancelled",skipped:"skipped"}[$p.status]) as $done
@@ -268,7 +270,9 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
 observe() { # canonical contribution URL -> normalized JSON
   local url=$1 part number kind endpoint head after label
   OBSERVE_ERROR='forge observation unavailable or changed during read'
+  OBSERVE_ONCE=0
   if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = gitlab ]; then
+    OBSERVE_ONCE=1
     observe_gitlab "$url"
     return
   fi
@@ -374,6 +378,7 @@ poll() {
     # every owner's prior record so the URL is observed first next poll.
     [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
     announce=0
+    [ "$observed" -eq 0 ] || [ "$OBSERVE_ONCE" -eq 1 ] || announce=1
     case "$url" in https://github.com/*/issues/*) kind=issue ;; *) kind="pr" ;; esac
     for task in "${row[@]:1}"; do
       fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
@@ -392,7 +397,7 @@ poll() {
             seen:($events | map(.token)),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
-        # An owner that already holds this exact error has been told once.
+        # A GitLab owner that already holds this exact error has been told once.
         jq -e --arg error "$OBSERVE_ERROR" '.error == $error' "$old" >/dev/null || announce=1
         jq --arg now "$NOW" --arg error "$OBSERVE_ERROR" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
       fi
