@@ -1,0 +1,109 @@
+
+$ fm-upstream-sync.sh --help
+usage: fm-upstream-sync.sh <subcommand>
+
+  preflight   fetch upstream and report what a sync would do (creates nothing)
+  merge       create upstream-update/<YYYY-MM-DD> in the sync copy and merge
+              upstream into it there; prints the sync copy's path
+  land        lint the sync copy, then drive the no-mistakes pipeline on the
+              sync branch with its test, rebase, and ci steps skipped, so it
+              is reviewed, pushed unrebased, and opened as a pull request
+              against origin's default branch; the forge's CI is the test
+              gate. The pull request is expected to fail the required
+              no-mistakes check, so the repository owner merges it with an
+              admin override once CI is green, using a merge commit,
+              never a squash or rebase; this script never overrides or merges.
+              Run it again to continue the pipeline or push a fix, or after
+              the merge to remove the sync copy.
+  land --fast-forward
+              offline path: lint and run the full local suite, then push and
+              fast-forward origin's default branch with no pull request
+  abort       undo an in-progress merge and remove the sync copy
+
+The sync copy is a git worktree at <repo>-upstream-sync, outside the primary
+checkout, which the sync never changes; resolve conflicts in the sync copy.
+Never pushes to upstream, never forces, never discards unlanded work.
+A conflict in one of these is a captain decision, never an agent's:
+  CLAUDE.md	fork-owned operating anchor that replaced upstream's symlink
+  AGENTS.md	upstream contract whose rule changes are reconciled into the anchor by hand
+[exit 0]
+
+$ fm-upstream-sync.sh preflight
+repo: /tmp/fmsync-e2e.wcvJ/fork
+default-branch: main
+upstream-branch: upstream/main
+upstream-head: e7ae30dd68a2c4f956f7f898f70018e9802960c9
+merge-base: 6078503be3be7d7ed7534db4b7c2df0181460ba6
+incoming-commits: 1
+drift: CLAUDE.md
+declared-drift: CLAUDE.md present - fork-owned operating anchor that replaced upstream's symlink
+declared-drift: AGENTS.md stale - upstream contract whose rule changes are reconciled into the anchor by hand
+up-to-date: no
+sync-branch: upstream-update/2026-10-01
+preflight: ok
+[exit 0]
+
+$ fm-upstream-sync.sh merge
+declared-drift: CLAUDE.md present - fork-owned operating anchor that replaced upstream's symlink
+declared-drift: AGENTS.md stale - upstream contract whose rule changes are reconciled into the anchor by hand
+sync-branch: upstream-update/2026-10-01
+sync-copy: /tmp/fmsync-e2e.wcvJ/fork-upstream-sync
+merged-from: upstream/main e7ae30dd68a2c4f956f7f898f70018e9802960c9
+agents-md: unchanged
+merge: clean
+[exit 0]
+
+$ fm-upstream-sync.sh land
+[stub fm-lint.sh ran]
+validate: lint ok
+[stub no-mistakes] axi run --skip test,rebase,ci --intent Land the upstream sync upstream-update/2026-10-01: merge upstream/main at e7ae30dd
+outcome: pr opened
+pull-request: https://github.example.invalid/fork/pull/42
+merge-with: a merge commit, never a squash or rebase
+merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green
+sync-copy: kept /tmp/fmsync-e2e.wcvJ/fork-upstream-sync; run land again once the pull request is merged
+[exit 0]
+
+== origin main unchanged? YES
+== origin upstream-update/2026-10-01 == local sync tip (unrewritten)? YES
+== sync tip parents (merge commit keeps upstream history): 2
+== full suite ran locally? NO
+== no-mistakes calls: 1
+
+$ fm-upstream-sync.sh land
+pull-request: https://github.example.invalid/fork/pull/42
+merge-with: a merge commit, never a squash or rebase
+merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green
+sync-copy: kept /tmp/fmsync-e2e.wcvJ/fork-upstream-sync; run land again once the pull request is merged
+[exit 0]
+== no-mistakes calls after rerun: 1  (expect 1: no new pipeline)
+
+--- adversarial: red lint ---
+
+$ fm-upstream-sync.sh land
+[stub fm-lint.sh ran]
+validate: lint failed
+land: refused - lint is red; nothing was pushed
+[exit 1]
+== origin upstream-update/2026-10-01 moved? NO
+
+$ fm-upstream-sync.sh land
+[stub fm-lint.sh ran]
+validate: lint ok
+[stub no-mistakes] axi run --skip test,rebase,ci --intent Land the upstream sync upstream-update/2026-10-01: merge upstream/main at e7ae30dd
+outcome: pr opened
+pull-request: https://github.example.invalid/fork/pull/42
+merge-with: a merge commit, never a squash or rebase
+merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green
+sync-copy: kept /tmp/fmsync-e2e.wcvJ/fork-upstream-sync; run land again once the pull request is merged
+[exit 0]
+== no-mistakes calls: 2 (expect 2)
+
+--- owner merges PR with a merge commit ---
+
+$ fm-upstream-sync.sh land
+landed: origin/main contains upstream-update/2026-10-01
+sync-copy: removed /tmp/fmsync-e2e.wcvJ/fork-upstream-sync
+[exit 0]
+== sync copy removed? YES
+== upstream refs untouched (push URL disabled): DISABLED

@@ -1,0 +1,28 @@
+ok - --help names every captain-decision path and the upstream-push boundary
+ok - nothing new upstream reports plainly and creates no branch
+ok - preflight reports the empirical drift set and validates the declared list against it
+ok - preflight refuses a dirty fork and leaves the working tree alone
+ok - a clean upstream merge lands on the dated sync branch in the sync copy and reports clean
+ok - an ordinary conflict is classified as the agent's to resolve
+ok - a conflict on a captain-decision path is reported, never resolved
+ok - an upstream AGENTS.md change is surfaced as a captain reconciliation, even on a clean merge
+ok - a conflicted merge stays in the sync copy and leaves the primary checkout untouched
+ok - a second merge refuses while a sync copy exists and leaves the first alone
+ok - the standard landing lints, then drives the pipeline to a pull request without moving the default branch
+ok - landing again publishes the fix through the pipeline and reports the same pull request
+ok - landing again after a finished run reports the pull request without starting a new run
+ok - landing after the pull request merged removes the sync copy even once main and upstream moved on
+ok - the standard landing refuses a sync either default branch moved past, and merging it forward lands
+ok - the pipeline skips exactly its test, rebase, and ci steps
+ok - the standard landing refuses a red lint and pushes nothing
+ok - the standard landing refuses without the gate or a forge client and pushes nothing
+ok - a pipeline that stops short or pauses at a gate is reported plainly and a rerun continues it
+ok - land refuses an unknown flag
+ok - the offline path fast-forwards origin from a green sync copy and never touches upstream or the primary checkout
+ok - the offline path refuses a red tree and pushes nothing anywhere
+ok - land refuses any branch that is not a dated sync branch
+ok - land refuses when there is no sync copy to land
+ok - land refuses while the upstream merge is still unresolved
+ok - abort undoes an unresolved merge, removes the sync copy, and leaves the primary checkout as it was
+ok - abort never deletes a sync branch that carries unlanded work
+bash tests/fm-upstream-sync.test.sh  4.62s user 5.05s system 103% cpu 9.354 total
