@@ -1,0 +1,38 @@
+### [merged-closed] lab=/tmp/fm-lab.oD9yJR
+### backlog:
+# Backlog
+
+## Queued
+- [ ] live1 - Contribution https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77 (repo: sample) (kind: ship)
+- [ ] live2 - Contribution https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/67 (repo: sample) (kind: ship)
+- [ ] live3 - Contribution https://git.intra.just.fgov.be/celbig/JustAuth/-/merge_requests/6 (repo: sample) (kind: ship)
+
+### poll 1 stdout (rc follows):
+rc=0
+### poll 1 glab calls:
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2Fjustmasterdata/merge_requests/67
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2Fjustmasterdata/merge_requests/67/notes?per_page=100 --paginate
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2Fjustmasterdata/merge_requests/67
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2Fjustmasterdata/merge_requests/77
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2Fjustmasterdata/merge_requests/77/notes?per_page=100 --paginate
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2Fjustmasterdata/merge_requests/77
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2FJustAuth/merge_requests/6
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2FJustAuth/merge_requests/6/notes?per_page=100 --paginate
+api --hostname git.intra.just.fgov.be --method GET projects/celbig%2FJustAuth/merge_requests/6
+
+### poll 2 stdout (rc follows):
+rc=0
+### poll 2 glab calls:
+
+### poll 3 stdout (rc follows):
+rc=0
+### poll 3 glab calls:
+
+### persisted records (url, state, error, checked_at, head, checks):
+{"task":"live1","url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","kind":"pr","error":null,"checked_at":"2026-10-01T18:09:30Z","state":"merged","head":"d8fd68cd606c16c79d3fa643453af5534aa12314","mergeable":"mergeable","review_decision":"","checks":[{"name":"pipeline","status":"completed","conclusion":"success"}],"pending":0,"seen":0}
+{"task":"live2","url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/67","kind":"pr","error":null,"checked_at":"2026-10-01T18:09:30Z","state":"closed","head":"abc289662b8570dc3a4e740eb801ef5efa92e2f1","mergeable":"mergeable","review_decision":"","checks":[{"name":"pipeline","status":"completed","conclusion":"failure"}],"pending":0,"seen":0}
+{"task":"live3","url":"https://git.intra.just.fgov.be/celbig/JustAuth/-/merge_requests/6","kind":"pr","error":null,"checked_at":"2026-10-01T18:09:30Z","state":"merged","head":"9dab99bbde5bae7700e19728403fd06d679fc12d","mergeable":"mergeable","review_decision":"","checks":[{"name":"pipeline","status":"completed","conclusion":"success"}],"pending":0,"seen":0}
+
+### snapshot coverage (fm-contributions.sh snapshot via fleet input):
+{"known":3,"checked":3,"counts":{"captain":0,"fleet":0,"maintainer":0,"nobody":3},"unmeasured":0,"complete":true,"proven_clear":true,"stale_verdicts":0,"missing_verdicts":0,"unreadable_records":0,"valid_until":1790879074,"captain":[],"captain_omitted":0,"rows":[{"task":"live3","url":"https://git.intra.just.fgov.be/celbig/JustAuth/-/merge_requests/6","kind":"pr","checked_at":"2026-10-01T18:09:30Z","checked":true,"final":true,"head":"9dab99bbde5bae7700e19728403fd06d679fc12d","verdict":null,"reviews":[],"distinct_checks":1,"missing_verdicts":0,"pending_checks":0,"failed_checks":0,"stale_verdicts":0,"signals":[],"actor":"nobody","reason":"forge reports merged","tasks":["live3"]},{"task":"live2","url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/67","kind":"pr","checked_at":"2026-10-01T18:09:30Z","checked":true,"final":true,"head":"abc289662b8570dc3a4e740eb801ef5efa92e2f1","verdict":null,"reviews":[],"distinct_checks":1,"missing_verdicts":0,"pending_checks":0,"failed_checks":1,"stale_verdicts":0,"signals":[],"actor":"nobody","reason":"forge reports closed","tasks":["live2"]},{"task":"live1","url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","kind":"pr","checked_at":"2026-10-01T18:09:30Z","checked":true,"final":true,"head":"d8fd68cd606c16c79d3fa643453af5534aa12314","verdict":null,"reviews":[],"distinct_checks":1,"missing_verdicts":0,"pending_checks":0,"failed_checks":0,"stale_verdicts":0,"signals":[],"actor":"nobody","reason":"forge reports merged","tasks":["live1"]}]}
+### lab removed: yes

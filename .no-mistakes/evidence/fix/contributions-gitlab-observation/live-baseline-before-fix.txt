@@ -1,0 +1,28 @@
+### [open-mr-BASELINE-3357e66] lab=/tmp/fm-lab.M7CZu6
+### backlog:
+# Backlog
+
+## Queued
+- [ ] live1 - Contribution https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/73 (repo: sample) (kind: ship)
+- [ ] live2 - Contribution https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77 (repo: sample) (kind: ship)
+
+### poll 1 stdout (rc follows):
+/tmp/fm-base.YNEbrY/bin/fm-contributions.sh: line 385: BUDGET_EXHAUSTED: unbound variable
+rc=1
+### poll 1 glab calls:
+
+### poll 2 stdout (rc follows):
+/tmp/fm-base.YNEbrY/bin/fm-contributions.sh: line 385: BUDGET_EXHAUSTED: unbound variable
+rc=1
+### poll 2 glab calls:
+
+### poll 3 stdout (rc follows):
+/tmp/fm-base.YNEbrY/bin/fm-contributions.sh: line 385: BUDGET_EXHAUSTED: unbound variable
+rc=1
+### poll 3 glab calls:
+
+### persisted records (url, state, error, checked_at, head, checks):
+
+### snapshot coverage (fm-contributions.sh snapshot via fleet input):
+{"known":2,"checked":0,"counts":{"captain":0,"fleet":0,"maintainer":0,"nobody":0},"unmeasured":2,"complete":false,"proven_clear":false,"stale_verdicts":0,"missing_verdicts":0,"unreadable_records":0,"valid_until":900,"captain":[],"captain_omitted":0,"rows":[{"task":"live1","url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/73","kind":"pr","checked_at":null,"checked":false,"final":false,"head":null,"verdict":null,"reviews":[],"distinct_checks":0,"missing_verdicts":0,"pending_checks":0,"failed_checks":0,"stale_verdicts":0,"signals":[],"actor":"unmeasured","reason":"unsupported forge; coverage is unmeasured","tasks":["live1"]},{"task":"live2","url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","kind":"pr","checked_at":null,"checked":false,"final":false,"head":null,"verdict":null,"reviews":[],"distinct_checks":0,"missing_verdicts":0,"pending_checks":0,"failed_checks":0,"stale_verdicts":0,"signals":[],"actor":"unmeasured","reason":"unsupported forge; coverage is unmeasured","tasks":["live2"]}]}
+### lab removed: yes

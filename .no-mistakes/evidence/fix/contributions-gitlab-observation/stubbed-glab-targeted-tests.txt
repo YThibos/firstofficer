@@ -1,0 +1,20 @@
+ok - a GitLab merge request is observed through glab and a member note wakes once
+ok - a merged or closed GitLab merge request needs nobody, like a GitHub pull request
+ok - a forbidden GitLab member lookup leaves the role unknown and the observation readable
+ok - a transient GitLab member lookup failure never re-raises an acknowledged note
+ok - resolving a GitLab thread keeps the acknowledgement while a real edit re-raises
+ok - GitLab member lookups are capped per poll and progress across polls
+ok - GitLab approval states map onto the review decision
+ok - an unreadable GitLab merge request is reported once per condition and stays unmeasured
+ok - retired ownership persists and unsupported forge remains visibly unmeasured
+ok - unsupported forge coverage is disclosed without inventing fleet work
+ok - expired child unsupported-forge coverage remains unmeasured
+ok - new maintainer comment wakes once and stays pending until acknowledged
+ok - new maintainer review wakes once and stays pending until acknowledged
+ok - new maintainer inline wakes once and stays pending until acknowledged
+ok - a transient ready-for-pr label wakes and its exact acknowledgement survives replay
+ok - a merged or closed contribution settles once, is not re-read, and never wakes again
+ok - a genuinely unavailable forge records an error and wakes once per failure episode
+ok - a late owner does not restart a shared forge failure episode
+ok - a URL owned by two tasks is observed once and every owner receives the result
+failures=0
