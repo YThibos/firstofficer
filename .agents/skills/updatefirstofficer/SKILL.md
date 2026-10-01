@@ -1,6 +1,6 @@
 ---
 name: updatefirstofficer
-description: Merge the original upstream firstmate project into this firstofficer fork without losing the fork's own divergence. Use when the captain invokes /updatefirstofficer (e.g. "/updatefirstofficer", "sync from upstream", "pull in the latest from the original project"). Creates a dated upstream-update branch on origin, merges the upstream default branch into it, lands a clean validated sync autonomously, resolves ordinary conflicts, and hands conflicts on deliberately drifted files to the captain. Distinct from /updatefirstmate, which only fast-forwards this home and its secondmate homes from origin.
+description: Merge the original upstream firstmate project into this firstofficer fork without losing the fork's own divergence. Use when the captain invokes /updatefirstofficer (e.g. "/updatefirstofficer", "sync from upstream", "pull in the latest from the original project"). Creates a dated upstream-update branch on origin, merges the upstream default branch into it, resolves ordinary conflicts, hands conflicts on deliberately drifted files to the captain, and publishes the sync through the no-mistakes pipeline as a pull request whose GitHub CI is the test gate and which the captain merges. Distinct from /updatefirstmate, which only fast-forwards this home and its secondmate homes from origin.
 user-invocable: true
 metadata:
   internal: true
@@ -74,7 +74,7 @@ Escalate with the concrete options: what upstream now says, what the fork says, 
 The known ones are `CLAUDE.md`, the fork-owned operating anchor that replaced upstream's symlink to `AGENTS.md`, and `AGENTS.md` itself.
 
 **`agents-md: changed`** is a captain decision even on a clean merge.
-`tests/fm-anchor-budget.test.sh` pins the `AGENTS.md` revision whose rules are reconciled into `CLAUDE.md`, so validation stays red until the rule-bearing changes are reconciled into the anchor by hand and the pin is bumped in the same commit.
+`tests/fm-anchor-budget.test.sh` pins the `AGENTS.md` revision whose rules are reconciled into `CLAUDE.md`, so CI stays red until the rule-bearing changes are reconciled into the anchor by hand and the pin is bumped in the same commit.
 Read the upstream change in the sync copy named by the `sync-copy:` line with `git -C <sync-copy> diff <pre-merge-commit> HEAD -- AGENTS.md`, then surface the specific upstream changes and what each would mean for the anchor's operating text.
 Do not invent anchor wording on your own.
 A provably non-rule-bearing change, a typo fix or pure reformatting that alters no rule, may be reconciled directly, but say explicitly that you did so and why it changes no rule.
@@ -92,22 +92,37 @@ If the captain calls the sync off, `bin/fm-upstream-sync.sh abort` undoes the me
 bin/fm-upstream-sync.sh land
 ```
 
-It runs the sync copy's own validation (`bin/fm-lint.sh`, then `bin/fm-test-run.sh --all`) and refuses to land anything red, pushing nothing anywhere.
-On green it pushes the dated sync branch to `origin`, fast-forwards `origin`'s default branch onto it, and removes the sync copy.
-The primary checkout is still untouched at that point; step 5's `/updatefirstmate` fast-forwards it.
+This is the standard way a sync lands.
+It lints the sync copy, then drives the no-mistakes pipeline on the dated sync branch from the sync copy with its `test`, `rebase`, and `ci` steps skipped.
+The pipeline reviews the sync, pushes the branch to `origin` unrebased, and opens a pull request against the default branch.
+Once the pull request exists, `land` prints its URL on the `pull-request:` line.
+GitHub CI on that pull request is the test gate, so run no full local suite: it costs hours here and CI covers the same ground in parallel.
+The script writes nothing to the default branch.
+With `rebase` and `ci` skipped, neither the script nor the pipeline rebases, squashes, or re-pushes the sync branch, and no CI monitor is left running to do so later.
+It refuses a sync that the local or `origin`'s default branch has moved past.
+When either happens, merge `origin`'s default branch into the sync branch in the sync copy - a merge, never a rebase - commit it, and run `land` again.
 
-**A clean, validated sync lands with no captain intervention.**
-That is what this command is for, and the captain's invocation is the authority for it.
-Do not stop to ask for a merge approval on the clean path.
+The pipeline returns at its first gate, and the script passes its output through.
+Drive each gate with `no-mistakes axi respond` from the sync copy as `/no-mistakes` describes, never with `--yes`, and run `land` again to reattach until it prints the pull request URL.
 
-That autonomy is scoped to exactly this: this command's own clean-merge landing.
-It grants no other merge authority, and it never relaxes the captain's boundaries on destructive, irreversible, or security-sensitive choices.
-A sync that needed a captain decision at step 3 lands on the captain's answer, not on this autonomy.
+Open the pull request without asking; the captain's invocation is the authority for that.
+Merging it is the captain's, under hard rule 2 of the anchor, and this command grants no merge authority of its own.
+Because the pipeline skips its test step, the pull request is expected to fail the required "PR must be raised via no-mistakes" check.
+The captain merges each sync pull request with an admin override once GitHub CI is green; neither you nor the script ever performs the override or the merge.
+Give the captain the full pull request URL once CI is green, and say explicitly that it needs that admin override and must be merged with a merge commit, never a squash or rebase, because either would flatten the upstream history the sync preserves.
+
+If CI is red, first bring the sync copy up to date with any commits the pipeline pushed: read `branch_sync` from `no-mistakes axi status` in the sync copy and run `no-mistakes axi sync` there when it says `sync`.
+Then fix it in the sync copy, commit there, and run `land` again: the pipeline reviews the fix and pushes it to the same pull request.
+Never rebase, squash, amend, or force-push the sync branch while fixing.
+
+The offline path, `land --fast-forward`, validates with the full local suite and fast-forwards the default branch with no pull request.
+Use it only when the captain asks for it.
 
 ### 5. Report and spread
 
 Summarise the outcome in the captain's own nouns under section 9 of the anchor.
 Say what came in from the original project, what you resolved, what still needs the captain, and where the fork now stands.
+Once the captain confirms the pull request is merged, run `bin/fm-upstream-sync.sh land` once more to remove the sync copy; it does so even after the default branch or upstream has moved on.
 Then run `/updatefirstmate` so this home and every secondmate home pick up what just landed, and re-read `CLAUDE.md` if the anchor changed.
 
 ## Safety
@@ -116,8 +131,8 @@ Then run `/updatefirstmate` so this home and every secondmate home pick up what 
   The `upstream` remote's push URL is disabled on purpose, and the script refuses any push target but `origin` before git is invoked.
 - **Never forces and never discards unlanded work.**
   Every refusal leaves the working tree exactly as it found it, `abort` keeps a sync branch that carries commits, and a refusal is a stop-and-investigate result rather than something to work around.
-- **Never lands red.**
-  Validation runs before any push, and a red tree ends the command with nothing landed.
+- **Never writes to the default branch in the standard flow.**
+  Lint runs before the pipeline starts, a red lint pushes nothing, and only the merged pull request moves the default branch.
 - **Never resolves a deliberately drifted file.**
   The captain-decision paths are declared in the script and checked against the real drift on every run, so the declaration cannot quietly outlive the drift it describes.
 - **Only this repo.**

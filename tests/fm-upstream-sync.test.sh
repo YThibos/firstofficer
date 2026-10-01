@@ -7,8 +7,10 @@
 # to, and a fork checkout that carries its own divergence. The guarantees under
 # test are the ones a wrong sync would quietly break: a no-op sync that creates
 # no branch, conflicts on the captain-decision paths never being resolved by an
-# agent, a red tree never landing, upstream never receiving a push, and the
-# merge never touching the primary checkout a live session runs from.
+# agent, a red tree never landing, upstream never receiving a push, the
+# standard landing publishing through the no-mistakes pipeline as a pull
+# request instead of moving origin's default branch, and the merge never
+# touching the primary checkout a live session runs from.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -42,6 +44,7 @@ exit "$(cat "$(dirname "$0")/../.lint-rc" 2>/dev/null || echo 0)"
 SH
   cat > "$dir/bin/fm-test-run.sh" <<'SH'
 #!/usr/bin/env bash
+: > "$(dirname "$0")/../.tests-ran"
 exit "$(cat "$(dirname "$0")/../.tests-rc" 2>/dev/null || echo 0)"
 SH
   chmod +x "$dir/bin/fm-lint.sh" "$dir/bin/fm-test-run.sh"
@@ -58,7 +61,7 @@ fixture() {
   printf 'upstream anchor\n' > "$seed/CLAUDE.md"
   printf 'upstream contract\n' > "$seed/AGENTS.md"
   printf '# upstream tool\n' > "$seed/tool.sh"
-  printf '.lint-rc\n.tests-rc\n' > "$seed/.gitignore"
+  printf '.lint-rc\n.tests-rc\n.tests-ran\n' > "$seed/.gitignore"
   write_validation_stubs "$seed"
   commit_in "$seed" 'seed'
   git clone -q --bare "$seed" "$up"
@@ -106,6 +109,53 @@ run_sync() {
   FM_ROOT_OVERRIDE="$fork" "$SYNC" "$@" 2>&1
 }
 
+PR_URL='https://forge.example.invalid/fork/pull/7'
+
+# fake_forge <tmp>: stubs for the no-mistakes gate and the forge. Echoes the
+# PATH that puts them first.
+#
+# The no-mistakes stub logs "<cwd> <args>" to <tmp>/nm.log. It exits with the
+# code in <tmp>/nm-rc when that holds a non-zero one, and stops at a gate with
+# nothing published while <tmp>/nm-gate exists. Otherwise it plays the
+# pipeline: it pushes the current branch to origin unrewritten and opens the
+# pull request, recorded in <tmp>/gh-open-pr.
+#
+# The gh stub logs every call to <tmp>/gh.log and answers `pr list` with the
+# pull request the pipeline opened, if any.
+fake_forge() {
+  local tmp=$1 fakebin
+  fakebin=$(fm_fakebin "$tmp")
+  cat > "$fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+printf '%s %s\\n' "\$PWD" "\$*" >> '$tmp/nm.log'
+rc=\$(cat '$tmp/nm-rc' 2>/dev/null || echo 0)
+[ "\$rc" -eq 0 ] || exit "\$rc"
+[ ! -e '$tmp/nm-gate' ] || { printf 'gate: review\\n'; exit 0; }
+branch=\$(git symbolic-ref --short HEAD)
+git push -q origin "\$branch:refs/heads/\$branch"
+printf '%s\\n' '$PR_URL' > '$tmp/gh-open-pr'
+printf 'outcome: pr opened\\n'
+SH
+  cat > "$fakebin/gh" <<SH
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> '$tmp/gh.log'
+case "\$1 \$2" in
+  'pr list') cat '$tmp/gh-open-pr' 2>/dev/null || true ;;
+  *) exit 64 ;;
+esac
+SH
+  chmod +x "$fakebin/no-mistakes" "$fakebin/gh"
+  printf '%s:%s\n' "$fakebin" "$PATH"
+}
+
+# run_sync_forge <tmp> <args...>: run_sync against <tmp>/fork with the fake
+# gate and forge.
+run_sync_forge() {
+  local tmp=$1
+  shift
+  PATH="$(fake_forge "$tmp")" run_sync "$tmp/fork" "$@"
+}
+
 # --- surfaced contract ------------------------------------------------------
 
 test_help_names_every_captain_decision_path() {
@@ -116,6 +166,10 @@ test_help_names_every_captain_decision_path() {
   assert_contains "$out" "AGENTS.md" "--help did not name the upstream contract as a captain decision"
   assert_contains "$out" "captain decision" "--help did not say who owns those conflicts"
   assert_contains "$out" "Never pushes to upstream" "--help did not state the upstream-push boundary"
+  assert_contains "$out" "no-mistakes pipeline" "--help did not say the landing runs the no-mistakes pipeline"
+  assert_contains "$out" "pull request" "--help did not describe the pull-request landing"
+  assert_contains "$out" "never a squash or rebase" "--help did not name the merge-commit requirement"
+  assert_contains "$out" "land --fast-forward" "--help did not name the offline path"
   pass "--help names every captain-decision path and the upstream-push boundary"
 }
 
@@ -296,7 +350,257 @@ upstream_refs() {
   git -C "$1/upstream.git" for-each-ref --format='%(refname) %(objectname)' | LC_ALL=C sort
 }
 
-test_a_green_sync_lands_and_pushes_only_to_origin() {
+test_the_standard_landing_opens_a_pull_request_and_leaves_the_default_branch_alone() {
+  local tmp out before_upstream origin_main_before sync_tip before copy log
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  before_upstream=$(upstream_refs "$tmp")
+  origin_main_before=$(git -C "$tmp/origin.git" rev-parse main)
+  copy=$(copy_of "$tmp/fork")
+  before=$(primary_snapshot "$tmp/fork")
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  sync_tip=$(git -C "$copy" rev-parse HEAD)
+
+  out=$(run_sync_forge "$tmp" land) || fail "land failed on a clean sync: $out"
+  assert_contains "$out" "validate: lint ok" "land did not run the repo's lint"
+  assert_contains "$out" "outcome: pr opened" "land did not pass the pipeline's output through"
+  assert_contains "$out" "pull-request: $PR_URL" "land did not report the pull request the pipeline opened"
+  assert_contains "$out" "merge commit, never a squash or rebase" \
+    "land did not tell the merger to keep upstream history"
+  assert_contains "$out" "admin override" "land did not say the owner merges past the required check"
+  assert_absent "$copy/.tests-ran" "the standard landing ran the full local suite"
+
+  log=$(cat "$tmp/nm.log")
+  assert_contains "$log" "$copy axi run --skip " "land did not drive the pipeline from the sync copy"
+  assert_contains "$log" "never rebase or squash" "the pipeline intent did not keep the sync branch's history"
+  assert_contains "$log" "merged with a merge commit" "the pipeline intent did not carry the merge instruction"
+  assert_not_contains "$log" "--yes" "land auto-resolved the pipeline's gates"
+  [ "$(git -C "$tmp/origin.git" rev-parse "$SYNC_BRANCH")" = "$sync_tip" ] \
+    || fail "the dated sync branch did not reach origin unrewritten"
+  [ "$(git -C "$tmp/origin.git" rev-parse main)" = "$origin_main_before" ] \
+    || fail "the standard landing moved origin's default branch"
+  log=$(cat "$tmp/gh.log")
+  assert_contains "$log" "pr list --repo " "land did not name the forge repository explicitly"
+  assert_contains "$log" "--head $SYNC_BRANCH --base main" \
+    "land did not look up the pull request from the sync branch against the default branch"
+  assert_not_contains "$log" "upstream.git" "the pull request was looked up on upstream"
+  assert_present "$copy" "land removed the sync copy before the pull request merged"
+  [ "$before" = "$(primary_snapshot "$tmp/fork")" ] || fail "land touched the primary checkout"
+  [ "$before_upstream" = "$(upstream_refs "$tmp")" ] || fail "the sync wrote to upstream"
+  pass "the standard landing lints, then drives the pipeline to a pull request without moving the default branch"
+}
+
+test_a_second_land_publishes_the_fix_through_the_pipeline() {
+  local tmp out copy
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-again)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  copy=$(copy_of "$tmp/fork")
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed: $out"
+  printf 'ci fix\n' > "$copy/FIX.md"
+  commit_in "$copy" 'fix what CI found'
+
+  out=$(run_sync_forge "$tmp" land) || fail "the second land failed: $out"
+  assert_contains "$out" "pull-request: $PR_URL" "the second land did not report the open pull request"
+  [ "$(git -C "$tmp/origin.git" rev-parse "$SYNC_BRANCH")" = "$(git -C "$copy" rev-parse HEAD)" ] \
+    || fail "the second land did not publish the fix"
+  [ "$(grep -c " axi run --skip " "$tmp/nm.log")" -eq 2 ] \
+    || fail "the second land did not drive the pipeline again"
+  pass "landing again publishes the fix through the pipeline and reports the same pull request"
+}
+
+test_land_after_a_finished_run_reports_the_pull_request_without_a_new_run() {
+  local tmp out copy work
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-finished)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  copy=$(copy_of "$tmp/fork")
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed: $out"
+  # The finished run's review pushed a fix the sync copy does not have yet.
+  work="$tmp/review-fix"
+  git clone -q --branch "$SYNC_BRANCH" "$tmp/origin.git" "$work"
+  printf 'review fix\n' > "$work/REVIEW.md"
+  commit_in "$work" 'fix what review found'
+  git -C "$work" push -q origin "$SYNC_BRANCH"
+
+  out=$(run_sync_forge "$tmp" land) || fail "land after the finished run failed: $out"
+  assert_contains "$out" "pull-request: $PR_URL" "land did not report the open pull request"
+  assert_contains "$out" "merge commit, never a squash or rebase" \
+    "land did not tell the merger to keep upstream history"
+  assert_not_contains "$out" "validate: lint" "land linted a sync origin already holds"
+  [ "$(grep -c " axi run " "$tmp/nm.log")" -eq 1 ] \
+    || fail "land started a second pipeline for a sync origin already holds"
+  assert_present "$copy" "land removed the sync copy before the pull request merged"
+  pass "landing again after a finished run reports the pull request without starting a new run"
+}
+
+test_land_after_the_pull_request_merged_removes_the_sync_copy_once_main_and_upstream_moved() {
+  local tmp out copy work
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-merged)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  copy=$(copy_of "$tmp/fork")
+  work="$tmp/merger"
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed: $out"
+  # The repository owner merges the pull request with a merge commit.
+  git clone -q "$tmp/origin.git" "$work"
+  git_q "$work" merge -q --no-ff -m 'merge the sync' "origin/$SYNC_BRANCH"
+  git -C "$work" push -q origin main
+  # Routine moves before the cleanup: /updatefirstmate fast-forwards the local
+  # default branch to the merge, and upstream gains new work.
+  git -C "$tmp/fork" pull -q --ff-only origin main
+  upstream_commit "$tmp" LATER.md 'later upstream work' 'later upstream work'
+
+  out=$(run_sync_forge "$tmp" land) || fail "land after the merge failed: $out"
+  assert_contains "$out" "landed: origin/main contains $SYNC_BRANCH" "land did not report the merged sync"
+  assert_absent "$copy" "land did not remove the sync copy once the pull request merged"
+  [ "$(grep -c ' axi run ' "$tmp/nm.log")" -eq 1 ] || fail "land drove the pipeline again after the merge"
+  pass "landing after the pull request merged removes the sync copy even once main and upstream moved on"
+}
+
+test_land_refuses_a_sync_that_origin_moved_past_without_starting_the_pipeline() {
+  local tmp out rc=0 work
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-stale)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  work="$tmp/other"
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  git clone -q "$tmp/origin.git" "$work"
+  printf 'other work\n' > "$work/OTHER.md"
+  commit_in "$work" 'other work lands first'
+  git -C "$work" push -q origin main
+
+  out=$(run_sync_forge "$tmp" land) || rc=$?
+  expect_code 1 "$rc" "land published a sync origin had moved past"
+  assert_contains "$out" "origin/main has moved past this sync" "land did not say the sync is stale"
+  assert_absent "$tmp/nm.log" "a stale sync still started the pipeline, which would rebase it"
+
+  # /updatefirstmate then fast-forwards the local default branch too.
+  git -C "$tmp/fork" pull -q --ff-only origin main
+  rc=0
+  out=$(run_sync_forge "$tmp" land) || rc=$?
+  expect_code 1 "$rc" "land published a sync the local default branch had moved past"
+  assert_contains "$out" "main has moved past this sync; merge it into $SYNC_BRANCH" \
+    "land did not advise merging the local default branch into the sync"
+  assert_not_contains "$out" "rebuild" "land advised a rebuild the open pull request cannot survive"
+  assert_absent "$tmp/nm.log" "a stale sync still started the pipeline, which would rebase it"
+
+  # Following the advice: merge, never rebase, then land again.
+  git_q "$(copy_of "$tmp/fork")" merge -q --no-edit origin/main
+  out=$(run_sync_forge "$tmp" land) || fail "land refused a sync with the default branch merged in: $out"
+  assert_contains "$out" "pull-request: $PR_URL" "the merged-forward sync did not reach its pull request"
+  pass "the standard landing refuses a sync either default branch moved past, and merging it forward lands"
+}
+
+# The pipeline must skip test (CI is the test gate), and rebase and ci, either
+# of which could rebase and re-push the merge-bearing sync branch.
+test_the_pipeline_skips_test_rebase_and_ci() {
+  local tmp out skips
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-skips)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed: $out"
+  skips=$(sed -nE 's/.* axi run --skip ([^ ]+) .*/\1/p' "$tmp/nm.log" | tr ',' '\n' | LC_ALL=C sort | paste -sd, -)
+  [ "$skips" = "ci,rebase,test" ] \
+    || fail "the pipeline skipped '$skips', not exactly test, rebase, and ci"
+  pass "the pipeline skips exactly its test, rebase, and ci steps"
+}
+
+test_land_refuses_a_red_lint_and_pushes_nothing() {
+  local tmp out rc=0
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-red)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  printf '1\n' > "$(copy_of "$tmp/fork")/.lint-rc"
+
+  out=$(run_sync_forge "$tmp" land) || rc=$?
+  expect_code 1 "$rc" "land accepted a red lint"
+  assert_contains "$out" "lint is red; nothing was pushed" "land did not say the red lint pushed nothing"
+  git -C "$tmp/origin.git" rev-parse --verify --quiet "$SYNC_BRANCH" >/dev/null \
+    && fail "a red lint still pushed the sync branch"
+  assert_absent "$tmp/nm.log" "a red lint still started the pipeline"
+  assert_absent "$tmp/gh.log" "a red lint still reached the forge"
+  pass "the standard landing refuses a red lint and pushes nothing"
+}
+
+test_land_without_the_gate_or_a_forge_client_pushes_nothing() {
+  local tmp out rc=0 bare
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-no-tools)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+
+  # A PATH holding git and the script's other tools but neither no-mistakes nor gh.
+  bare="$tmp/barebin"
+  mkdir -p "$bare"
+  for tool in git bash env sed cat date head grep dirname; do
+    ln -s "$(command -v "$tool")" "$bare/$tool"
+  done
+  out=$(PATH="$bare" run_sync "$tmp/fork" land) || rc=$?
+  expect_code 1 "$rc" "land ran with no no-mistakes gate"
+  assert_contains "$out" "no-mistakes is required" "land did not name the missing gate"
+
+  fake_forge "$tmp" >/dev/null
+  ln -s "$(fm_fakebin "$tmp")/no-mistakes" "$bare/no-mistakes"
+  rc=0
+  out=$(PATH="$bare" run_sync "$tmp/fork" land) || rc=$?
+  expect_code 1 "$rc" "land ran with no forge client"
+  assert_contains "$out" "gh is required" "land did not name the missing forge client"
+  assert_absent "$tmp/nm.log" "land started the pipeline with no way to find its pull request"
+  git -C "$tmp/origin.git" rev-parse --verify --quiet "$SYNC_BRANCH" >/dev/null \
+    && fail "land pushed the sync branch with no way to publish it"
+  pass "the standard landing refuses without the gate or a forge client and pushes nothing"
+}
+
+test_a_pipeline_that_stops_short_is_reported_and_a_rerun_continues_it() {
+  local tmp out rc=0
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-fail)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+
+  printf '1\n' > "$tmp/nm-rc"
+  out=$(run_sync_forge "$tmp" land) || rc=$?
+  expect_code 1 "$rc" "land reported success from a failed pipeline"
+  assert_contains "$out" "stopped short" "land did not say the pipeline stopped short"
+  assert_present "$(copy_of "$tmp/fork")" "a failed pipeline removed the sync copy"
+
+  rm -f "$tmp/nm-rc"
+  : > "$tmp/nm-gate"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed at a pipeline gate: $out"
+  assert_contains "$out" "gate: review" "land did not pass the pipeline's gate through"
+  assert_contains "$out" "pull-request: none yet" "land did not say the pull request is still to come"
+
+  rm -f "$tmp/nm-gate"
+  out=$(run_sync_forge "$tmp" land) || fail "land did not continue on rerun: $out"
+  assert_contains "$out" "pull-request: $PR_URL" "the rerun did not report the pull request"
+  pass "a pipeline that stops short or pauses at a gate is reported plainly and a rerun continues it"
+}
+
+test_land_refuses_an_unknown_flag() {
+  local tmp out rc=0
+  tmp=$(fm_test_tmproot fm-upstream-sync-flag)
+  fixture "$tmp"
+  out=$(run_sync "$tmp/fork" land --force) || rc=$?
+  expect_code 1 "$rc" "land accepted an unknown flag"
+  assert_contains "$out" "usage:" "land did not print usage for an unknown flag"
+  pass "land refuses an unknown flag"
+}
+
+test_the_offline_path_fast_forwards_a_green_sync_and_pushes_only_to_origin() {
   local tmp out before_upstream after_upstream origin_main origin_main_before sync_tip before copy
   tmp=$(fm_test_tmproot fm-upstream-sync-land)
   fixture "$tmp"
@@ -310,7 +614,7 @@ test_a_green_sync_lands_and_pushes_only_to_origin() {
   assert_contains "$out" "merge: clean" "the merge under test was not clean: $out"
   sync_tip=$(git -C "$copy" rev-parse HEAD)
 
-  out=$(run_sync "$tmp/fork" land) || fail "land failed on a green clean sync: $out"
+  out=$(run_sync "$tmp/fork" land --fast-forward) || fail "land failed on a green clean sync: $out"
   assert_contains "$out" "validate: lint ok" "land did not run the repo's lint"
   assert_contains "$out" "validate: tests ok" "land did not run the repo's tests"
   assert_contains "$out" "landed: origin/main" "land did not report origin's default branch advancing"
@@ -326,10 +630,10 @@ test_a_green_sync_lands_and_pushes_only_to_origin() {
 
   after_upstream=$(upstream_refs "$tmp")
   [ "$before_upstream" = "$after_upstream" ] || fail "the sync wrote to upstream"
-  pass "a green clean sync fast-forwards origin from the sync copy and never touches upstream or the primary checkout"
+  pass "the offline path fast-forwards origin from a green sync copy and never touches upstream or the primary checkout"
 }
 
-test_land_refuses_a_red_tree_and_pushes_nothing() {
+test_the_offline_path_refuses_a_red_tree_and_pushes_nothing() {
   local tmp out rc=0 origin_main_before origin_main_after before_upstream
   tmp=$(fm_test_tmproot fm-upstream-sync-red)
   fixture "$tmp"
@@ -340,7 +644,7 @@ test_land_refuses_a_red_tree_and_pushes_nothing() {
   out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
   printf '1\n' > "$(copy_of "$tmp/fork")/.tests-rc"
 
-  out=$(run_sync "$tmp/fork" land) || rc=$?
+  out=$(run_sync "$tmp/fork" land --fast-forward) || rc=$?
   expect_code 1 "$rc" "land accepted a red tree"
   assert_contains "$out" "validate: tests failed" "land did not report which validation was red"
   assert_contains "$out" "nothing was landed or pushed" "land did not say it landed nothing"
@@ -351,7 +655,7 @@ test_land_refuses_a_red_tree_and_pushes_nothing() {
     && fail "a red sync still pushed the sync branch"
   [ "$before_upstream" = "$(upstream_refs "$tmp")" ] || fail "a red sync wrote to upstream"
   assert_present "$(copy_of "$tmp/fork")" "a red sync removed the sync copy it needs fixing in"
-  pass "land refuses a red tree and pushes nothing anywhere"
+  pass "the offline path refuses a red tree and pushes nothing anywhere"
 }
 
 test_land_refuses_a_branch_that_is_not_a_sync_branch() {
@@ -439,8 +743,18 @@ test_a_conflict_on_a_captain_decision_path_is_never_resolved_here
 test_an_upstream_agents_md_change_is_flagged_for_hand_reconciliation
 test_a_conflicted_merge_never_touches_the_primary_checkout
 test_a_second_merge_refuses_while_a_sync_copy_exists
-test_a_green_sync_lands_and_pushes_only_to_origin
-test_land_refuses_a_red_tree_and_pushes_nothing
+test_the_standard_landing_opens_a_pull_request_and_leaves_the_default_branch_alone
+test_a_second_land_publishes_the_fix_through_the_pipeline
+test_land_after_a_finished_run_reports_the_pull_request_without_a_new_run
+test_land_after_the_pull_request_merged_removes_the_sync_copy_once_main_and_upstream_moved
+test_land_refuses_a_sync_that_origin_moved_past_without_starting_the_pipeline
+test_the_pipeline_skips_test_rebase_and_ci
+test_land_refuses_a_red_lint_and_pushes_nothing
+test_land_without_the_gate_or_a_forge_client_pushes_nothing
+test_a_pipeline_that_stops_short_is_reported_and_a_rerun_continues_it
+test_land_refuses_an_unknown_flag
+test_the_offline_path_fast_forwards_a_green_sync_and_pushes_only_to_origin
+test_the_offline_path_refuses_a_red_tree_and_pushes_nothing
 test_land_refuses_a_branch_that_is_not_a_sync_branch
 test_land_refuses_without_a_sync_copy
 test_land_refuses_an_unfinished_merge
