@@ -1,0 +1,42 @@
+### AFTER (target a8698e1) (/home/thibyann001/.no-mistakes/worktrees/04c39aeaee8f/01M3VN8EXT5DVYGGKGPZVQFNZ1)
+--- poll 1 stdout:
+contributions: observation unavailable for https://github.com/YThibos/firstofficer/pull/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999
+(rc=0)
+--- poll 2 stdout:
+contributions: observation unavailable for https://github.com/YThibos/firstofficer/pull/999999
+(rc=0)
+--- poll 3 stdout:
+contributions: observation unavailable for https://github.com/YThibos/firstofficer/pull/999999
+(rc=0)
+--- durable records after 3 polls:
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","checked_at":"2026-10-01T12:16:25Z","error":null,"state":"open","head":"03eec1260f35639cb3b5da1b1cd26f69d4c9e4f1","checks":[{"name":"pipeline","conclusion":"success"}],"review_decision":"","pending":0}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76","checked_at":"2026-10-01T12:16:25Z","error":null,"state":"merged","head":"8884aebdb0b184a4cbddf6deff487faec9c58d23","checks":[{"name":"pipeline","conclusion":"success"}],"review_decision":"","pending":0}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999","checked_at":"2026-10-01T12:16:25Z","error":"forge observation unavailable or changed during read","state":null,"head":null,"checks":[],"review_decision":null,"pending":0}
+{"url":"https://github.com/YThibos/firstofficer/pull/999999","checked_at":"2026-10-01T12:16:25Z","error":"forge observation unavailable or changed during read","state":null,"head":null,"checks":[],"review_decision":null,"pending":0}
+--- bearings contribution coverage:
+{
+  "scope": "owned contributions per home",
+  "known": 4,
+  "checked": 2,
+  "counts": {
+    "captain": 0,
+    "fleet": 2,
+    "maintainer": 0,
+    "nobody": 1
+  },
+  "complete": false,
+  "proven_clear": false,
+  "unmeasured_homes": 0,
+  "unreadable_records": 0,
+  "unmeasured": 1,
+  "stale_verdicts": 0,
+  "missing_verdicts": 0,
+  "captain_omitted": 0,
+  "captain": []
+}
+--- per-URL actor (snapshot --all):
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76","actor":"nobody","reason":"forge reports merged"}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","actor":"fleet","reason":"mergeability conflicting"}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999","actor":"unmeasured","reason":"forge observation unavailable or changed during read; coverage is unmeasured"}
+{"url":"https://github.com/YThibos/firstofficer/pull/999999","actor":"fleet","reason":"forge observation unavailable or changed during read"}

@@ -1,0 +1,50 @@
+### BEFORE (base 8455b08) (/tmp/fm-base-hu1VvI)
+--- poll 1 stdout:
+contributions: observation unavailable for https://github.com/YThibos/firstofficer/pull/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77
+(rc=0)
+--- poll 2 stdout:
+contributions: observation unavailable for https://github.com/YThibos/firstofficer/pull/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77
+(rc=0)
+--- poll 3 stdout:
+contributions: observation unavailable for https://github.com/YThibos/firstofficer/pull/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999
+contributions: observation unavailable for https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77
+(rc=0)
+--- durable records after 3 polls:
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","checked_at":"2026-10-01T12:16:30Z","error":"forge observation unavailable or changed during read","state":null,"head":null,"checks":[],"review_decision":null,"pending":0}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76","checked_at":"2026-10-01T12:16:30Z","error":"forge observation unavailable or changed during read","state":null,"head":null,"checks":[],"review_decision":null,"pending":0}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999","checked_at":"2026-10-01T12:16:30Z","error":"forge observation unavailable or changed during read","state":null,"head":null,"checks":[],"review_decision":null,"pending":0}
+{"url":"https://github.com/YThibos/firstofficer/pull/999999","checked_at":"2026-10-01T12:16:30Z","error":"forge observation unavailable or changed during read","state":null,"head":null,"checks":[],"review_decision":null,"pending":0}
+--- bearings contribution coverage:
+{
+  "scope": "owned contributions per home",
+  "known": 4,
+  "checked": 0,
+  "counts": {
+    "captain": 0,
+    "fleet": 1,
+    "maintainer": 0,
+    "nobody": 0
+  },
+  "complete": false,
+  "proven_clear": false,
+  "unmeasured_homes": 0,
+  "unreadable_records": 0,
+  "unmeasured": 3,
+  "stale_verdicts": 0,
+  "missing_verdicts": 0,
+  "captain_omitted": 0,
+  "captain": []
+}
+--- per-URL actor (snapshot --all):
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/76","actor":"unmeasured","reason":"unsupported forge; coverage is unmeasured"}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/77","actor":"unmeasured","reason":"unsupported forge; coverage is unmeasured"}
+{"url":"https://git.intra.just.fgov.be/celbig/justmasterdata/-/merge_requests/999999","actor":"unmeasured","reason":"unsupported forge; coverage is unmeasured"}
+{"url":"https://github.com/YThibos/firstofficer/pull/999999","actor":"fleet","reason":"forge observation unavailable or changed during read"}

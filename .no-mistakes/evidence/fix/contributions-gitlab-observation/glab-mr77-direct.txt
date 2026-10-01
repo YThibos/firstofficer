@@ -1,0 +1,1 @@
+{"state":"opened","sha":"03eec1260f35639cb3b5da1b1cd26f69d4c9e4f1","has_conflicts":true,"merge_status":"cannot_be_merged","detailed_merge_status":"conflict","pipeline":"success"}
