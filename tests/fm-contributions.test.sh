@@ -701,6 +701,234 @@ test_shared_url_observed_once() {
   pass 'a URL owned by two tasks is observed once and every owner receives the result'
 }
 
+GITLAB_URL=https://git.example.test/group/sub/project/-/merge_requests/7
+
+gitlab_home() { # home: a linked GitLab merge request read through a stubbed glab
+  local home=$1
+  mkdir -p "$home/forge"
+  printf -- '- [ ] landing - Filed %s (repo: sample) (kind: ship)\n' "$GITLAB_URL" >> "$home/data/backlog.md"
+  printf 'opened\n' > "$home/forge/state"
+  printf '%s\n' "$HEAD_A" > "$home/forge/head"
+  printf '[]\n' > "$home/forge/notes.json"
+  printf 'mergeable\n' > "$home/forge/detailed"
+  cat > "$home/fakebin/glab" <<'SH'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$FORGE/glab-calls"
+[ ! -f "$FORGE/glab-down" ] || { printf 'glab: 502 Bad Gateway (HTTP 502)\n' >&2; exit 1; }
+[ "$1 $2 $3 $4 $5" = 'api --hostname git.example.test --method GET' ] \
+  || { printf 'unexpected glab fixture call: %s\n' "$*" >&2; exit 1; }
+shift 5
+mr='projects/group%2Fsub%2Fproject/merge_requests/7'
+case "$*" in
+  "$mr")
+    jq -n --arg head "$(cat "$FORGE/head")" --arg state "$(cat "$FORGE/state")" --arg detailed "$(cat "$FORGE/detailed")" '{state:$state,sha:$head,draft:false,
+      merge_status:"can_be_merged",detailed_merge_status:$detailed,has_conflicts:false,author:{id:1,username:"author"},user:{can_merge:false},
+      head_pipeline:{id:5,sha:$head,status:"success",started_at:"2026-09-16T07:00:00Z"}}' ;;
+  "$mr/notes?per_page=100 --paginate") cat "$FORGE/notes.json" ;;
+  'projects/group%2Fsub%2Fproject/members/all/2')
+    [ ! -f "$FORGE/member-forbidden" ] || { printf '{"message":"403 Forbidden"}'; exit 1; }
+    printf '{"id":2,"access_level":40}\n' ;;
+  'projects/group%2Fsub%2Fproject/members/all/3') printf '{"message":"404 Not found"}'; exit 1 ;;
+  'projects/group%2Fsub%2Fproject/members/all/4') printf '{"message":"403 Forbidden"}'; exit 1 ;;
+  'projects/group%2Fsub%2Fproject/members/all/'[5-9]) printf '{"id":%s,"access_level":30}\n' "${1##*/}" ;;
+  *) printf 'unexpected glab fixture call: %s\n' "$*" >&2; exit 1 ;;
+esac
+SH
+  chmod +x "$home/fakebin/glab"
+}
+
+test_gitlab_merge_request_is_observed() {
+  local home out
+  home=$(new_home gitlab-observed)
+  gitlab_home "$home"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'could not poll a GitLab merge request'
+  [ -z "$out" ] || fail "a readable GitLab merge request printed: $out"
+  jq -e --arg head "$HEAD_A" '.records[0] | .error == null and .kind == "pr" and .observation.head == $head
+    and .observation.state == "open" and .observation.mergeable == "mergeable" and .observation.reviews == []
+    and .observation.review_decision == ""
+    and .observation.checks == [{name:"pipeline",id:5,started_at:"2026-09-16T07:00:00Z",status:"completed",conclusion:"success"}]' \
+    "$home/data/landing/contributions.json" >/dev/null \
+    || fail "GitLab observation was not normalized: $(cat "$home/data/landing/contributions.json")"
+  bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 1 and .contributions.unmeasured == 0
+    and .contributions.counts.maintainer == 1 and .contributions.complete == true' >/dev/null \
+    || fail 'a freshly observed GitLab merge request was not measured coverage'
+  jq -n '[{id:20,system:true,body:"added 1 commit",author:{id:2,username:"maintainer"},updated_at:"2026-09-16T08:01:00Z"},
+    {id:21,system:false,body:"drive-by",author:{id:3,username:"stranger"},updated_at:"2026-09-16T08:01:00Z"},
+    {id:22,system:false,body:"own reply",author:{id:1,username:"author"},updated_at:"2026-09-16T08:01:00Z"},
+    {id:23,system:false,type:"DiffNote",body:"Please clarify; $(touch /tmp/never)",author:{id:2,username:"maintainer"},
+     updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll GitLab notes'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 2 ] || fail 'each new commenter must be looked up once'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not re-poll GitLab notes'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 2 ] || fail 'an already-seen GitLab note was looked up again'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e --arg url "$GITLAB_URL" 'length == 1
+    and .[0].author == "maintainer" and .[0].type == "review-comment" and .[0].source == ($url + "#note_23")
+    and .[0].body == "Please clarify; $(touch /tmp/never)"' >/dev/null \
+    || fail 'only the project member note must become a pending signal, as inert data'
+  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'one GitLab maintainer note must wake exactly once'
+  ! grep -Ev '^api --hostname git\.example\.test --method GET ' "$home/forge/glab-calls" >/dev/null \
+    || fail 'GitLab observation issued something other than a GET read'
+  pass 'a GitLab merge request is observed through glab and a member note wakes once'
+}
+
+test_gitlab_terminal_merge_request_needs_nobody() {
+  local home state
+  for state in merged closed; do
+    home=$(new_home "gitlab-$state")
+    gitlab_home "$home"
+    printf '%s\n' "$state" > "$home/forge/state"
+    [ -z "$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll)" ] || fail "a $state GitLab merge request printed a wake line"
+    bearings "$home" | jq -e '.contributions.checked == 1 and .contributions.counts.nobody == 1
+      and .contributions.unmeasured == 0 and .contributions.proven_clear == true' >/dev/null \
+      || fail "a $state GitLab merge request still needed an actor"
+  done
+  pass 'a merged or closed GitLab merge request needs nobody, like a GitHub pull request'
+}
+
+test_gitlab_forbidden_member_lookup_is_not_unavailable() {
+  local home out
+  home=$(new_home gitlab-forbidden-member)
+  gitlab_home "$home"
+  jq -n '[{id:30,system:false,body:"opinion",author:{id:4,username:"hidden"},updated_at:"2026-09-16T08:01:00Z"}]' \
+    > "$home/forge/notes.json"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed on a forbidden member lookup'
+  [ -z "$out" ] || fail "a forbidden member lookup made the merge request unavailable: $out"
+  jq -e '.records[0].error == null and .records[0].pending == [] and .records[0].seen == []
+    and .records[0].observation.events == []' \
+    "$home/data/landing/contributions.json" >/dev/null \
+    || fail "a forbidden member lookup failed the observation or counted a maintainer: $(cat "$home/data/landing/contributions.json")"
+  bearings "$home" | jq -e '.contributions.checked == 1 and .contributions.unmeasured == 0' >/dev/null \
+    || fail 'a forbidden member lookup left the merge request unmeasured'
+  pass 'a forbidden GitLab member lookup leaves the role unknown and the observation readable'
+}
+
+test_gitlab_failed_member_lookup_keeps_acknowledgement() {
+  local home
+  home=$(new_home gitlab-ack-gap)
+  gitlab_home "$home"
+  jq -n '[{id:23,system:false,body:"Please clarify",author:{id:2,username:"maintainer"},updated_at:"2026-09-16T08:01:00Z"}]' \
+    > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
+    || fail 'could not acknowledge the GitLab maintainer note'
+  : > "$home/forge/member-forbidden"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'poll failed on a forbidden member lookup'
+  rm "$home/forge/member-forbidden"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'poll failed after the member lookup recovered'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 0' >/dev/null \
+    || fail 'an acknowledged GitLab note came back after a transient member lookup failure'
+  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'an acknowledged GitLab note woke again'
+  pass 'a transient GitLab member lookup failure never re-raises an acknowledged note'
+}
+
+test_gitlab_resolved_note_keeps_acknowledgement() {
+  local home resolve
+  for resolve in '09:00:00.120Z 09:00:00.124Z' '09:00:00.998Z 09:00:01.003Z' \
+    '11:00:00.997+02:00 11:00:01.002+02:00'; do
+    home=$(new_home "gitlab-resolved-note-${resolve:9:3}")
+    gitlab_home "$home"
+    jq -n '[{id:23,system:false,type:"DiffNote",body:"Please clarify",author:{id:2,username:"maintainer"},
+      updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
+      || fail 'could not acknowledge the GitLab maintainer note'
+    jq --arg resolved "2026-09-16T${resolve% *}" --arg updated "2026-09-16T${resolve#* }" \
+      '.[0] += {resolved:true,resolved_at:$resolved,updated_at:$updated}' \
+      "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a resolved GitLab note'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 0' >/dev/null \
+      || fail "resolving a thread re-raised an acknowledged GitLab note ($resolve)"
+    [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'resolving a thread woke the supervisor again'
+    [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 1 ] || fail 'a resolve-only change looked the author up again'
+    jq '.[0] += {body:"Please clarify, edited",updated_at:"2026-09-16T10:00:00Z"}' \
+      "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll an edited GitLab note'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 1
+      and .[0].token == "note:23:2026-09-16T10:00:00Z" and .[0].body == "Please clarify, edited"' >/dev/null \
+      || fail 'a genuine edit of a resolved GitLab note was not re-raised'
+    [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 2 ] || fail 'a genuine GitLab note edit did not wake once'
+  done
+  home=$(new_home gitlab-resolved-note-late-owner)
+  gitlab_home "$home"
+  jq -n '[{id:23,system:false,type:"DiffNote",body:"Please clarify",author:{id:2,username:"maintainer"},
+    updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
+    || fail 'could not acknowledge the GitLab maintainer note'
+  jq '.[0] += {resolved:true,resolved_at:"2026-09-16T09:00:00.120Z",updated_at:"2026-09-16T09:00:00.124Z"}' \
+    "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
+  printf -- '- [ ] duplicate - Filed %s (repo: sample) (kind: ship)\n' "$GITLAB_URL" >> "$home/data/backlog.md"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a resolved note with a late owner'
+  jq -e '.records[0].pending == []' "$home/data/landing/contributions.json" >/dev/null \
+    || fail 'a late owner made resolving a thread re-raise an acknowledged GitLab note'
+  jq -e '.records[0].pending | map(.token) == ["note:23:2026-09-16T08:01:00Z"]' "$home/data/duplicate/contributions.json" \
+    >/dev/null || fail 'a late owner did not receive the note under its acknowledged token'
+  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'a late owner on a resolved thread woke the supervisor again'
+  pass 'resolving a GitLab thread keeps the acknowledgement while a real edit re-raises'
+}
+
+test_gitlab_member_lookups_are_capped_per_poll() {
+  local home
+  home=$(new_home gitlab-lookup-cap)
+  gitlab_home "$home"
+  jq -n '[range(5;10) | {id:(100 + .),system:false,body:"note",author:{id:.,username:("member" + tostring)},
+    updated_at:"2026-09-16T08:01:00Z"}]' > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll five new GitLab commenters'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 3 ] || fail 'one observation looked up more than three authors'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 3' >/dev/null \
+    || fail 'the first three looked-up maintainers did not become pending'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not re-poll GitLab commenters'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 5 ] || fail 'the remaining commenters were not looked up next'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll settled GitLab commenters'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 5 ] || fail 'a steady-state poll still looked up members'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'map(.author) | sort == ["member5","member6","member7","member8","member9"]' \
+    >/dev/null || fail 'commenters over the cap were not reconsidered on a later poll'
+  pass 'GitLab member lookups are capped per poll and progress across polls'
+}
+
+test_gitlab_approval_states_map_to_review_decision() {
+  local home detailed decision
+  for detailed in not_approved:REVIEW_REQUIRED requested_changes:CHANGES_REQUESTED; do
+    decision=${detailed#*:}; detailed=${detailed%%:*}
+    home=$(new_home "gitlab-$detailed")
+    gitlab_home "$home"
+    printf '%s\n' "$detailed" > "$home/forge/detailed"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail "could not poll a $detailed GitLab merge request"
+    jq -e --arg decision "$decision" '.records[0].observation.review_decision == $decision' \
+      "$home/data/landing/contributions.json" >/dev/null || fail "$detailed was not mapped to $decision"
+  done
+  bearings "$home" | jq -e '.contributions.counts.fleet == 1' >/dev/null \
+    || fail 'a GitLab merge request with requested changes was not fleet work'
+  pass 'GitLab approval states map onto the review decision'
+}
+
+test_unavailable_gitlab_notifies_once_and_stays_disclosed() {
+  local home out
+  home=$(new_home gitlab-unavailable)
+  gitlab_home "$home"
+  : > "$home/forge/glab-down"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed on an unreadable GitLab merge request'
+  [ "$out" = "contributions: observation unavailable for $GITLAB_URL" ] \
+    || fail "a newly unreadable GitLab merge request was not reported: $out"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'repeat poll failed on an unreadable GitLab merge request'
+  [ -z "$out" ] || fail "an unchanged unreadable GitLab merge request was reported again: $out"
+  bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 0 and .contributions.unmeasured == 1
+    and .contributions.counts.fleet == 0 and .contributions.complete == false
+    and .contributions.proven_clear == false' >/dev/null \
+    || fail 'an unreadable GitLab merge request was not disclosed as unmeasured coverage'
+  rm "$home/forge/glab-down"
+  [ -z "$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll)" ] || fail 'a recovered GitLab read printed a wake line'
+  jq -e '.records[0].error == null' "$home/data/landing/contributions.json" >/dev/null || fail 'recovery did not clear the error'
+  : > "$home/forge/glab-down"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll)
+  [ "$out" = "contributions: observation unavailable for $GITLAB_URL" ] \
+    || fail "an unreadable GitLab merge request after recovery was not reported again: $out"
+  bearings "$home" | jq -e '.contributions.checked == 0 and .contributions.unmeasured == 1' >/dev/null \
+    || fail 'a failed re-read kept an earlier observation as measured coverage'
+  pass 'an unreadable GitLab merge request is reported once per condition and stays unmeasured'
+}
+
 test_terminal_contribution_settles() {
   local mode home out later=2026-09-17T08:00:00Z
   for mode in merged closed; do
@@ -1066,7 +1294,7 @@ test_late_owner_keeps_failure_episode_suppressed() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_gitlab_forbidden_member_lookup_is_not_unavailable test_gitlab_failed_member_lookup_keeps_acknowledgement test_gitlab_resolved_note_keeps_acknowledgement test_gitlab_member_lookups_are_capped_per_poll test_gitlab_approval_states_map_to_review_decision test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

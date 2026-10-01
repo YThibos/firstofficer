@@ -14,7 +14,9 @@
 # Every URL explicitly linked by a structured backlog row or a task's pr= is
 # owned. Previously observed URLs remain in data/<task>/contributions.json after
 # endpoint teardown. Repository-wide PR discovery never establishes ownership.
-# GitHub PRs and issues are supported; other forges remain visibly unmeasured.
+# GitHub PRs and issues and GitLab merge requests are supported. A GitLab merge
+# request that has never been read, or whose last read failed, stays visibly
+# unmeasured rather than becoming fleet work or a clear result.
 #
 # This script owns fm-contributions.v1: one atomic file per durable task with
 # task and records[]. Each record contains url, kind, checked_at, error,
@@ -23,6 +25,13 @@
 # checks/reviews). Checks are normalized by name, id, started_at, status and
 # conclusion; projection picks the newest attempt per distinct name. The last
 # observation's lane names also disclose a lane absent from the next head.
+# GitLab is read through glab on the URL's own host, so self-hosted instances
+# need only a glab login. Its merge request supplies state, head, draft,
+# conflict state and merge permission; the head pipeline is the one check lane,
+# named pipeline, and is omitted when it ran on another commit. GitLab has no
+# per-commit review record, so reviews stay empty; detailed_merge_status
+# not_approved and requested_changes become review_decision REVIEW_REQUIRED and
+# CHANGES_REQUESTED.
 # A verdict records the EXACT judged head, source URL, actor and summary. A
 # comment's arrival time never supplies its judged head. Record a prose verdict
 # only after its source identifies that head; otherwise leave it unbound and
@@ -36,10 +45,11 @@
 # and is cut down to the watcher's own per-check bound (FM_CHECK_TIMEOUT,
 # default 30, read from the poll's environment because the watcher runs it as
 # a direct child) with a three-second margin. Every read is capped at five
-# seconds, and a read killed at that bound or at the deadline is budget
+# seconds, whether gh or glab, and a read killed at that bound or at the deadline is budget
 # refusal, never a forge failure. A pull observation has three
 # dependent waves: core, six independent reads, then the closing head read;
-# an issue has two waves. Before starting a URL, poll reserves the smaller of
+# an issue has two waves. A GitLab merge request reads sequentially: core,
+# notes, at most three member lookups, then the closing head read. Before starting a URL, poll reserves the smaller of
 # the effective budget and 15 seconds for those waves. URLs needing forge
 # reads are sorted by URL and rotated by the current five-minute epoch bucket
 # modulo their count, without stored scheduling state or freshness-based
@@ -66,8 +76,18 @@
 #
 # New maintainer comments/reviews (OWNER, MEMBER, COLLABORATOR, excluding the
 # contribution author) and issue transitions to ready-for-pr persist as pending
-# before any wake. poll appends ordinary durable check wakes through fm-wake-lib
-# and emits only newly durable signals for the authenticated check to surface.
+# before any wake. GitLab has no author association, so a non-system note counts
+# when its author is not the merge request author and is a project member at
+# Developer access or above. Only notes unseen by every owner need a member
+# lookup, at most three distinct authors per observation, so steady-state polls
+# make no lookup. A 404 or access below Developer marks the note seen without a
+# signal; a note whose author was over the cap or whose lookup failed stays
+# unseen for a later poll. A GitLab record keeps every token it has seen, so a
+# lookup gap never re-raises an acknowledged note. A note token carries its
+# updated_at, so an edit re-raises it; resolving its thread keeps the newest token
+# any owner has seen while updated_at is at most two seconds after resolved_at. poll appends
+# ordinary durable check wakes through fm-wake-lib and emits only newly durable signals for the
+# authenticated check to surface.
 # ack removes
 # only the named pending token. A crash after enqueue can duplicate a wake but
 # cannot consume the pending signal. Source bodies are data, never commands.
@@ -200,14 +220,13 @@ write_record() { # task record-json-file
   mv -f -- "$staged" "$file"
 }
 
-forge() {
+forge_run() { # bounded forge CLI command
   local remaining rc=0 forge_err=${FORGE_ERR:-$TMP/forge.err}
   remaining=$((DEADLINE - $(date +%s)))
   # The budget, not the forge, refused this read.
   [ "$remaining" -gt 0 ] || { BUDGET_EXHAUSTED=1; : > "$TMP/budget-exhausted"; return 1; }
   [ "$remaining" -le 5 ] || remaining=5
-  fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
-    gh "$@" 2> "$forge_err" || rc=$?
+  fm_run_timed "$remaining" "$@" 2> "$forge_err" || rc=$?
   # A kill at the read bound or the deadline is budget refusal too; only the
   # forge's own nonzero exit is unavailable evidence.
   if [ "$rc" -eq 124 ]; then
@@ -230,13 +249,106 @@ wait_forges() { # background forge pids from one independent read wave
   return "$rc"
 }
 
-observe() { # canonical GitHub URL -> normalized JSON
+forge() { forge_run env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 gh "$@"; }
+
+gitlab() { # validated-host endpoint [glab api options]: GET only
+  local host=$1; shift
+  forge_run env GITLAB_HOST="$host" NO_PROMPT=1 GLAB_CHECK_UPDATE=false \
+    glab api --hostname "$host" --method GET "$@"
+}
+
+observe_gitlab() { # canonical URL, seen-token file, any-owner seen-token file; URL already parsed by fm_pr_url_parse -> normalized JSON
+  local url=$1 host=$FM_PR_HOST project mr head after author
+  if ! command -v glab >/dev/null 2>&1; then
+    OBSERVE_ERROR='glab is required to observe a GitLab merge request'
+    return 1
+  fi
+  # The path is already restricted to [A-Za-z0-9._/-], so only "/" needs encoding.
+  project=${FM_PR_PATH//\//%2F}
+  mr="projects/$project/merge_requests/$FM_PR_NUMBER"
+  gitlab "$host" "$mr" > "$TMP/core.json" || return 1
+  jq -e '(.state | IN("opened","locked","closed","merged")) and (.author.username | type == "string")' \
+    "$TMP/core.json" >/dev/null || return 1
+  head=$(jq -er '.sha | select(type == "string" and test("^[a-fA-F0-9]{40}$"))' "$TMP/core.json") || return 1
+  author=$(jq -r .author.username "$TMP/core.json")
+  gitlab "$host" "$mr/notes?per_page=100" --paginate > "$TMP/notes.raw" || return 1
+  # glab may print one merged array or one array per page.
+  jq -s --slurpfile seen "$3" 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
+    | def stamp: [try capture("^(?<base>.{19})(\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$") catch empty][0]
+      | if . == null then null else (try (.base + "Z" | fromdateiso8601) catch null) as $epoch
+        | if $epoch == null or .tz == "Z" then $epoch
+          else $epoch - (if .tz[:1] == "-" then -1 else 1 end) * ((.tz[1:3] | tonumber) * 3600 + (.tz[4:6] | tonumber) * 60) end end;
+    map(("note:" + (.id | tostring) + ":") as $prefix
+      | (.resolved_at | stamp) as $resolved | (.updated_at | stamp) as $updated
+      | (if $resolved != null and $updated != null and $updated <= $resolved + 2
+          then [$seen[0][] | select(startswith($prefix))] | max else null end) as $kept
+      | . + {token:($kept // ($prefix + (.updated_at // .created_at // "")))})' \
+    "$TMP/notes.raw" > "$TMP/notes.json" || return 1
+  : > "$TMP/members.json"
+  while IFS= read -r member; do
+    if gitlab "$host" "projects/$project/members/all/$member" > "$TMP/member.json"; then
+      jq -c --argjson id "$member" '{id:$id,access_level} | select(.access_level | type == "number")' \
+        "$TMP/member.json" >> "$TMP/members.json" 2>/dev/null || :
+    else
+      [ "$BUDGET_EXHAUSTED" -eq 0 ] || return 1
+      if jq -e '.message // "" | tostring | test("^404")' "$TMP/member.json" >/dev/null 2>&1; then
+        printf '{"id":%s,"access_level":0}\n' "$member" >> "$TMP/members.json"
+      fi
+    fi
+  done < <(jq -r --arg author "$author" --slurpfile seen "$2" '[.[] | select(.system != true and .author.username != $author)
+    | select(.token as $t | $seen[0] | index($t) | not) | .author.id | select(type == "number") | floor]
+    | reduce .[] as $id ([]; if index($id) then . else . + [$id] end) | .[:3][]' "$TMP/notes.json")
+  gitlab "$host" "$mr" > "$TMP/after.json" || return 1
+  after=$(jq -r '.sha // ""' "$TMP/after.json")
+  [ "$head" = "$after" ] || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
+  jq -n --arg url "$url" --slurpfile core "$TMP/core.json" --slurpfile notes "$TMP/notes.json" \
+    --slurpfile members "$TMP/members.json" --slurpfile seen "$2" '
+    $core[0] as $c | $c.head_pipeline as $p
+    | [$notes[0][] | select(.system != true and .author.username != $c.author.username)
+        | select(.token as $t | $seen[0] | index($t) | not)] as $fresh
+    | [$members[] | select(.access_level >= 30) | .id] as $maintainers
+    | {head:$c.sha,state:(if $c.state == "merged" or $c.state == "closed" then $c.state else "open" end),
+        draft:($c.draft // $c.work_in_progress // false),
+        mergeable:(if $c.has_conflicts == true or $c.merge_status == "cannot_be_merged" then "conflicting"
+          elif $c.merge_status == "can_be_merged" then "mergeable" else "unknown" end),
+        can_merge:($c.user.can_merge == true),
+        review_decision:({not_approved:"REVIEW_REQUIRED",requested_changes:"CHANGES_REQUESTED"}[$c.detailed_merge_status // ""] // ""),
+        reviews:[],
+        checks:(if ($p | type) == "object" and $p.sha == $c.sha and ($p.status | type) == "string" then
+          [{name:"pipeline",id:$p.id,started_at:($p.started_at // $p.created_at)}
+            + (({success:"success",failed:"failure",canceled:"cancelled",skipped:"skipped"}[$p.status]) as $done
+              | if $done != null then {status:"completed",conclusion:$done}
+                elif $p.status | IN("created","waiting_for_resource","preparing","pending","running","scheduled","manual","canceling")
+                then {status:"in_progress",conclusion:null}
+                else {status:"completed",conclusion:null} end)]
+          else [] end),
+        settled:[$fresh[] | select(.author.id as $id | ($members | map(.id) | index($id)) != null
+          and ($maintainers | index($id)) == null) | .token],
+        events:[$fresh[] | select(.author.id as $id | $maintainers | index($id) != null)
+          | {token,
+             type:(if .type == "DiffNote" then "review-comment" else "comment" end),
+             source:($url + "#note_" + (.id | tostring)),
+             head:(if .type == "DiffNote" then .position.head_sha else null end),
+             author:.author.username,body:(.body // "" | tostring | .[:500])}]}' > "$TMP/observation.json" || return 1
+  jq_lib -ne --arg url "$url" --slurpfile observed "$TMP/observation.json" '
+    {schema:"fm-contributions.v1",task:"observation",records:[{url:$url,kind:"pr",pending:[],seen:[],
+      observation:$observed[0]}]} | valid_record' >/dev/null
+}
+
+observe() { # canonical contribution URL, seen-token file, any-owner seen-token file -> normalized JSON
   local url=$1 part number kind endpoint head after label
+  OBSERVE_ERROR='forge observation unavailable or changed during read'
+  KEEP_SEEN=0
+  rm -f -- "$TMP/budget-exhausted" "$TMP/forge-unavailable"
+  BUDGET_EXHAUSTED=0
+  if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = gitlab ]; then
+    KEEP_SEEN=1
+    observe_gitlab "$url" "$2" "$3"
+    return
+  fi
   case "$url" in https://github.com/*) ;; *) return 1 ;; esac
   part=${url#https://github.com/}; number=${part##*/}; part=${part%/*}; kind=${part##*/}; part=${part%/*}
   case "$kind" in pull) endpoint="repos/$part/pulls/$number" ;; issues) endpoint="repos/$part/issues/$number" ;; *) return 1 ;; esac
-  rm -f -- "$TMP/budget-exhausted" "$TMP/forge-unavailable"
-  BUDGET_EXHAUSTED=0
   forge api "$endpoint" > "$TMP/core.json" || return 1
   jq -e '(.state == "open" or .state == "closed") and (.user.login | type == "string")' "$TMP/core.json" >/dev/null || return 1
   if [ "$kind" = pull ]; then
@@ -348,7 +460,7 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
 }
 
 poll() {
-  local task url old kind error observed
+  local task url old kind observed
   local -a row
   acquire
   get_input
@@ -381,7 +493,13 @@ poll() {
     [ $((DEADLINE - $(date +%s))) -ge "$OBSERVATION_RESERVE" ] || break
     url=${row[0]}
     observed=0
-    observe "$url" || observed=$?
+    # Only a note unseen by every owner needs a member lookup.
+    jq -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '$ARGS.positional
+      | map(. as $t | [$saved[0][] | select(.task == $t) | .records[] | select(.url == $url) | .seen // []] | first // [])' \
+      --args "${row[@]:1}" > "$TMP/owner-seen.json"
+    jq 'reduce .[1:][] as $s (.[0]; . - (. - $s))' "$TMP/owner-seen.json" > "$TMP/seen.json"
+    jq 'add' "$TMP/owner-seen.json" > "$TMP/seen-any.json"
+    observe "$url" "$TMP/seen.json" "$TMP/seen-any.json" || observed=$?
     [ "$BUDGET_EXHAUSTED" -eq 0 ] || continue
     # Wake once per failure episode: only when no owner has a prior error.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
@@ -389,7 +507,7 @@ poll() {
         .error == null)' "${row[@]:1}" >/dev/null; then
       printf 'contributions: observation unavailable for %s\n' "$url"
     fi
-    case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
+    case "$url" in https://github.com/*/issues/*) kind=issue ;; *) kind="pr" ;; esac
     for task in "${row[@]:1}"; do
       fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
       old="$TMP/old.json"
@@ -397,18 +515,17 @@ poll() {
         ([$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first)
         // {url:$url,kind:$kind,checked_at:null,observation:null,verdict:null,seen:[],pending:[],notified:[]}' > "$old"
       if [ "$observed" -eq 0 ]; then
-        jq -n --arg now "$NOW" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
+        jq -n --arg now "$NOW" --argjson once "$KEEP_SEEN" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
           $old[0] as $old | $observation[0] as $o
           | ($o.events + (if $o.ready == true and $old.observation.ready != true and (any($o.events[]; .type == "ready-for-pr") | not) then
               [{token:("ready-for-pr:" + $now),type:"ready-for-pr",source:$old.url,head:null,body:"filed issue reached ready-for-pr"}]
               else [] end)) as $events
           | $old + {checked_at:$now,error:null,
-            observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)}),
-            seen:($events | map(.token)),
+            observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)} | del(.settled)),
+            seen:(($events | map(.token)) + (if $once == 1 then ($old.seen // []) + ($o.settled // []) else [] end) | unique),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
-        error='forge observation unavailable or changed during read'
-        jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
+        jq --arg now "$NOW" --arg error "$OBSERVE_ERROR" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"
