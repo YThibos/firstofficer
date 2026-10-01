@@ -11,10 +11,12 @@
 #
 # NEVER PUSHES TO UPSTREAM. The only push target this script will accept is
 # `origin`; push_remote() refuses any other remote before git is invoked, and
-# upstream is touched by `git fetch` alone. It also never forces, never
-# stashes, and never discards unlanded work: every refusal below leaves the
-# working tree exactly as it found it. The standard landing never writes to
-# origin's default branch either: it opens a pull request and stops.
+# upstream is touched by `git fetch` alone. The standard landing publishes
+# through the no-mistakes gate instead, whose pipeline pushes to origin. The
+# script also never forces, never stashes, and never discards unlanded work:
+# every refusal below leaves the working tree exactly as it found it. The
+# standard landing never writes to origin's default branch either: its pipeline
+# opens a pull request and stops.
 #
 # NEVER MERGES IN THE PRIMARY CHECKOUT. A running firstmate loads its skills
 # and runs its hooks from the repo under sync, so a half-merged tree there
@@ -35,16 +37,20 @@
 #               and classify every conflict. Prints `sync-copy: <path>`, the
 #               directory where conflicts are resolved and the merge committed.
 #               A no-op sync creates no branch and no sync copy.
-#   land        Lint the merged sync branch in the sync copy, push it to origin,
-#               and open a pull request against origin's default branch (or
-#               reuse the open one), printing `pull-request: <url>`. The forge's
-#               CI on that pull request is the test gate, so no local suite
-#               runs, and the repository owner merges it WITH A MERGE COMMIT:
-#               a squash or rebase would flatten the upstream history the sync
-#               exists to preserve, and this script never rebases or squashes
-#               the branch itself. The sync copy stays, so a red CI run is fixed
-#               there and `land` re-run to push the fix. Once the pull request
-#               is merged, `land` again reports it and removes the sync copy.
+#   land        Lint the merged sync branch in the sync copy, then drive the
+#               no-mistakes pipeline on it with its test step skipped, so the
+#               sync is reviewed, pushed to origin, and opened as a pull request
+#               against origin's default branch with the review attestation
+#               that branch requires. Prints `pull-request: <url>` once the
+#               pipeline has opened it. The forge's CI on that pull request is
+#               the test gate, so no local suite runs, and the repository owner
+#               merges it WITH A MERGE COMMIT: a squash or rebase would flatten
+#               the upstream history the sync exists to preserve, and this
+#               script never rebases or squashes the branch itself. The sync
+#               copy stays, so a pipeline gate or a red CI run is handled there
+#               and `land` re-run to continue. Once the pull request is merged,
+#               `land` again reports it and removes the sync copy, even after
+#               the default branch or upstream has moved on.
 #   land --fast-forward
 #               The offline path, for when no forge CI is available: run the
 #               full local suite after lint and, only when both are green, push
@@ -72,15 +78,16 @@
 # Repo under sync: FM_ROOT_OVERRIDE, else this script's own repo root. The
 # validation `land` runs comes from the sync copy's own bin/ (fm-lint.sh, plus
 # fm-test-run.sh --all under --fast-forward), so it always validates the tree it
-# is about to publish. The pull request is opened with `gh` against the
-# repository the origin URL names, passed explicitly so it can never be raised
-# against upstream.
+# is about to publish. The pipeline runs from the sync copy with
+# `no-mistakes axi run`, and the pull request it opened is looked up with `gh`
+# against the repository the origin URL names, passed explicitly so it can
+# never be read from upstream.
 #
 # Conflicts are an expected outcome, not a script failure: `merge` exits 0 and
 # says what conflicted and who owns it. A non-zero exit always means the script
 # refused to act or could not, and never that it acted partially, with one
-# exception: a pull request the forge fails to open after the sync branch was
-# pushed says so, and re-running `land` picks up from there.
+# exception: a pipeline that stops short after it started says so, and
+# re-running `land` reattaches to it.
 #
 # Usage: fm-upstream-sync.sh <preflight|merge|land [--fast-forward]|abort> [--help]
 set -eu
@@ -99,11 +106,13 @@ usage: fm-upstream-sync.sh <subcommand>
   preflight   fetch upstream and report what a sync would do (creates nothing)
   merge       create upstream-update/<YYYY-MM-DD> in the sync copy and merge
               upstream into it there; prints the sync copy's path
-  land        lint the sync copy, push the sync branch, and open a pull
-              request against origin's default branch; the forge's CI is the
-              test gate and the repository owner merges it with a merge
-              commit, never a squash or rebase. Run it again to push a fix,
-              or after the merge to remove the sync copy.
+  land        lint the sync copy, then drive the no-mistakes pipeline on the
+              sync branch with its test step skipped, so it is reviewed,
+              pushed, and opened as a pull request against origin's default
+              branch; the forge's CI is the test gate and the repository
+              owner merges it with a merge commit, never a squash or rebase.
+              Run it again to continue the pipeline or push a fix, or after
+              the merge to remove the sync copy.
   land --fast-forward
               offline path: lint and run the full local suite, then push and
               fast-forward origin's default branch with no pull request
@@ -305,23 +314,21 @@ remove_sync_copy() {
   fi
 }
 
-# open_pull_request <slug> <branch> <default> <upstream-ref> <upstream-head>:
-# echo the URL of the open pull request for the sync branch, creating it when
-# there is none.
-open_pull_request() {
-  local slug=$1 branch=$2 default=$3 up_ref=$4 up_head=$5 url
-  url=$(gh pr list --repo "$slug" --head "$branch" --base "$default" --state open \
-    --json url --jq '.[0].url // empty') || return 1
-  if [ -z "$url" ]; then
-    url=$(gh pr create --repo "$slug" --base "$default" --head "$branch" \
-      --title "Upstream sync ${branch#"$SYNC_BRANCH_PREFIX"/}" \
-      --body "Merges $up_ref at $up_head into $default.
+# run_pipeline <branch> <default> <upstream-ref> <upstream-head>: drive the
+# no-mistakes pipeline on the sync branch from the sync copy, its test step
+# skipped because the pull request's CI is the test gate. Without --yes it
+# returns at the first gate or outcome, and a rerun reattaches to the same run.
+run_pipeline() {
+  local branch=$1 default=$2 up_ref=$3 up_head=$4
+  ( cd "$SYNC_COPY" && no-mistakes axi run --skip test --intent "Land the upstream sync $branch: merge $up_ref at $up_head into $default through a pull request whose GitHub CI is the test gate, so the local test step is skipped. Keep the sync branch's history as it is: never rebase or squash it. The pull request must be merged with a merge commit, never a squash or rebase, so the upstream history is preserved." )
+}
 
-Merge this pull request with a merge commit.
-Do not squash or rebase it: either would flatten the upstream history this sync preserves.") || return 1
-  fi
-  [ -n "$url" ] || return 1
-  printf '%s\n' "$url"
+# open_pull_request <slug> <branch> <default>: echo the URL of the open pull
+# request the pipeline opened for the sync branch, or nothing yet.
+open_pull_request() {
+  local slug=$1 branch=$2 default=$3
+  gh pr list --repo "$slug" --head "$branch" --base "$default" --state open \
+    --json url --jq '.[0].url // empty'
 }
 
 # --- subcommands -----------------------------------------------------------
@@ -480,6 +487,18 @@ cmd_land() {
     refuse land "$SYNC_COPY has uncommitted changes; commit the resolved merge before landing"
   fi
 
+  git_repo fetch --quiet "$PUSH_REMOTE" \
+    || die "could not fetch $PUSH_REMOTE; check network access and the remote URL"
+  # The sync is on origin's default branch: the pull request was merged, so
+  # the disposable copy can go. This comes before the stale-sync checks,
+  # because the default branch or upstream moving on after the merge is
+  # routine and must not keep a landed sync copy alive.
+  if git_copy merge-base --is-ancestor HEAD "refs/remotes/$PUSH_REMOTE/$default" 2>/dev/null; then
+    printf 'landed: %s/%s contains %s\n' "$PUSH_REMOTE" "$default" "$branch"
+    remove_sync_copy
+    return 0
+  fi
+
   up_branch=$(upstream_default_branch) \
     || die "cannot determine the $UPSTREAM_REMOTE default branch"
   up_head=$(git_repo rev-parse "$UPSTREAM_REMOTE/$up_branch")
@@ -489,41 +508,39 @@ cmd_land() {
   if ! git_copy merge-base --is-ancestor "$default" HEAD; then
     refuse land "$default is not an ancestor of $branch; rebuild the sync on the current $default"
   fi
+  # Both landings publish the sync branch as it is, so it must already contain
+  # origin's default branch: nothing downstream may rebase it to catch up.
+  if git_repo show-ref --verify --quiet "refs/remotes/$PUSH_REMOTE/$default" \
+    && ! git_copy merge-base --is-ancestor "$PUSH_REMOTE/$default" HEAD; then
+    refuse land "$PUSH_REMOTE/$default has moved past this sync; rebuild it on the current $default"
+  fi
   # Cheap checks all happen before validation, so a stale sync fails in seconds
   # rather than after a lint or suite run.
-  git_repo fetch --quiet "$PUSH_REMOTE" \
-    || die "could not fetch $PUSH_REMOTE; check network access and the remote URL"
 
   if [ "$mode" = pull-request ]; then
-    # The pull request was merged: the sync is on origin's default branch, so
-    # the disposable copy can go.
-    if git_copy merge-base --is-ancestor HEAD "refs/remotes/$PUSH_REMOTE/$default" 2>/dev/null; then
-      printf 'landed: %s/%s contains %s\n' "$PUSH_REMOTE" "$default" "$branch"
-      remove_sync_copy
-      return 0
-    fi
+    command -v no-mistakes >/dev/null 2>&1 \
+      || refuse land "no-mistakes is required to publish the sync; nothing was pushed"
     command -v gh >/dev/null 2>&1 \
-      || refuse land "gh is required to open the pull request; nothing was pushed"
+      || refuse land "gh is required to find the pull request; nothing was pushed"
     slug=$(origin_repo_slug) \
       || die "cannot determine the forge repository behind $PUSH_REMOTE"
     if ! run_lint; then
       refuse land "lint is red; nothing was pushed"
     fi
-    # The sync branch only, never the default branch: the pull request's CI is
-    # the test gate and its merge is the repository owner's.
-    push_remote "$PUSH_REMOTE" --quiet "$branch:refs/heads/$branch"
-    printf 'pushed: %s %s\n' "$PUSH_REMOTE" "$branch"
-    url=$(open_pull_request "$slug" "$branch" "$default" "$UPSTREAM_REMOTE/$up_branch" "$up_head") \
-      || refuse land "$branch is pushed but the pull request could not be opened; run land again"
+    # The pipeline pushes the sync branch only, never the default branch: the
+    # pull request's CI is the test gate and its merge is the repository owner's.
+    run_pipeline "$branch" "$default" "$UPSTREAM_REMOTE/$up_branch" "$up_head" \
+      || refuse land "the no-mistakes run on $branch stopped short; inspect it with 'no-mistakes axi status' in $SYNC_COPY, then run land again"
+    url=$(open_pull_request "$slug" "$branch" "$default") \
+      || refuse land "the pull request for $branch could not be looked up; run land again"
+    if [ -z "$url" ]; then
+      printf 'pull-request: none yet; drive the no-mistakes run in %s to its pull request, then run land again\n' "$SYNC_COPY"
+      return 0
+    fi
     printf 'pull-request: %s\n' "$url"
     printf 'merge-with: a merge commit, never a squash or rebase\n'
     printf 'sync-copy: kept %s; run land again once the pull request is merged\n' "$SYNC_COPY"
     return 0
-  fi
-
-  if git_repo show-ref --verify --quiet "refs/remotes/$PUSH_REMOTE/$default" \
-    && ! git_copy merge-base --is-ancestor "$PUSH_REMOTE/$default" HEAD; then
-    refuse land "$PUSH_REMOTE/$default has moved past this sync; rebuild it on the current $default"
   fi
 
   # Green before landing. This path stops here on anything red.

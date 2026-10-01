@@ -1,6 +1,6 @@
 ---
 name: updatefirstofficer
-description: Merge the original upstream firstmate project into this firstofficer fork without losing the fork's own divergence. Use when the captain invokes /updatefirstofficer (e.g. "/updatefirstofficer", "sync from upstream", "pull in the latest from the original project"). Creates a dated upstream-update branch on origin, merges the upstream default branch into it, resolves ordinary conflicts, hands conflicts on deliberately drifted files to the captain, and publishes the sync as a pull request whose GitHub CI is the test gate and which the captain merges. Distinct from /updatefirstmate, which only fast-forwards this home and its secondmate homes from origin.
+description: Merge the original upstream firstmate project into this firstofficer fork without losing the fork's own divergence. Use when the captain invokes /updatefirstofficer (e.g. "/updatefirstofficer", "sync from upstream", "pull in the latest from the original project"). Creates a dated upstream-update branch on origin, merges the upstream default branch into it, resolves ordinary conflicts, hands conflicts on deliberately drifted files to the captain, and publishes the sync through the no-mistakes pipeline as a pull request whose GitHub CI is the test gate and which the captain merges. Distinct from /updatefirstmate, which only fast-forwards this home and its secondmate homes from origin.
 user-invocable: true
 metadata:
   internal: true
@@ -93,15 +93,21 @@ bin/fm-upstream-sync.sh land
 ```
 
 This is the standard way a sync lands.
-It lints the sync copy, pushes the dated sync branch to `origin`, and opens a pull request against the default branch, printing its URL on the `pull-request:` line.
+It lints the sync copy, then drives the no-mistakes pipeline on the dated sync branch from the sync copy with only its test step skipped.
+The pipeline reviews the sync, pushes the branch to `origin`, and opens a pull request against the default branch, so the sync carries the review attestation the default branch requires.
+Once the pull request exists, `land` prints its URL on the `pull-request:` line.
 GitHub CI on that pull request is the test gate, so run no full local suite: it costs hours here and CI covers the same ground in parallel.
 The script writes nothing to the default branch, and it never rebases or squashes the sync branch.
+It refuses a sync that `origin`'s default branch has moved past, so nothing has to rebase it to catch up; rebuild the sync on the current default branch instead.
+
+The pipeline returns at its first gate, and the script passes its output through.
+Drive each gate with `no-mistakes axi respond` from the sync copy as `/no-mistakes` describes, never with `--yes`, and run `land` again to reattach until it prints the pull request URL.
 
 Open the pull request without asking; the captain's invocation is the authority for that.
 Merging it is the captain's, under hard rule 2 of the anchor, and this command grants no merge authority of its own.
 Give the captain the full pull request URL once CI is green, and say explicitly that it must be merged with a merge commit, never a squash or rebase, because either would flatten the upstream history the sync preserves.
 
-If CI is red, fix it in the sync copy, commit there, and run `land` again: it pushes the fix to the same pull request.
+If CI is red, fix it in the sync copy, commit there, and run `land` again: the pipeline reviews the fix and pushes it to the same pull request.
 Never rebase, squash, amend, or force-push the sync branch while fixing.
 
 The offline path, `land --fast-forward`, validates with the full local suite and fast-forwards the default branch with no pull request.
@@ -111,7 +117,7 @@ Use it only when the captain asks for it.
 
 Summarise the outcome in the captain's own nouns under section 9 of the anchor.
 Say what came in from the original project, what you resolved, what still needs the captain, and where the fork now stands.
-Once the captain confirms the pull request is merged, run `bin/fm-upstream-sync.sh land` once more to remove the sync copy.
+Once the captain confirms the pull request is merged, run `bin/fm-upstream-sync.sh land` once more to remove the sync copy; it does so even after the default branch or upstream has moved on.
 Then run `/updatefirstmate` so this home and every secondmate home pick up what just landed, and re-read `CLAUDE.md` if the anchor changed.
 
 ## Safety
@@ -121,7 +127,7 @@ Then run `/updatefirstmate` so this home and every secondmate home pick up what 
 - **Never forces and never discards unlanded work.**
   Every refusal leaves the working tree exactly as it found it, `abort` keeps a sync branch that carries commits, and a refusal is a stop-and-investigate result rather than something to work around.
 - **Never writes to the default branch in the standard flow.**
-  Lint runs before any push, a red lint pushes nothing, and only the merged pull request moves the default branch.
+  Lint runs before the pipeline starts, a red lint pushes nothing, and only the merged pull request moves the default branch.
 - **Never resolves a deliberately drifted file.**
   The captain-decision paths are declared in the script and checked against the real drift on every run, so the declaration cannot quietly outlive the drift it describes.
 - **Only this repo.**

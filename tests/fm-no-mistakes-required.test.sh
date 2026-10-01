@@ -66,24 +66,7 @@ test_missing_head_fails() {
   pass "shared action rejects an attestation with no head_sha"
 }
 
-# The workflow exempts this repository's upstream-sync branches, which
-# bin/fm-upstream-sync.sh publishes with CI as their gate and no attestation.
-test_an_upstream_sync_branch_is_exempt_and_other_branches_are_judged() {
-  local output rc=0
-  output=$(PR_BODY='Upstream sync' PR_HEAD_SHA="$NEW_SHA" PR_AUTHOR=regression PR_NUMBER=3006 \
-    PR_HEAD_REF=upstream-update/2026-09-30 NM_EXEMPT_HEAD_BRANCHES='upstream-update/*' \
-    python3 "$VERIFY" 2>&1) || rc=$?
-  expect_code 0 "$rc" "shared action judged an exempt upstream-sync branch: $output"
-  rc=0
-  output=$(PR_BODY='Upstream sync' PR_HEAD_SHA="$NEW_SHA" PR_AUTHOR=regression PR_NUMBER=3006 \
-    PR_HEAD_REF=feat/upstream-update NM_EXEMPT_HEAD_BRANCHES='upstream-update/*' \
-    python3 "$VERIFY" 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "the upstream-sync exemption let an ordinary branch through"
-  pass "shared action exempts an upstream-sync head branch and still judges every other branch"
-}
-
 fetch_shared_verifier
 test_matching_head_and_completed_steps_pass
 test_mismatched_head_fails_with_both_shas
 test_missing_head_fails
-test_an_upstream_sync_branch_is_exempt_and_other_branches_are_judged

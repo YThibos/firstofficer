@@ -28,9 +28,3 @@ jobs:
     steps:
       - name: Verify no-mistakes signature and pipeline attestation
         uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@32d396ac0f29135daf7fcb9964aba9d5f4e796d6 # post-v1.57.1, untagged (action added in #819)
-        with:
-          # An upstream sync is a merge of already-reviewed upstream history,
-          # published by bin/fm-upstream-sync.sh with CI as its gate, so it
-          # cannot carry a pipeline attestation. Only a branch in this
-          # repository qualifies; a fork's branch of the same name is judged.
-          exempt-head-branches: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'upstream-update/*' || '' }}
