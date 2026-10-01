@@ -1,0 +1,107 @@
+origin/main before: 43a08e2
+
+$ fm-upstream-sync.sh preflight
+repo: /tmp/fm-sync-e2e.eQV7Pv/fork
+default-branch: main
+upstream-branch: upstream/main
+upstream-head: 2a758b7ce54428e2a7e2605b14bde638f908a77e
+merge-base: 8e170249f31428021b5bd78ae87e2e0b143aefc0
+incoming-commits: 2
+drift: FORK
+declared-drift: CLAUDE.md stale - fork-owned operating anchor that replaced upstream's symlink
+declared-drift: AGENTS.md stale - upstream contract whose rule changes are reconciled into the anchor by hand
+up-to-date: no
+sync-branch: upstream-update/2026-10-01
+preflight: ok
+rc=0
+
+$ fm-upstream-sync.sh merge
+declared-drift: CLAUDE.md stale - fork-owned operating anchor that replaced upstream's symlink
+declared-drift: AGENTS.md stale - upstream contract whose rule changes are reconciled into the anchor by hand
+sync-branch: upstream-update/2026-10-01
+sync-copy: /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync
+merged-from: upstream/main 2a758b7ce54428e2a7e2605b14bde638f908a77e
+agents-md: unchanged
+merge: clean
+rc=0
+
+$ fm-upstream-sync.sh land
+[stub fm-lint.sh ran in /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync]
+validate: lint ok
+[stub no-mistakes] cwd=/tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync args=axi run --skip test,rebase,ci --intent Land the upstream sync upstream-update/2026-10-01: merge upstream/main at 2a758b7ce54428e2a7e2605b14bde638f908a77e into main through a pull request whose GitHub CI is the test gate, so the local test step is skipped. The rebase and ci steps are skipped so the branch is never rebased or re-pushed. Keep the sync branch's history as it is: never rebase or squash it. The pull request must be merged with a merge commit, never a squash or rebase, so the upstream history is preserved.
+outcome: pr opened
+pull-request: https://github.com/acme/fork/pull/42
+merge-with: a merge commit, never a squash or rebase
+merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green
+sync-copy: kept /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync; run land again once the pull request is merged
+rc=0
+--- checks after standard land ---
+origin/main after land: 43a08e2 (unchanged = nothing fast-forwarded)
+origin/upstream-update/2026-10-01: de4dbd385b3f56ce19a4b3c4894ebfe96c08ef28 vs local sync HEAD de4dbd385b3f56ce19a4b3c4894ebfe96c08ef28
+origin/upstream-update/2026-10-01 parents (merge commit kept, not rebased/squashed): 2
+full local suite invoked: no
+no-mistakes invocations: 1
+
+$ fm-upstream-sync.sh land # rerun after finished run
+pull-request: https://github.com/acme/fork/pull/42
+merge-with: a merge commit, never a squash or rebase
+merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green
+sync-copy: kept /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync; run land again once the pull request is merged
+rc=0
+no-mistakes invocations after rerun: 1 (no new pipeline)
+--- adversarial: another PR lands on origin/main before the sync PR merges ---
+
+$ fm-upstream-sync.sh land # origin/main moved
+land: refused - origin/main has moved past this sync; merge it into upstream-update/2026-10-01 in /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync, never rebase, then land again
+rc=1
+pipeline not started on refusal: yes
+
+$ git merge origin/main (as instructed, never rebase)
+
+$ fm-upstream-sync.sh land
+[stub fm-lint.sh ran in /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync]
+validate: lint ok
+[stub no-mistakes] cwd=/tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync args=axi run --skip test,rebase,ci --intent Land the upstream sync upstream-update/2026-10-01: merge upstream/main at 2a758b7ce54428e2a7e2605b14bde638f908a77e into main through a pull request whose GitHub CI is the test gate, so the local test step is skipped. The rebase and ci steps are skipped so the branch is never rebased or re-pushed. Keep the sync branch's history as it is: never rebase or squash it. The pull request must be merged with a merge commit, never a squash or rebase, so the upstream history is preserved.
+outcome: pr opened
+pull-request: https://github.com/acme/fork/pull/42
+merge-with: a merge commit, never a squash or rebase
+merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green
+sync-copy: kept /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync; run land again once the pull request is merged
+rc=0
+origin/main still: e260426
+--- owner merges the PR with a merge commit on origin ---
+upstream moves on again
+
+$ fm-upstream-sync.sh land # cleanup after merge
+landed: origin/main contains upstream-update/2026-10-01
+sync-copy: removed /tmp/fm-sync-e2e.eQV7Pv/fork-upstream-sync
+rc=0
+sync copy exists afterwards: no
+upstream.git ever pushed by fork? upstream main = upstream later
+
+$ fm-upstream-sync.sh --help
+usage: fm-upstream-sync.sh <subcommand>
+
+  preflight   fetch upstream and report what a sync would do (creates nothing)
+  merge       create upstream-update/<YYYY-MM-DD> in the sync copy and merge
+              upstream into it there; prints the sync copy's path
+  land        lint the sync copy, then drive the no-mistakes pipeline on the
+              sync branch with its test, rebase, and ci steps skipped, so it
+              is reviewed, pushed unrebased, and opened as a pull request
+              against origin's default branch; the forge's CI is the test
+              gate. The pull request is expected to fail the required
+              no-mistakes check, so the repository owner merges it with an
+              admin override once CI is green, using a merge commit,
+              never a squash or rebase; this script never overrides or merges.
+              Run it again to continue the pipeline or push a fix, or after
+              the merge to remove the sync copy.
+  land --fast-forward
+              offline path: lint and run the full local suite, then push and
+              fast-forward origin's default branch with no pull request
+  abort       undo an in-progress merge and remove the sync copy
+
+The sync copy is a git worktree at <repo>-upstream-sync, outside the primary
+checkout, which the sync never changes; resolve conflicts in the sync copy.
+Never pushes to upstream, never forces, never discards unlanded work.
+A conflict in one of these is a captain decision, never an agent's:
+  CLAUDE.md	fork-owned operating anchor that replaced upstream's symlink

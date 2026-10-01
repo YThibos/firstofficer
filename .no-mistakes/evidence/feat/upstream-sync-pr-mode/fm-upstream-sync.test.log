@@ -25,4 +25,3 @@ ok - land refuses when there is no sync copy to land
 ok - land refuses while the upstream merge is still unresolved
 ok - abort undoes an unresolved merge, removes the sync copy, and leaves the primary checkout as it was
 ok - abort never deletes a sync branch that carries unlanded work
-bash tests/fm-upstream-sync.test.sh  4.62s user 5.05s system 103% cpu 9.354 total
