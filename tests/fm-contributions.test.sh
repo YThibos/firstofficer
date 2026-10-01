@@ -766,28 +766,31 @@ test_gitlab_failed_member_lookup_keeps_acknowledgement() {
 }
 
 test_gitlab_resolved_note_keeps_acknowledgement() {
-  local home
-  home=$(new_home gitlab-resolved-note)
-  gitlab_home "$home"
-  jq -n '[{id:23,system:false,type:"DiffNote",body:"Please clarify",author:{id:2,username:"maintainer"},
-    updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
-    || fail 'could not acknowledge the GitLab maintainer note'
-  jq '.[0] += {resolved:true,resolved_at:"2026-09-16T09:00:00.120Z",updated_at:"2026-09-16T09:00:00.124Z"}' \
-    "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a resolved GitLab note'
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 0' >/dev/null \
-    || fail 'resolving a thread re-raised an acknowledged GitLab note'
-  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'resolving a thread woke the supervisor again'
-  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 1 ] || fail 'a resolve-only change looked the author up again'
-  jq '.[0] += {body:"Please clarify, edited",updated_at:"2026-09-16T10:00:00Z"}' \
-    "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll an edited GitLab note'
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 1
-    and .[0].token == "note:23:2026-09-16T10:00:00Z" and .[0].body == "Please clarify, edited"' >/dev/null \
-    || fail 'a genuine edit of a resolved GitLab note was not re-raised'
-  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 2 ] || fail 'a genuine GitLab note edit did not wake once'
+  local home resolve
+  for resolve in '09:00:00.120Z 09:00:00.124Z' '09:00:00.998Z 09:00:01.003Z'; do
+    home=$(new_home "gitlab-resolved-note-${resolve:9:3}")
+    gitlab_home "$home"
+    jq -n '[{id:23,system:false,type:"DiffNote",body:"Please clarify",author:{id:2,username:"maintainer"},
+      updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
+      || fail 'could not acknowledge the GitLab maintainer note'
+    jq --arg resolved "2026-09-16T${resolve% *}" --arg updated "2026-09-16T${resolve#* }" \
+      '.[0] += {resolved:true,resolved_at:$resolved,updated_at:$updated}' \
+      "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a resolved GitLab note'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 0' >/dev/null \
+      || fail "resolving a thread re-raised an acknowledged GitLab note ($resolve)"
+    [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'resolving a thread woke the supervisor again'
+    [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 1 ] || fail 'a resolve-only change looked the author up again'
+    jq '.[0] += {body:"Please clarify, edited",updated_at:"2026-09-16T10:00:00Z"}' \
+      "$home/forge/notes.json" > "$home/forge/notes.next" && mv "$home/forge/notes.next" "$home/forge/notes.json"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll an edited GitLab note'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 1
+      and .[0].token == "note:23:2026-09-16T10:00:00Z" and .[0].body == "Please clarify, edited"' >/dev/null \
+      || fail 'a genuine edit of a resolved GitLab note was not re-raised'
+    [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 2 ] || fail 'a genuine GitLab note edit did not wake once'
+  done
   pass 'resolving a GitLab thread keeps the acknowledgement while a real edit re-raises'
 }
 
