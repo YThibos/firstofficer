@@ -515,7 +515,7 @@ cmd_land() {
     refuse land "$branch does not contain $UPSTREAM_REMOTE/$up_branch; it is not a completed sync"
   fi
   if ! git_copy merge-base --is-ancestor "$default" HEAD; then
-    refuse land "$default is not an ancestor of $branch; rebuild the sync on the current $default"
+    refuse land "$default has moved past this sync; merge it into $branch in $SYNC_COPY, never rebase, then land again"
   fi
   # Both landings publish the sync branch as it is, so it must already contain
   # origin's default branch: nothing downstream may rebase it to catch up.

@@ -99,8 +99,8 @@ Once the pull request exists, `land` prints its URL on the `pull-request:` line.
 GitHub CI on that pull request is the test gate, so run no full local suite: it costs hours here and CI covers the same ground in parallel.
 The script writes nothing to the default branch.
 With `rebase` and `ci` skipped, neither the script nor the pipeline rebases, squashes, or re-pushes the sync branch, and no CI monitor is left running to do so later.
-It refuses a sync that `origin`'s default branch has moved past.
-When that happens, merge `origin`'s default branch into the sync branch in the sync copy - a merge, never a rebase - commit it, and run `land` again.
+It refuses a sync that the local or `origin`'s default branch has moved past.
+When either happens, merge `origin`'s default branch into the sync branch in the sync copy - a merge, never a rebase - commit it, and run `land` again.
 
 The pipeline returns at its first gate, and the script passes its output through.
 Drive each gate with `no-mistakes axi respond` from the sync copy as `/no-mistakes` describes, never with `--yes`, and run `land` again to reattach until it prints the pull request URL.

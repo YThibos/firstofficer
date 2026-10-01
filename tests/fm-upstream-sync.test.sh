@@ -456,7 +456,22 @@ test_land_refuses_a_sync_that_origin_moved_past_without_starting_the_pipeline() 
   expect_code 1 "$rc" "land published a sync origin had moved past"
   assert_contains "$out" "origin/main has moved past this sync" "land did not say the sync is stale"
   assert_absent "$tmp/nm.log" "a stale sync still started the pipeline, which would rebase it"
-  pass "the standard landing refuses a sync origin's default branch moved past"
+
+  # /updatefirstmate then fast-forwards the local default branch too.
+  git -C "$tmp/fork" pull -q --ff-only origin main
+  rc=0
+  out=$(run_sync_forge "$tmp" land) || rc=$?
+  expect_code 1 "$rc" "land published a sync the local default branch had moved past"
+  assert_contains "$out" "main has moved past this sync; merge it into $SYNC_BRANCH" \
+    "land did not advise merging the local default branch into the sync"
+  assert_not_contains "$out" "rebuild" "land advised a rebuild the open pull request cannot survive"
+  assert_absent "$tmp/nm.log" "a stale sync still started the pipeline, which would rebase it"
+
+  # Following the advice: merge, never rebase, then land again.
+  git_q "$(copy_of "$tmp/fork")" merge -q --no-edit origin/main
+  out=$(run_sync_forge "$tmp" land) || fail "land refused a sync with the default branch merged in: $out"
+  assert_contains "$out" "pull-request: $PR_URL" "the merged-forward sync did not reach its pull request"
+  pass "the standard landing refuses a sync either default branch moved past, and merging it forward lands"
 }
 
 # The pipeline must skip test (CI is the test gate), and rebase and ci, either
