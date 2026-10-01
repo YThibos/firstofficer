@@ -13,7 +13,9 @@
 # stashed, or discarded.
 # Still skips (benignly) projects with no origin, missing remotes/branches, and
 # fetch failures. Delivery mode is not a skip reason: local-only projects publish
-# to a remote now, so their clones need the same refresh after a merge.
+# to a remote now, so their clones need the same refresh after a merge. A project
+# whose registry entry bin/fm-project-mode.sh refuses is skipped, naming that
+# command so its refusal is readable, rather than synced under a guessed posture.
 # A candidate under projects/ must be the root of its own work tree: git discovery
 # walks up, so a plain nested directory would otherwise resolve to the enclosing
 # repository (the firstmate checkout) and be synced under that directory's label.
@@ -323,6 +325,10 @@ sync_project() {
   proj_abs=$(cd "$PROJ" && pwd -P) || proj_abs=""
   if [ "$proj_top" != "$proj_abs" ]; then
     echo "$label: skipped: not a clone root (git would act on $proj_top)"
+    return 0
+  fi
+  if ! "$FM_ROOT/bin/fm-project-mode.sh" "$label" >/dev/null 2>&1; then
+    echo "$label: skipped: registry entry does not resolve to a delivery posture (run bin/fm-project-mode.sh $label for the refusal)"
     return 0
   fi
   # No mode is skipped by name: local-only projects publish now, so their clones

@@ -7,9 +7,10 @@
 # using whatever name the project's convention requires. The captain's projects
 # name every local-only branch after its JIRA ticket (feature/<KEY>-N,
 # chore/<KEY>-N, research/<KEY>-N), so the internal fm/<id> naming firstmate once
-# generated is retired and no current task creates it. Nothing writes the chosen
-# name back, so state/<id>.meta carries no branch= field; the authoritative
-# record is the branch the task's own worktree actually has checked out.
+# generated is retired and no current task creates it. bin/fm-spawn.sh records a
+# branch= field in state/<id>.meta only when the brief or the spawn names the
+# branch, and the callers read that field first; this resolves the rest, where
+# the record is the branch the task's own worktree actually has checked out.
 #
 # Resolution order, most authoritative first:
 #   1. The branch checked out in the task's worktree (meta's worktree=), when
