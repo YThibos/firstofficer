@@ -15,7 +15,8 @@
 #   B) Inheritance. The primary pushes a declared, extensible set of LOCAL
 #      (gitignored) config items - config/crew-dispatch.json, config/crew-harness,
 #      config/backlog-backend, config/backend, config/herdr-presentation-spaces,
-#      config/startup-memory-budget, and config/trace-context -
+#      config/startup-memory-budget, config/trace-context, and
+#      config/supervision-host-off -
 #      down into each secondmate home's config/, so the secondmate's OWN crewmates,
 #      dispatch profiles, backlog backend, runtime-backend default, Herdr
 #      presentation choice, startup-memory budget, and trace context inherit the
@@ -399,6 +400,27 @@ test_propagate_lib() {
   [ "$(cat "$d/home2/config/backlog-backend")" = manual ] || fail "backlog-backend not propagated alongside"
   [ "$(cat "$d/home2/config/backend")" = herdr ] || fail "backend not propagated alongside"
 
+  # 5b. the supervision-host opt-out is inherited and primary-authoritative,
+  # while each home's engine line stays its own: the primary's off reaches the
+  # secondmate and the real gate reads that home as off on a Claude primary
+  # despite its own engine line; clearing the primary's off converges it back on.
+  printf 'claude sonnet\n' > "$src/supervision-host"
+  printf 'default haiku\n' > "$d/home2/config/supervision-host"
+  : > "$src/supervision-host-off"
+  propagate_inheritable_config "$src" "$d/home2/config"
+  [ -f "$d/home2/config/supervision-host-off" ] || fail "a primary's supervision-host-off was not inherited"
+  if bash "$ROOT/bin/fm-supervision-engine-lib.sh" enabled "$d/home2/config" claude; then
+    fail "a secondmate that inherited the primary's opt-out still runs the supervision host"
+  fi
+  rm -f "$src/supervision-host-off"
+  propagate_inheritable_config "$src" "$d/home2/config"
+  [ -e "$d/home2/config/supervision-host-off" ] && fail "clearing the primary's supervision-host-off was not mirrored downstream"
+  bash "$ROOT/bin/fm-supervision-engine-lib.sh" enabled "$d/home2/config" claude \
+    || fail "a secondmate did not converge back on once the primary cleared its opt-out"
+  [ "$(cat "$d/home2/config/supervision-host" 2>/dev/null)" = 'default haiku' ] \
+    || fail "a secondmate's own supervision-host engine line was changed by convergence"
+  rm -f "$src/supervision-host"
+
   # 6. nothing to propagate -> destination dir is never created (a true no-op)
   rm -rf "$d/src3" "$d/dest3"
   mkdir -p "$d/src3"
@@ -459,6 +481,8 @@ make_seeded_home() {
   printf '# Firstmate\n' > "$home/AGENTS.md"
   printf '%s\n' "$id" > "$home/.fm-secondmate-home"
   printf 'charter\n' > "$home/data/charter.md"
+  printf '%s\n' 'projects/' 'state/' 'data/' 'config/' '.no-mistakes/' > "$home/.gitignore"
+  git -C "$home" init -q -b main
 }
 
 # spawn_secondmate <world> <id> <home> [explicit-harness]
@@ -498,6 +522,7 @@ test_spawn_split_and_inherit() {
   printf 'codex\n' > "$w/home/config/secondmate-harness"
   printf 'manual\n' > "$w/home/config/backlog-backend"
   printf 'zellij\n' > "$w/home/config/backend"
+  : > "$w/home/config/supervision-host-off"
   make_seeded_home "$sm" sm
 
   spawn_secondmate "$w" sm "$sm"
@@ -516,6 +541,11 @@ test_spawn_split_and_inherit() {
     || fail "split: home backend not inherited as zellij"
   [ -e "$sm/config/secondmate-harness" ] \
     && fail "split: secondmate-harness leaked into the secondmate home"
+  [ -f "$sm/config/supervision-host-off" ] \
+    || fail "split: home supervision-host-off not inherited"
+  if bash "$ROOT/bin/fm-supervision-engine-lib.sh" enabled "$sm/config" claude; then
+    fail "split: a secondmate spawned under an opted-out primary still runs the supervision host"
+  fi
   pass "B2 spawn: secondmate runs the secondmate harness; its home inherits declared config"
 }
 
@@ -670,6 +700,9 @@ case "${1:-}" in
       prev=
       for a in "$@"; do
         if [ "$prev" = "-l" ]; then
+          case "$a" in
+            ". '"*"'") staged=${a#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || a=$(cat "$staged") ;;
+          esac
           printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
         fi
         prev=$a
@@ -687,6 +720,17 @@ SH
   # node-less spawn host no real fleet member looks like.
   ln -sf "$(command -v node)" "$fakebin/node"
   printf '%s\n' "$fakebin"
+}
+
+# The --add-dir grant a Claude secondmate launch carries between its
+# permission flag and --settings: only the PARENT home's state/<id>.inbox,
+# real-path resolved the way the spawn's claude_add_dirs_flag resolves it.
+# Prints a trailing space so callers can drop it straight into an expected
+# command.
+sm_claude_add_dir() {  # <world> <id>
+  local real
+  real=$(cd "$1/home/state" && pwd -P)
+  printf "%s " "--add-dir '$real/$2.inbox'"
 }
 
 # spawn_secondmate_capture <world> <id> <home> <launchlog> [extra fm-spawn.sh args...]
@@ -794,7 +838,7 @@ test_spawn_secondmate_harness_model_token() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-token: meta model not opus (got '$(meta_field "$meta" model)')"
   [ "$(meta_field "$meta" effort)" = default ] || fail "model-token: meta effort not default (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions $(sm_claude_add_dir "$w" sm)--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
     "model-token: launch did not carry --model opus"
   assert_not_contains "$launch" "--effort" "model-token: launch must not carry an --effort flag"
   pass "C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta"
@@ -816,7 +860,7 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-effort-tokens: meta model not opus"
   [ "$(meta_field "$meta" effort)" = high ] || fail "model-effort-tokens: meta effort not high (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus' --effort 'high'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions $(sm_claude_add_dir "$w" sm)--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus' --effort 'high'" \
     "model-effort-tokens: launch did not carry both --model opus and --effort high"
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
@@ -1073,7 +1117,7 @@ make_fake_toolchain() {
   fakebin="$dir/fakebin"
   mkdir -p "$fakebin"
   fm_fake_exit0 "$fakebin" node chrome-devtools-axi
-  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.46
+  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.80
   cat > "$fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
@@ -1136,7 +1180,7 @@ SH
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
-  "--version ") printf '%s\n' '0.2.4' ;;
+  "--version ") printf '%s\n' '0.2.6' ;;
   "update --help") printf '%s\n' 'usage: tasks-axi update <id> [flags]' '  --archive-body' ;;
   "mv --help") printf '%s\n' 'usage: tasks-axi mv <id> [<id>...] --to <path-or-dir>' ;;
 esac
@@ -1146,7 +1190,7 @@ SH
   cat > "$fakebin/quota-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' '0.1.29'
+  printf '%s\n' '0.1.51'
   exit 0
 fi
 exit 0
@@ -1435,10 +1479,54 @@ test_spawn_secondmate_claude_permission_mode_auto() {
   meta="$w/home/state/sm.meta"
   [ "$(meta_field "$meta" harness)" = claude ] || fail "permmode: meta harness not claude"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --permission-mode auto --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
+  assert_contains "$launch" "claude --permission-mode auto $(sm_claude_add_dir "$w" sm)--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
     "permmode: secondmate launch did not swap the permission flag while keeping --model"
   assert_not_contains "$launch" "--dangerously-skip-permissions" "permmode: secondmate launch must not request bypass mode"
   pass "C2b spawn: config/claude-permission-mode=auto reaches a Claude secondmate launch"
+}
+
+# A second mate's steering inbox lives in the PARENT home's
+# state/<id>.inbox - outside the mate's own working directory - so an
+# auto-mode Claude Code (2.1.257+) parks on its one-time "Allow reads outside
+# the working directories?" question the first time the mate file-tool reads
+# a steer, and a "Block" answer recorded anywhere on the machine would refuse
+# the same read even under bypass. Drive the real emitted launch through a
+# claude stub that models that working-directory gate, under both permission
+# modes: the parent inbox must resolve inside the pane cwd or an --add-dir.
+test_spawn_secondmate_claude_grants_parent_inbox_dir() {
+  local w sm launchlog launch reqs fakebin out status eval_out eval_rc
+  for mode in auto bypass; do
+    w="$TMP_ROOT/spawn-claude-adddir-$mode"
+    sm="$w/sm"
+    launchlog="$w/launch.log"
+    mkdir -p "$w/home/config" "$w/home/state" "$w/home/data"
+    printf 'claude\n' > "$w/home/config/secondmate-harness"
+    printf '%s\n' "$mode" > "$w/home/config/claude-permission-mode"
+    make_seeded_home "$sm" sm
+
+    fakebin=$(make_launch_capturing_tmux "$w/tmux")
+    fm_fake_claude_outside_read_gate "$fakebin"
+    : > "$launchlog"
+    out=$(
+      PATH="$fakebin:$BLIND_BIN:$BASE_PATH" TMUX='' CLAUDECODE=1 \
+        FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$w/home" HOME="$w/home/user-home" CLAUDE_CONFIG_DIR='' \
+        FM_STATE_OVERRIDE="$w/home/state" FM_DATA_OVERRIDE="$w/home/data" \
+        FM_PROJECTS_OVERRIDE="$w/home/projects" FM_CONFIG_OVERRIDE="$w/home/config" \
+        FM_SPAWN_NO_GUARD=1 FM_FAKE_LAUNCH_LOG="$launchlog" \
+        "$ROOT/bin/fm-spawn.sh" sm "$sm" --secondmate 2>&1
+    )
+    status=$?
+    expect_code 0 "$status" "claude secondmate spawn under $mode should succeed"$'\n'"$out"
+    launch=$(cat "$launchlog")
+
+    reqs="$w/channel-requirements.txt"
+    printf '%s\n' "$w/home/state/sm.inbox" > "$reqs"
+    eval_out=$(fm_eval_launch "$launch" "$sm" "$fakebin" "FM_FAKE_CLAUDE_REQUIREMENTS=$reqs" 2>&1)
+    eval_rc=$?
+    [ "$eval_rc" -eq 0 ] \
+      || fail "claude secondmate launch under $mode would hit the outside-read gate on its parent inbox"$'\n'"$eval_out"
+  done
+  pass "claude secondmate launches cover the parent-home steering inbox in auto and bypass modes"
 }
 
 # The file is a captain-wide safety preference, so it inherits like
@@ -2226,7 +2314,9 @@ SH
       "$ROOT/bin/fm-config-push.sh" > "$first_out" 2>&1
   ) &
   first_pid=$!
-  for _ in $(seq 1 100); do
+  # The loop leaves as soon as the push reaches its first send, so a generous
+  # bound costs nothing on a fast host; a slow one needs several seconds.
+  for _ in $(seq 1 1500); do
     [ -e "$entered" ] && break
     sleep 0.02
   done
@@ -2661,6 +2751,7 @@ test_bootstrap_sweep_defers_dispatch_on_stale_unignored_home
 test_bootstrap_sweep_materializes_and_inherits_memory_default
 test_backend_inheritance_present_and_absent
 test_spawn_secondmate_claude_permission_mode_auto
+test_spawn_secondmate_claude_grants_parent_inbox_dir
 test_claude_permission_mode_inheritance_present_and_absent
 test_presentation_inheritance_default_on_and_opt_out
 test_bootstrap_sweep_surfaces_config_propagation_failure
