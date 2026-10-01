@@ -229,7 +229,10 @@ observe_gitlab() { # canonical URL, seen-token file; URL already parsed by fm_pr
   gitlab "$host" "$mr/notes?per_page=100" --paginate > "$TMP/notes.raw" || return 1
   # glab may print one merged array or one array per page.
   jq -s --slurpfile seen "$2" 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
-    | def stamp: try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null;
+    | def stamp: [try capture("^(?<base>.{19})(\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$") catch empty][0]
+      | if . == null then null else (try (.base + "Z" | fromdateiso8601) catch null) as $epoch
+        | if $epoch == null or .tz == "Z" then $epoch
+          else $epoch - (if .tz[:1] == "-" then -1 else 1 end) * ((.tz[1:3] | tonumber) * 3600 + (.tz[4:6] | tonumber) * 60) end end;
     map(("note:" + (.id | tostring) + ":") as $prefix
       | (.resolved_at | stamp) as $resolved | (.updated_at | stamp) as $updated
       | (if $resolved != null and $updated != null and $updated <= $resolved + 2

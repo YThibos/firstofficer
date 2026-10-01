@@ -767,7 +767,8 @@ test_gitlab_failed_member_lookup_keeps_acknowledgement() {
 
 test_gitlab_resolved_note_keeps_acknowledgement() {
   local home resolve
-  for resolve in '09:00:00.120Z 09:00:00.124Z' '09:00:00.998Z 09:00:01.003Z'; do
+  for resolve in '09:00:00.120Z 09:00:00.124Z' '09:00:00.998Z 09:00:01.003Z' \
+    '11:00:00.997+02:00 11:00:01.002+02:00'; do
     home=$(new_home "gitlab-resolved-note-${resolve:9:3}")
     gitlab_home "$home"
     jq -n '[{id:23,system:false,type:"DiffNote",body:"Please clarify",author:{id:2,username:"maintainer"},
