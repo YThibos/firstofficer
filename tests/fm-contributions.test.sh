@@ -669,9 +669,12 @@ case "$*" in
       merge_status:"can_be_merged",detailed_merge_status:$detailed,has_conflicts:false,author:{id:1,username:"author"},user:{can_merge:false},
       head_pipeline:{id:5,sha:$head,status:"success",started_at:"2026-09-16T07:00:00Z"}}' ;;
   "$mr/notes?per_page=100 --paginate") cat "$FORGE/notes.json" ;;
-  'projects/group%2Fsub%2Fproject/members/all?per_page=100 --paginate')
+  'projects/group%2Fsub%2Fproject/members/all/2')
     [ ! -f "$FORGE/member-forbidden" ] || { printf '{"message":"403 Forbidden"}'; exit 1; }
-    printf '[{"id":2,"access_level":40},{"id":3,"access_level":10}]\n' ;;
+    printf '{"id":2,"access_level":40}\n' ;;
+  'projects/group%2Fsub%2Fproject/members/all/3') printf '{"message":"404 Not found"}'; exit 1 ;;
+  'projects/group%2Fsub%2Fproject/members/all/4') printf '{"message":"403 Forbidden"}'; exit 1 ;;
+  'projects/group%2Fsub%2Fproject/members/all/'[5-9]) printf '{"id":%s,"access_level":30}\n' "${1##*/}" ;;
   *) printf 'unexpected glab fixture call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
@@ -699,14 +702,14 @@ test_gitlab_merge_request_is_observed() {
     {id:23,system:false,type:"DiffNote",body:"Please clarify; $(touch /tmp/never)",author:{id:2,username:"maintainer"},
      updated_at:"2026-09-16T08:01:00Z",position:{head_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]' > "$home/forge/notes.json"
   with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll GitLab notes'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 2 ] || fail 'each new commenter must be looked up once'
   with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not re-poll GitLab notes'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 2 ] || fail 'an already-seen GitLab note was looked up again'
   with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e --arg url "$GITLAB_URL" 'length == 1
     and .[0].author == "maintainer" and .[0].type == "review-comment" and .[0].source == ($url + "#note_23")
     and .[0].body == "Please clarify; $(touch /tmp/never)"' >/dev/null \
     || fail 'only the project member note must become a pending signal, as inert data'
   [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'one GitLab maintainer note must wake exactly once'
-  [ "$(grep -c '/members/all' "$home/forge/glab-calls")" = 2 ] \
-    || fail 'GitLab membership must be read once per poll, independent of the number of commenters'
   ! grep -Ev '^api --hostname git\.example\.test --method GET ' "$home/forge/glab-calls" >/dev/null \
     || fail 'GitLab observation issued something other than a GET read'
   pass 'a GitLab merge request is observed through glab and a member note wakes once'
@@ -732,10 +735,10 @@ test_gitlab_forbidden_member_lookup_is_not_unavailable() {
   gitlab_home "$home"
   jq -n '[{id:30,system:false,body:"opinion",author:{id:4,username:"hidden"},updated_at:"2026-09-16T08:01:00Z"}]' \
     > "$home/forge/notes.json"
-  : > "$home/forge/member-forbidden"
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed on a forbidden member lookup'
   [ -z "$out" ] || fail "a forbidden member lookup made the merge request unavailable: $out"
-  jq -e '.records[0].error == null and .records[0].pending == [] and .records[0].observation.events == []' \
+  jq -e '.records[0].error == null and .records[0].pending == [] and .records[0].seen == []
+    and .records[0].observation.events == []' \
     "$home/data/landing/contributions.json" >/dev/null \
     || fail "a forbidden member lookup failed the observation or counted a maintainer: $(cat "$home/data/landing/contributions.json")"
   bearings "$home" | jq -e '.contributions.checked == 1 and .contributions.unmeasured == 0' >/dev/null \
@@ -760,6 +763,25 @@ test_gitlab_failed_member_lookup_keeps_acknowledgement() {
     || fail 'an acknowledged GitLab note came back after a transient member lookup failure'
   [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'an acknowledged GitLab note woke again'
   pass 'a transient GitLab member lookup failure never re-raises an acknowledged note'
+}
+
+test_gitlab_member_lookups_are_capped_per_poll() {
+  local home
+  home=$(new_home gitlab-lookup-cap)
+  gitlab_home "$home"
+  jq -n '[range(5;10) | {id:(100 + .),system:false,body:"note",author:{id:.,username:("member" + tostring)},
+    updated_at:"2026-09-16T08:01:00Z"}]' > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll five new GitLab commenters'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 3 ] || fail 'one observation looked up more than three authors'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 3' >/dev/null \
+    || fail 'the first three looked-up maintainers did not become pending'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not re-poll GitLab commenters'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 5 ] || fail 'the remaining commenters were not looked up next'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll settled GitLab commenters'
+  [ "$(grep -c '/members/all/' "$home/forge/glab-calls")" = 5 ] || fail 'a steady-state poll still looked up members'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'map(.author) | sort == ["member5","member6","member7","member8","member9"]' \
+    >/dev/null || fail 'commenters over the cap were not reconsidered on a later poll'
+  pass 'GitLab member lookups are capped per poll and progress across polls'
 }
 
 test_gitlab_approval_states_map_to_review_decision() {
@@ -805,7 +827,7 @@ test_unavailable_gitlab_notifies_once_and_stays_disclosed() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_gitlab_forbidden_member_lookup_is_not_unavailable test_gitlab_failed_member_lookup_keeps_acknowledgement test_gitlab_approval_states_map_to_review_decision test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_gitlab_forbidden_member_lookup_is_not_unavailable test_gitlab_failed_member_lookup_keeps_acknowledgement test_gitlab_member_lookups_are_capped_per_poll test_gitlab_approval_states_map_to_review_decision test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

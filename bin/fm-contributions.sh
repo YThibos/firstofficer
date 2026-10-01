@@ -60,10 +60,14 @@
 # contribution author) and issue transitions to ready-for-pr persist as pending
 # before any wake. GitLab has no author association, so a non-system note counts
 # when its author is not the merge request author and is a project member at
-# Developer access or above. A member lookup that fails leaves that role unknown,
-# and a GitLab record keeps every token it has seen so such a gap never re-raises
-# an acknowledged note. poll appends ordinary durable check wakes through fm-wake-lib
-# and emits only newly durable signals for the authenticated check to surface.
+# Developer access or above. Only notes unseen by every owner need a member
+# lookup, at most three distinct authors per observation, so steady-state polls
+# make no lookup. A 404 or access below Developer marks the note seen without a
+# signal; a note whose author was over the cap or whose lookup failed stays
+# unseen for a later poll. A GitLab record keeps every token it has seen, so a
+# lookup gap never re-raises an acknowledged note. poll appends ordinary durable
+# check wakes through fm-wake-lib and emits only newly durable signals for the
+# authenticated check to surface.
 # ack removes
 # only the named pending token. A crash after enqueue can duplicate a wake but
 # cannot consume the pending signal. Source bodies are data, never commands.
@@ -206,7 +210,7 @@ gitlab() { # validated-host endpoint [glab api options]: GET only
     glab api --hostname "$host" --method GET "$@"
 }
 
-observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normalized JSON
+observe_gitlab() { # canonical URL, seen-token file; URL already parsed by fm_pr_url_parse -> normalized JSON
   local url=$1 host=$FM_PR_HOST project mr head after author
   if ! command -v glab >/dev/null 2>&1; then
     OBSERVE_ERROR='glab is required to observe a GitLab merge request'
@@ -222,23 +226,31 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
   author=$(jq -r .author.username "$TMP/core.json")
   gitlab "$host" "$mr/notes?per_page=100" --paginate > "$TMP/notes.raw" || return 1
   # glab may print one merged array or one array per page.
-  jq -s 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end' \
+  jq -s 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
+    | map(. + {token:("note:" + (.id | tostring) + ":" + (.updated_at // .created_at // ""))})' \
     "$TMP/notes.raw" > "$TMP/notes.json" || return 1
   : > "$TMP/members.json"
-  if jq -e --arg author "$author" 'any(.[]; .system != true and .author.username != $author)' "$TMP/notes.json" >/dev/null; then
-    if gitlab "$host" "projects/$project/members/all?per_page=100" --paginate > "$TMP/members.raw"; then
-      jq -c '.[] | {id,access_level} | select((.id | type == "number") and (.access_level | type == "number"))' \
-        "$TMP/members.raw" > "$TMP/members.json" 2>/dev/null || : > "$TMP/members.json"
+  while IFS= read -r member; do
+    if gitlab "$host" "projects/$project/members/all/$member" > "$TMP/member.json"; then
+      jq -c --argjson id "$member" '{id:$id,access_level} | select(.access_level | type == "number")' \
+        "$TMP/member.json" >> "$TMP/members.json" 2>/dev/null || :
     else
       [ "$BUDGET_EXHAUSTED" -eq 0 ] || return 1
+      if jq -e '.message // "" | tostring | test("^404")' "$TMP/member.json" >/dev/null 2>&1; then
+        printf '{"id":%s,"access_level":0}\n' "$member" >> "$TMP/members.json"
+      fi
     fi
-  fi
+  done < <(jq -r --arg author "$author" --slurpfile seen "$2" '[.[] | select(.system != true and .author.username != $author)
+    | select(.token as $t | $seen[0] | index($t) | not) | .author.id | select(type == "number") | floor]
+    | reduce .[] as $id ([]; if index($id) then . else . + [$id] end) | .[:3][]' "$TMP/notes.json")
   gitlab "$host" "$mr" > "$TMP/after.json" || return 1
   after=$(jq -r '.sha // ""' "$TMP/after.json")
   [ "$head" = "$after" ] || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
   jq -n --arg url "$url" --slurpfile core "$TMP/core.json" --slurpfile notes "$TMP/notes.json" \
-    --slurpfile members "$TMP/members.json" '
+    --slurpfile members "$TMP/members.json" --slurpfile seen "$2" '
     $core[0] as $c | $c.head_pipeline as $p
+    | [$notes[0][] | select(.system != true and .author.username != $c.author.username)
+        | select(.token as $t | $seen[0] | index($t) | not)] as $fresh
     | [$members[] | select(.access_level >= 30) | .id] as $maintainers
     | {head:$c.sha,state:(if $c.state == "merged" or $c.state == "closed" then $c.state else "open" end),
         draft:($c.draft // $c.work_in_progress // false),
@@ -255,9 +267,10 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
                 then {status:"in_progress",conclusion:null}
                 else {status:"completed",conclusion:null} end)]
           else [] end),
-        events:[$notes[0][] | select(.system != true and .author.username != $c.author.username)
-          | select(.author.id as $id | $maintainers | index($id) != null)
-          | {token:("note:" + (.id | tostring) + ":" + (.updated_at // .created_at // "")),
+        settled:[$fresh[] | select(.author.id as $id | ($members | map(.id) | index($id)) != null
+          and ($maintainers | index($id)) == null) | .token],
+        events:[$fresh[] | select(.author.id as $id | $maintainers | index($id) != null)
+          | {token,
              type:(if .type == "DiffNote" then "review-comment" else "comment" end),
              source:($url + "#note_" + (.id | tostring)),
              head:(if .type == "DiffNote" then .position.head_sha else null end),
@@ -267,13 +280,13 @@ observe_gitlab() { # canonical URL, already parsed by fm_pr_url_parse -> normali
       observation:$observed[0]}]} | valid_record' >/dev/null
 }
 
-observe() { # canonical contribution URL -> normalized JSON
+observe() { # canonical contribution URL, seen-token file -> normalized JSON
   local url=$1 part number kind endpoint head after label
   OBSERVE_ERROR='forge observation unavailable or changed during read'
   OBSERVE_ONCE=0
   if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = gitlab ]; then
     OBSERVE_ONCE=1
-    observe_gitlab "$url"
+    observe_gitlab "$url" "$2"
     return
   fi
   case "$url" in https://github.com/*) ;; *) return 1 ;; esac
@@ -373,7 +386,11 @@ poll() {
     [ "$(date +%s)" -lt "$DEADLINE" ] || break
     url=${row[0]}
     observed=0
-    observe "$url" || observed=$?
+    # Only a note unseen by every owner needs a member lookup.
+    jq -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '$ARGS.positional
+      | map(. as $t | [$saved[0][] | select(.task == $t) | .records[] | select(.url == $url) | .seen // []] | first // [])
+      | reduce .[1:][] as $s (.[0]; . - (. - $s))' --args "${row[@]:1}" > "$TMP/seen.json"
+    observe "$url" "$TMP/seen.json" || observed=$?
     # An observation the budget cut short is unmeasured, not unavailable: keep
     # every owner's prior record so the URL is observed first next poll.
     [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
@@ -393,8 +410,8 @@ poll() {
               [{token:("ready-for-pr:" + $now),type:"ready-for-pr",source:$old.url,head:null,body:"filed issue reached ready-for-pr"}]
               else [] end)) as $events
           | $old + {checked_at:$now,error:null,
-            observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)}),
-            seen:(($events | map(.token)) + (if $once == 1 then $old.seen // [] else [] end) | unique),
+            observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)} | del(.settled)),
+            seen:(($events | map(.token)) + (if $once == 1 then ($old.seen // []) + ($o.settled // []) else [] end) | unique),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
         # A GitLab owner that already holds this exact error has been told once.
