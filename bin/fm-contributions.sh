@@ -65,7 +65,9 @@
 # make no lookup. A 404 or access below Developer marks the note seen without a
 # signal; a note whose author was over the cap or whose lookup failed stays
 # unseen for a later poll. A GitLab record keeps every token it has seen, so a
-# lookup gap never re-raises an acknowledged note. poll appends ordinary durable
+# lookup gap never re-raises an acknowledged note. A note token carries its
+# updated_at, so an edit re-raises it; resolving its thread keeps the seen token
+# while updated_at is not later than resolved_at, to the second. poll appends ordinary durable
 # check wakes through fm-wake-lib and emits only newly durable signals for the
 # authenticated check to surface.
 # ack removes
@@ -226,8 +228,11 @@ observe_gitlab() { # canonical URL, seen-token file; URL already parsed by fm_pr
   author=$(jq -r .author.username "$TMP/core.json")
   gitlab "$host" "$mr/notes?per_page=100" --paginate > "$TMP/notes.raw" || return 1
   # glab may print one merged array or one array per page.
-  jq -s 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
-    | map(. + {token:("note:" + (.id | tostring) + ":" + (.updated_at // .created_at // ""))})' \
+  jq -s --slurpfile seen "$2" 'if all(.[]; type == "array") then add // [] else error("notes are not arrays") end
+    | map(("note:" + (.id | tostring) + ":") as $prefix
+      | (if (.resolved_at | type) == "string" and (.updated_at // "")[:19] <= .resolved_at[:19]
+          then [$seen[0][] | select(startswith($prefix))] | max else null end) as $kept
+      | . + {token:($kept // ($prefix + (.updated_at // .created_at // "")))})' \
     "$TMP/notes.raw" > "$TMP/notes.json" || return 1
   : > "$TMP/members.json"
   while IFS= read -r member; do
