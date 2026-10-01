@@ -60,7 +60,9 @@
 # contribution author) and issue transitions to ready-for-pr persist as pending
 # before any wake. GitLab has no author association, so a non-system note counts
 # when its author is not the merge request author and is a project member at
-# Developer access or above. A member lookup that fails leaves that role unknown. poll appends ordinary durable check wakes through fm-wake-lib
+# Developer access or above. A member lookup that fails leaves that role unknown,
+# and a GitLab record keeps every token it has seen so such a gap never re-raises
+# an acknowledged note. poll appends ordinary durable check wakes through fm-wake-lib
 # and emits only newly durable signals for the authenticated check to surface.
 # ack removes
 # only the named pending token. A crash after enqueue can duplicate a wake but
@@ -387,14 +389,14 @@ poll() {
         ([$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first)
         // {url:$url,kind:$kind,checked_at:null,observation:null,verdict:null,seen:[],pending:[],notified:[]}' > "$old"
       if [ "$observed" -eq 0 ]; then
-        jq -n --arg now "$NOW" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
+        jq -n --arg now "$NOW" --argjson once "$OBSERVE_ONCE" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
           $old[0] as $old | $observation[0] as $o
           | ($o.events + (if $o.ready == true and $old.observation.ready != true and (any($o.events[]; .type == "ready-for-pr") | not) then
               [{token:("ready-for-pr:" + $now),type:"ready-for-pr",source:$old.url,head:null,body:"filed issue reached ready-for-pr"}]
               else [] end)) as $events
           | $old + {checked_at:$now,error:null,
             observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)}),
-            seen:($events | map(.token)),
+            seen:(($events | map(.token)) + (if $once == 1 then $old.seen // [] else [] end) | unique),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
         # A GitLab owner that already holds this exact error has been told once.

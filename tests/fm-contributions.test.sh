@@ -669,7 +669,9 @@ case "$*" in
       merge_status:"can_be_merged",detailed_merge_status:$detailed,has_conflicts:false,author:{id:1,username:"author"},user:{can_merge:false},
       head_pipeline:{id:5,sha:$head,status:"success",started_at:"2026-09-16T07:00:00Z"}}' ;;
   "$mr/notes?per_page=100 --paginate") cat "$FORGE/notes.json" ;;
-  'projects/group%2Fsub%2Fproject/members/all/2') printf '{"id":2,"access_level":40}\n' ;;
+  'projects/group%2Fsub%2Fproject/members/all/2')
+    [ ! -f "$FORGE/member-forbidden" ] || { printf '{"message":"403 Forbidden"}'; exit 1; }
+    printf '{"id":2,"access_level":40}\n' ;;
   'projects/group%2Fsub%2Fproject/members/all/3') printf '{"message":"404 Not found"}'; exit 1 ;;
   'projects/group%2Fsub%2Fproject/members/all/4') printf '{"message":"403 Forbidden"}'; exit 1 ;;
   *) printf 'unexpected glab fixture call: %s\n' "$*" >&2; exit 1 ;;
@@ -740,6 +742,25 @@ test_gitlab_forbidden_member_lookup_is_not_unavailable() {
   pass 'a forbidden GitLab member lookup leaves the role unknown and the observation readable'
 }
 
+test_gitlab_failed_member_lookup_keeps_acknowledgement() {
+  local home
+  home=$(new_home gitlab-ack-gap)
+  gitlab_home "$home"
+  jq -n '[{id:23,system:false,body:"Please clarify",author:{id:2,username:"maintainer"},updated_at:"2026-09-16T08:01:00Z"}]' \
+    > "$home/forge/notes.json"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'could not poll a GitLab maintainer note'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" ack landing "$GITLAB_URL" 'note:23:2026-09-16T08:01:00Z' \
+    || fail 'could not acknowledge the GitLab maintainer note'
+  : > "$home/forge/member-forbidden"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'poll failed on a forbidden member lookup'
+  rm "$home/forge/member-forbidden"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'poll failed after the member lookup recovered'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 0' >/dev/null \
+    || fail 'an acknowledged GitLab note came back after a transient member lookup failure'
+  [ "$(awk 'END { print NR }' "$home/state/.wake-queue")" = 1 ] || fail 'an acknowledged GitLab note woke again'
+  pass 'a transient GitLab member lookup failure never re-raises an acknowledged note'
+}
+
 test_gitlab_approval_states_map_to_review_decision() {
   local home detailed decision
   for detailed in not_approved:REVIEW_REQUIRED requested_changes:CHANGES_REQUESTED; do
@@ -783,7 +804,7 @@ test_unavailable_gitlab_notifies_once_and_stays_disclosed() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_gitlab_forbidden_member_lookup_is_not_unavailable test_gitlab_approval_states_map_to_review_decision test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_gitlab_merge_request_is_observed test_gitlab_terminal_merge_request_needs_nobody test_gitlab_forbidden_member_lookup_is_not_unavailable test_gitlab_failed_member_lookup_keeps_acknowledgement test_gitlab_approval_states_map_to_review_decision test_unavailable_gitlab_notifies_once_and_stays_disclosed; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
