@@ -93,21 +93,26 @@ bin/fm-upstream-sync.sh land
 ```
 
 This is the standard way a sync lands.
-It lints the sync copy, then drives the no-mistakes pipeline on the dated sync branch from the sync copy with only its test step skipped.
-The pipeline reviews the sync, pushes the branch to `origin`, and opens a pull request against the default branch, so the sync carries the review attestation the default branch requires.
+It lints the sync copy, then drives the no-mistakes pipeline on the dated sync branch from the sync copy with its `test`, `rebase`, and `ci` steps skipped.
+The pipeline reviews the sync, pushes the branch to `origin` unrebased, and opens a pull request against the default branch.
 Once the pull request exists, `land` prints its URL on the `pull-request:` line.
 GitHub CI on that pull request is the test gate, so run no full local suite: it costs hours here and CI covers the same ground in parallel.
-The script writes nothing to the default branch, and it never rebases or squashes the sync branch.
-It refuses a sync that `origin`'s default branch has moved past, so nothing has to rebase it to catch up; rebuild the sync on the current default branch instead.
+The script writes nothing to the default branch.
+With `rebase` and `ci` skipped, neither the script nor the pipeline rebases, squashes, or re-pushes the sync branch, and no CI monitor is left running to do so later.
+It refuses a sync that `origin`'s default branch has moved past.
+When that happens, merge `origin`'s default branch into the sync branch in the sync copy - a merge, never a rebase - commit it, and run `land` again.
 
 The pipeline returns at its first gate, and the script passes its output through.
 Drive each gate with `no-mistakes axi respond` from the sync copy as `/no-mistakes` describes, never with `--yes`, and run `land` again to reattach until it prints the pull request URL.
 
 Open the pull request without asking; the captain's invocation is the authority for that.
 Merging it is the captain's, under hard rule 2 of the anchor, and this command grants no merge authority of its own.
-Give the captain the full pull request URL once CI is green, and say explicitly that it must be merged with a merge commit, never a squash or rebase, because either would flatten the upstream history the sync preserves.
+Because the pipeline skips its test step, the pull request is expected to fail the required "PR must be raised via no-mistakes" check.
+The captain merges each sync pull request with an admin override once GitHub CI is green; neither you nor the script ever performs the override or the merge.
+Give the captain the full pull request URL once CI is green, and say explicitly that it needs that admin override and must be merged with a merge commit, never a squash or rebase, because either would flatten the upstream history the sync preserves.
 
-If CI is red, fix it in the sync copy, commit there, and run `land` again: the pipeline reviews the fix and pushes it to the same pull request.
+If CI is red, first bring the sync copy up to date with any commits the pipeline pushed: read `branch_sync` from `no-mistakes axi status` in the sync copy and run `no-mistakes axi sync` there when it says `sync`.
+Then fix it in the sync copy, commit there, and run `land` again: the pipeline reviews the fix and pushes it to the same pull request.
 Never rebase, squash, amend, or force-push the sync branch while fixing.
 
 The offline path, `land --fast-forward`, validates with the full local suite and fast-forwards the default branch with no pull request.

@@ -38,15 +38,19 @@
 #               directory where conflicts are resolved and the merge committed.
 #               A no-op sync creates no branch and no sync copy.
 #   land        Lint the merged sync branch in the sync copy, then drive the
-#               no-mistakes pipeline on it with its test step skipped, so the
-#               sync is reviewed, pushed to origin, and opened as a pull request
-#               against origin's default branch with the review attestation
-#               that branch requires. Prints `pull-request: <url>` once the
-#               pipeline has opened it. The forge's CI on that pull request is
-#               the test gate, so no local suite runs, and the repository owner
-#               merges it WITH A MERGE COMMIT: a squash or rebase would flatten
-#               the upstream history the sync exists to preserve, and this
-#               script never rebases or squashes the branch itself. The sync
+#               no-mistakes pipeline on it with its test, rebase, and ci steps
+#               skipped, so the sync is reviewed, pushed to origin, and opened
+#               as a pull request against origin's default branch. Prints
+#               `pull-request: <url>` once the pipeline has opened it. The
+#               forge's CI on that pull request is the test gate, so no local
+#               suite runs. Skipping rebase and ci means neither this script nor
+#               the pipeline ever rebases, squashes, or re-pushes the branch.
+#               With the test step skipped, the pull request is expected to
+#               fail the required "PR must be raised via no-mistakes" check, so
+#               the repository owner merges it with an admin override once the
+#               forge's CI is green, WITH A MERGE COMMIT: a squash or rebase
+#               would flatten the upstream history the sync exists to preserve.
+#               This script never performs the override or the merge. The sync
 #               copy stays, so a pipeline gate or a red CI run is handled there
 #               and `land` re-run to continue. Once the pull request is merged,
 #               `land` again reports it and removes the sync copy, even after
@@ -107,10 +111,13 @@ usage: fm-upstream-sync.sh <subcommand>
   merge       create upstream-update/<YYYY-MM-DD> in the sync copy and merge
               upstream into it there; prints the sync copy's path
   land        lint the sync copy, then drive the no-mistakes pipeline on the
-              sync branch with its test step skipped, so it is reviewed,
-              pushed, and opened as a pull request against origin's default
-              branch; the forge's CI is the test gate and the repository
-              owner merges it with a merge commit, never a squash or rebase.
+              sync branch with its test, rebase, and ci steps skipped, so it
+              is reviewed, pushed unrebased, and opened as a pull request
+              against origin's default branch; the forge's CI is the test
+              gate. The pull request is expected to fail the required
+              no-mistakes check, so the repository owner merges it with an
+              admin override once CI is green, using a merge commit,
+              never a squash or rebase; this script never overrides or merges.
               Run it again to continue the pipeline or push a fix, or after
               the merge to remove the sync copy.
   land --fast-forward
@@ -315,12 +322,14 @@ remove_sync_copy() {
 }
 
 # run_pipeline <branch> <default> <upstream-ref> <upstream-head>: drive the
-# no-mistakes pipeline on the sync branch from the sync copy, its test step
-# skipped because the pull request's CI is the test gate. Without --yes it
-# returns at the first gate or outcome, and a rerun reattaches to the same run.
+# no-mistakes pipeline on the sync branch from the sync copy. The test step is
+# skipped because the pull request's CI is the test gate, and the rebase and ci
+# steps because either could rebase and re-push the merge-bearing branch.
+# Without --yes it returns at the first gate or outcome, and a rerun reattaches
+# to the same run.
 run_pipeline() {
   local branch=$1 default=$2 up_ref=$3 up_head=$4
-  ( cd "$SYNC_COPY" && no-mistakes axi run --skip test --intent "Land the upstream sync $branch: merge $up_ref at $up_head into $default through a pull request whose GitHub CI is the test gate, so the local test step is skipped. Keep the sync branch's history as it is: never rebase or squash it. The pull request must be merged with a merge commit, never a squash or rebase, so the upstream history is preserved." )
+  ( cd "$SYNC_COPY" && no-mistakes axi run --skip test,rebase,ci --intent "Land the upstream sync $branch: merge $up_ref at $up_head into $default through a pull request whose GitHub CI is the test gate, so the local test step is skipped. The rebase and ci steps are skipped so the branch is never rebased or re-pushed. Keep the sync branch's history as it is: never rebase or squash it. The pull request must be merged with a merge commit, never a squash or rebase, so the upstream history is preserved." )
 }
 
 # open_pull_request <slug> <branch> <default>: echo the URL of the open pull
@@ -512,7 +521,7 @@ cmd_land() {
   # origin's default branch: nothing downstream may rebase it to catch up.
   if git_repo show-ref --verify --quiet "refs/remotes/$PUSH_REMOTE/$default" \
     && ! git_copy merge-base --is-ancestor "$PUSH_REMOTE/$default" HEAD; then
-    refuse land "$PUSH_REMOTE/$default has moved past this sync; rebuild it on the current $default"
+    refuse land "$PUSH_REMOTE/$default has moved past this sync; merge it into $branch in $SYNC_COPY, never rebase, then land again"
   fi
   # Cheap checks all happen before validation, so a stale sync fails in seconds
   # rather than after a lint or suite run.
@@ -539,6 +548,7 @@ cmd_land() {
     fi
     printf 'pull-request: %s\n' "$url"
     printf 'merge-with: a merge commit, never a squash or rebase\n'
+    printf 'merge-by: the repository owner, with an admin override of the required no-mistakes check once CI is green\n'
     printf 'sync-copy: kept %s; run land again once the pull request is merged\n' "$SYNC_COPY"
     return 0
   fi

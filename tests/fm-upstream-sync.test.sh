@@ -369,11 +369,11 @@ test_the_standard_landing_opens_a_pull_request_and_leaves_the_default_branch_alo
   assert_contains "$out" "pull-request: $PR_URL" "land did not report the pull request the pipeline opened"
   assert_contains "$out" "merge commit, never a squash or rebase" \
     "land did not tell the merger to keep upstream history"
+  assert_contains "$out" "admin override" "land did not say the owner merges past the required check"
   assert_absent "$copy/.tests-ran" "the standard landing ran the full local suite"
 
   log=$(cat "$tmp/nm.log")
-  assert_contains "$log" "$copy axi run --skip test --intent " \
-    "land did not drive the pipeline from the sync copy with only its test step skipped"
+  assert_contains "$log" "$copy axi run --skip " "land did not drive the pipeline from the sync copy"
   assert_contains "$log" "never rebase or squash" "the pipeline intent did not keep the sync branch's history"
   assert_contains "$log" "merged with a merge commit" "the pipeline intent did not carry the merge instruction"
   assert_not_contains "$log" "--yes" "land auto-resolved the pipeline's gates"
@@ -408,7 +408,7 @@ test_a_second_land_publishes_the_fix_through_the_pipeline() {
   assert_contains "$out" "pull-request: $PR_URL" "the second land did not report the open pull request"
   [ "$(git -C "$tmp/origin.git" rev-parse "$SYNC_BRANCH")" = "$(git -C "$copy" rev-parse HEAD)" ] \
     || fail "the second land did not publish the fix"
-  [ "$(grep -c " axi run --skip test " "$tmp/nm.log")" -eq 2 ] \
+  [ "$(grep -c " axi run --skip " "$tmp/nm.log")" -eq 2 ] \
     || fail "the second land did not drive the pipeline again"
   pass "landing again publishes the fix through the pipeline and reports the same pull request"
 }
@@ -457,6 +457,22 @@ test_land_refuses_a_sync_that_origin_moved_past_without_starting_the_pipeline() 
   assert_contains "$out" "origin/main has moved past this sync" "land did not say the sync is stale"
   assert_absent "$tmp/nm.log" "a stale sync still started the pipeline, which would rebase it"
   pass "the standard landing refuses a sync origin's default branch moved past"
+}
+
+# The pipeline must skip test (CI is the test gate), and rebase and ci, either
+# of which could rebase and re-push the merge-bearing sync branch.
+test_the_pipeline_skips_test_rebase_and_ci() {
+  local tmp out skips
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-skips)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed: $out"
+  skips=$(sed -nE 's/.* axi run --skip ([^ ]+) .*/\1/p' "$tmp/nm.log" | tr ',' '\n' | LC_ALL=C sort | paste -sd, -)
+  [ "$skips" = "ci,rebase,test" ] \
+    || fail "the pipeline skipped '$skips', not exactly test, rebase, and ci"
+  pass "the pipeline skips exactly its test, rebase, and ci steps"
 }
 
 test_land_refuses_a_red_lint_and_pushes_nothing() {
@@ -689,6 +705,7 @@ test_the_standard_landing_opens_a_pull_request_and_leaves_the_default_branch_alo
 test_a_second_land_publishes_the_fix_through_the_pipeline
 test_land_after_the_pull_request_merged_removes_the_sync_copy_once_main_and_upstream_moved
 test_land_refuses_a_sync_that_origin_moved_past_without_starting_the_pipeline
+test_the_pipeline_skips_test_rebase_and_ci
 test_land_refuses_a_red_lint_and_pushes_nothing
 test_land_without_the_gate_or_a_forge_client_pushes_nothing
 test_a_pipeline_that_stops_short_is_reported_and_a_rerun_continues_it
