@@ -473,7 +473,7 @@ EOF
 }
 
 cmd_land() {
-  local mode=pull-request default branch up_branch up_head before after slug url
+  local mode=pull-request default branch up_branch up_head before after slug url=
 
   case "${1:-}" in
     '') ;;
@@ -533,15 +533,23 @@ cmd_land() {
       || refuse land "gh is required to find the pull request; nothing was pushed"
     slug=$(origin_repo_slug) \
       || die "cannot determine the forge repository behind $PUSH_REMOTE"
-    if ! run_lint; then
-      refuse land "lint is red; nothing was pushed"
+    # Origin's sync branch already holds this sync, so a finished run is only
+    # reported: a fresh pipeline would review the same head again.
+    if git_copy merge-base --is-ancestor HEAD "refs/remotes/$PUSH_REMOTE/$branch" 2>/dev/null; then
+      url=$(open_pull_request "$slug" "$branch" "$default") \
+        || refuse land "the pull request for $branch could not be looked up; run land again"
     fi
-    # The pipeline pushes the sync branch only, never the default branch: the
-    # pull request's CI is the test gate and its merge is the repository owner's.
-    run_pipeline "$branch" "$default" "$UPSTREAM_REMOTE/$up_branch" "$up_head" \
-      || refuse land "the no-mistakes run on $branch stopped short; inspect it with 'no-mistakes axi status' in $SYNC_COPY, then run land again"
-    url=$(open_pull_request "$slug" "$branch" "$default") \
-      || refuse land "the pull request for $branch could not be looked up; run land again"
+    if [ -z "$url" ]; then
+      if ! run_lint; then
+        refuse land "lint is red; nothing was pushed"
+      fi
+      # The pipeline pushes the sync branch only, never the default branch: the
+      # pull request's CI is the test gate and its merge is the repository owner's.
+      run_pipeline "$branch" "$default" "$UPSTREAM_REMOTE/$up_branch" "$up_head" \
+        || refuse land "the no-mistakes run on $branch stopped short; inspect it with 'no-mistakes axi status' in $SYNC_COPY, then run land again"
+      url=$(open_pull_request "$slug" "$branch" "$default") \
+        || refuse land "the pull request for $branch could not be looked up; run land again"
+    fi
     if [ -z "$url" ]; then
       printf 'pull-request: none yet; drive the no-mistakes run in %s to its pull request, then run land again\n' "$SYNC_COPY"
       return 0

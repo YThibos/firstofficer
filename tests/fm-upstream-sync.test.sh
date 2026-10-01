@@ -413,6 +413,33 @@ test_a_second_land_publishes_the_fix_through_the_pipeline() {
   pass "landing again publishes the fix through the pipeline and reports the same pull request"
 }
 
+test_land_after_a_finished_run_reports_the_pull_request_without_a_new_run() {
+  local tmp out copy work
+  tmp=$(fm_test_tmproot fm-upstream-sync-pr-finished)
+  fixture "$tmp"
+  upstream_commit "$tmp" NOTES.md 'upstream notes' 'upstream notes'
+  copy=$(copy_of "$tmp/fork")
+
+  out=$(run_sync "$tmp/fork" merge) || fail "merge failed: $out"
+  out=$(run_sync_forge "$tmp" land) || fail "land failed: $out"
+  # The finished run's review pushed a fix the sync copy does not have yet.
+  work="$tmp/review-fix"
+  git clone -q --branch "$SYNC_BRANCH" "$tmp/origin.git" "$work"
+  printf 'review fix\n' > "$work/REVIEW.md"
+  commit_in "$work" 'fix what review found'
+  git -C "$work" push -q origin "$SYNC_BRANCH"
+
+  out=$(run_sync_forge "$tmp" land) || fail "land after the finished run failed: $out"
+  assert_contains "$out" "pull-request: $PR_URL" "land did not report the open pull request"
+  assert_contains "$out" "merge commit, never a squash or rebase" \
+    "land did not tell the merger to keep upstream history"
+  assert_not_contains "$out" "validate: lint" "land linted a sync origin already holds"
+  [ "$(grep -c " axi run " "$tmp/nm.log")" -eq 1 ] \
+    || fail "land started a second pipeline for a sync origin already holds"
+  assert_present "$copy" "land removed the sync copy before the pull request merged"
+  pass "landing again after a finished run reports the pull request without starting a new run"
+}
+
 test_land_after_the_pull_request_merged_removes_the_sync_copy_once_main_and_upstream_moved() {
   local tmp out copy work
   tmp=$(fm_test_tmproot fm-upstream-sync-pr-merged)
@@ -718,6 +745,7 @@ test_a_conflicted_merge_never_touches_the_primary_checkout
 test_a_second_merge_refuses_while_a_sync_copy_exists
 test_the_standard_landing_opens_a_pull_request_and_leaves_the_default_branch_alone
 test_a_second_land_publishes_the_fix_through_the_pipeline
+test_land_after_a_finished_run_reports_the_pull_request_without_a_new_run
 test_land_after_the_pull_request_merged_removes_the_sync_copy_once_main_and_upstream_moved
 test_land_refuses_a_sync_that_origin_moved_past_without_starting_the_pipeline
 test_the_pipeline_skips_test_rebase_and_ci
