@@ -70,9 +70,10 @@ is_orphaned() { # <pid>
   local parent
   parent=$(ppid_of "$1")
   case "$parent" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$parent" = 1 ] && return 0
-  [ "$(ppid_of "$parent")" = 1 ]
+  [ "$parent" = 1 ] || [ "$parent" = "$ORPHAN_REAPER" ] && return 0
+  [ "$(ppid_of "$parent")" = 1 ] || [ "$(ppid_of "$parent")" = "$ORPHAN_REAPER" ]
 }
+ORPHAN_REAPER=$(fm_orphan_reaper_pid)
 
 # Wait up to <seconds> for <pid> to be reparented to an orphan reaper (see
 # is_orphaned) after its launching shell exits; 0 when it does.

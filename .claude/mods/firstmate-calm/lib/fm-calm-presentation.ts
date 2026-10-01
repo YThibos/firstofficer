@@ -5,10 +5,21 @@
 // a mid-turn working note, and which transcript rows Calm hides. It shares Pi Calm's
 // broad presentation boundary: genuine user prompts, genuine agent responses, and
 // working activity stay visible; tool rows, tool groups, classified working notes, and
-// canonically classified operational user rows hide. docs/calm.md owns the exact
+// canonically classified operational user rows hide, including a record-backed doorbell
+// once the caller has read the record it names. docs/calm.md owns the exact
 // captain-facing contract and docs/configuration.md
 // the persisted preference schema. Everything here is pure so tests run it under Node.
-import { classifyFirstmateOperationalText } from "./fm-operational-input.ts";
+import {
+  classifyFirstmateOperationalText,
+  firstmateOperationalDoorbellPath,
+  firstmateOperationalRecordKind,
+} from "./fm-operational-input.ts";
+import {
+  CALM_PRESERVE_MIN_CHARS,
+  calmTextIsSubstantive,
+} from "./fm-calm-preservation.ts";
+
+export { CALM_PRESERVE_MIN_CHARS } from "./fm-calm-preservation.ts";
 
 /** The environment variables that select the effective Firstmate home, as the mod reads them. */
 export type CalmHomeEnvironment = {
@@ -67,18 +78,6 @@ export type CalmStepOutcome = {
   readonly toolUses: readonly unknown[];
 };
 
-/**
- * Single-line narration in session history topped out around 215 characters, while
- * substantive single-line content began around 270; every multi-line message was
- * substantive, so this empirical boundary stays deliberately tunable.
- */
-export const CALM_PRESERVE_MIN_CHARS = 240;
-
-/** Whether text is substantive enough to preserve despite ending alongside a tool call. */
-function shouldPreserveMidTurnText(text: string): boolean {
-  const trimmedText = text.trim();
-  return text.includes("\n") || trimmedText.length >= CALM_PRESERVE_MIN_CHARS;
-}
 
 /**
  * Whether text from a model step is a mid-turn working note: the model did not end
@@ -88,7 +87,7 @@ function shouldPreserveMidTurnText(text: string): boolean {
  */
 export function stepTextIsWorkingNote(step: CalmStepOutcome, text: string): boolean {
   const midTurn = step.stopReason === "tool_use" || (step.stopReason === "max_tokens" && step.toolUses.length > 0);
-  return midTurn && !shouldPreserveMidTurnText(text);
+  return midTurn && !calmTextIsSubstantive(text);
 }
 
 /** A trimmed text key that retains whether the raw row contained a newline. */
@@ -130,7 +129,7 @@ export function classifyRestoredTranscript(rows: readonly CalmSessionRow[]): {
         break;
       }
     }
-    if (followedByToolCall && shouldPreserveMidTurnText(row.text)) finalReplies.add(key);
+    if (followedByToolCall && calmTextIsSubstantive(row.text)) finalReplies.add(key);
     else if (followedByToolCall) notes.add(key);
     else finalReplies.add(key);
   }
@@ -141,4 +140,18 @@ export function classifyRestoredTranscript(rows: readonly CalmSessionRow[]): {
 /** Whether a user row's text is a canonically classified Firstmate operational input. */
 export function userTextIsOperational(text: string): boolean {
   return classifyFirstmateOperationalText(text) !== undefined;
+}
+
+/**
+ * The record a user row names when its text is a record-backed operational doorbell,
+ * the carrier for harnesses that strip U+2063 from submitted prompts. The doorbell text
+ * alone proves nothing; `recordIsOperational` decides from the record's content.
+ */
+export function userTextOperationalRecord(text: string): string | undefined {
+  return firstmateOperationalDoorbellPath(text);
+}
+
+/** Whether a doorbell's record, as read (undefined when unreadable), holds a current envelope. */
+export function recordIsOperational(content: string | undefined): boolean {
+  return content !== undefined && firstmateOperationalRecordKind(content) !== undefined;
 }

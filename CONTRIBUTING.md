@@ -32,6 +32,23 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
+## Maintaining required checks
+
+GitHub required checks are configured in the repository's existing main ruleset, not activated by committing workflow YAML.
+When applying this CI layout, preserve its existing pull-request, merge-method, linear-history, deletion, non-fast-forward, and administrator-bypass settings.
+Add required status checks with `strict_required_status_checks_policy: false`; a main update alone must not force a branch update and retest.
+Bind the checks to the GitHub Actions app already producing them, rather than accepting the same context from any integration.
+No new app installation or manual runner setup is needed for that setting.
+
+Require the actual job contexts: `Lint 1`, `Lint 2`, `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 9`, `Behavior tests (Herdr)`, `Behavior timing aggregate`, and `PR must be raised via no-mistakes`.
+The last name is the compliance job context, not its workflow title; its existing automation exceptions remain unchanged.
+The timing aggregate is not a substitute for individual jobs because it can succeed while collecting evidence from a failed run.
+
+Apply the approved rule change only after the corresponding workflow is green and landed, confirming exact names and the Actions integration id from real checks first.
+Snapshot the current ruleset, amend that same rule with the authenticated GitHub API or settings UI, and read back both the ruleset and effective branch rules.
+Verify missing or red checks prevent ordinary merging without creating a test merge; administrator override intentionally remains available.
+Coordinate any workflow rollback with its required-check names so a retired check cannot leave ordinary merges waiting forever.
+
 ## Repo conventions
 
 - This repo is a template for running a firstmate orchestrator agent.
@@ -51,7 +68,9 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
-  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, pinned actionlint workflow lint, and the backend-purity check rejecting direct Beads CLI calls in core `bin/` scripts), and both CI and the no-mistakes pre-push gate invoke it with no arguments.
+  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, pinned actionlint workflow lint, and the backend-purity check rejecting direct Beads CLI calls in core `bin/` scripts).
+  CI uses its full canonical partitions; the no-mistakes pre-push gate uses its context-selected default.
+  `docs/fm-test-portable-shards.md` owns partition verification and performance evidence.
   Its header and `--help` output own the exact local lint modes, file-set selection, and analysis flags.
   A malformed `.github/workflows/*.yml`, including a self-broken `ci.yml`, fails that local lint path before merge because a broken workflow cannot report its own breakage.
   It pins one exact shellcheck version and one exact actionlint version and refuses to run under any other.
@@ -71,7 +90,7 @@ Before making any such change, load the agent-only `firstmate-coding-guidelines`
 It has the knowledge-placement rules that keep the always-loaded anchor from regrowing after each diet pass.
 There is no reliable way for `bin/fm-brief.sh`'s scaffold to detect that a task's repo is firstmate itself, so firstmate adds this skill's load line to firstmate-repo briefs by hand.
 A crewmate picking up such a brief should load the skill even if the brief predates this instruction.
-For the same reason the generated brief's project-memory step does not apply here: `bin/fm-ensure-agents-md.sh` maintains a *project's* memory file and its `CLAUDE.md` symlink, and this repo deliberately keeps two real files instead, so running it against this repo reports a conflict by design rather than reconciling anything.
+Never run `bin/fm-ensure-agents-md.sh` against this repo: it is a manual project-initialization utility that no brief calls, it expects a *project's* `CLAUDE.md` to be the `@AGENTS.md` pointer file, and this repo deliberately keeps two distinct real files instead, so it reports a conflict by design rather than reconciling anything.
 When supervising live crewmates, keep firstmate's own long validation or build commands in the background so watcher wakes can still be handled.
 Crewmate validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in firstmate docs.
 Firstmate's wrapper still matters: crewmates route every `ask-user` finding to firstmate, which applies `ask-user-authority`, and crewmates never pass `--yes` or `-y` because either flag bypasses that check and any required captain escalation.

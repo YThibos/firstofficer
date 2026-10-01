@@ -192,7 +192,9 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-limit-warning-lib.sh" "$dir/bin/fm-limit-warning-lib.sh"
   cp "$ROOT/bin/fm-limit-park-lib.sh" "$dir/bin/fm-limit-park-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
+  cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$dir/bin/fm-supervision-engine-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-path-lib.sh" "$dir/bin/fm-path-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
@@ -896,7 +898,7 @@ test_tracked_claude_entries_inert_under_grok() {
   dir="$TMP_ROOT/claude-entries-grok-inert"
   mkdir -p "$dir/bin"
   for script in fm-turnend-guard.sh fm-claude-stop-autoarm.sh fm-sessionstart-run.sh \
-    fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-subagent-pretool-check.sh; do
+    fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-subagent-pretool-check.sh fm-host-mirror.sh; do
     printf '#!/usr/bin/env bash\nprintf ran >> %q\n' "$dir/invoked" > "$dir/bin/$script"
     chmod +x "$dir/bin/$script"
   done
@@ -937,7 +939,7 @@ test_tracked_claude_entries_inert_under_grok() {
       || fail "tracked entry for $target ran under a legacy GROK_AGENT environment"
   done < <(jq -r '.hooks[][].hooks[].command' "$ROOT/.claude/settings.json")
 
-  [ "$guarded" -eq 5 ] || fail "expected 5 grok-guarded tracked entries, saw $guarded"
+  [ "$guarded" -eq 7 ] || fail "expected 7 grok-guarded tracked entries, saw $guarded"
   [ "$unguarded" -eq 1 ] || fail "expected 1 documented unguarded tracked entry, saw $unguarded"
   pass "tracked .claude/settings.json entries: $guarded inert under grok, the documented subagent exception still armed, all live under Claude"
 }
@@ -1217,12 +1219,18 @@ install_integrated_autoarm() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-path-lib.sh" "$dir/bin/fm-path-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
+  cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$dir/bin/fm-supervision-engine-lib.sh"
   chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh"
   ln -s /bin/bash "$dir/fake-claude"
+  # These cases drive the watcher arm, so the home opts out of the supervision
+  # host a Claude home otherwise runs by default.
+  mkdir -p "$dir/config"
+  : > "$dir/config/supervision-host-off"
 }
 
 run_integrated_autoarm() {
@@ -1646,12 +1654,11 @@ test_hook_claude_mode_integrated_monotonic_fail_open() {
 }
 
 # The auto-arm's ledger epoch advances only when the hook reaches its
-# generation claim. A missing session lock keeps the hook inert by its identity
-# contract, so the ledger stays at the exhausted-failure epoch the hook wrote
-# before it went quiet. The block budget used to advance only on an epoch
-# change, so this shape re-blocked without limit and the attended fail-open
-# never fired: the budget must count consecutive re-blocks against an unchanged
-# epoch instead.
+# generation claim. An unowned hook with no session lock stays inert, so the
+# ledger stays at the exhausted-failure epoch the hook wrote before it went
+# quiet. The block budget used to advance only on an epoch change, so this
+# shape re-blocked without limit and the attended fail-open never fired: the
+# budget must count consecutive re-blocks against an unchanged epoch instead.
 test_hook_claude_mode_frozen_epoch_reaches_bounded_fail_open() {
   local dir out status guard_out guard_status i pid identity count epoch_line
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-frozen-epoch")
@@ -1665,6 +1672,8 @@ test_hook_claude_mode_frozen_epoch_reaches_bounded_fail_open() {
   expect_code 0 "$guard_status" "the first failed epoch must own its Stop handoff"
   epoch_line=$(sed -n '1p' "$dir/state/.claude-autoarm-epoch")
 
+  # Remove the dead lock left by the fixture arm so this case isolates the
+  # frozen-ledger accounting path rather than the live foreign-owner escape.
   rm -f "$dir/state/.lock"
   for i in 1 2 3 4; do
     out=$(run_integrated_autoarm_unowned "$dir"); status=$?
@@ -1912,7 +1921,13 @@ test_hook_never_blocks_a_session_without_the_fleet_lock() {
   holder=$FOREIGN_LOCK_HOLDER
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
-    if [ "$status" -ne 0 ] || [ -n "$out" ]; then
+    # Claude mode may name the foreign owner in one diagnostic line; anything
+    # else, or a nonzero exit, is a block.
+    case "$out" in
+      ''|*'SUPERVISION IS OWNED BY ANOTHER LIVE SESSION'*) ;;
+      *) status=1 ;;
+    esac
+    if [ "$status" -ne 0 ]; then
       kill "$holder" 2>/dev/null || true
       wait "$holder" 2>/dev/null || true
       fail "--claude stop $i blocked a session that does not hold the fleet lock (exit $status): $out"
