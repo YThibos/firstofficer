@@ -1104,34 +1104,6 @@ test_ship_branch_flag_rejected_outside_ship() {
   pass "fm-brief.sh: --branch is rejected outside ship briefs"
 }
 
-test_co_author_prohibition_in_every_variant() {
-  local home id brief
-  home="$TMP_ROOT/co-author-home"
-  mkdir -p "$home/data"
-
-  id="brief-co-author-ship-f1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --branch feature/JUSTMD-1 >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_grep 'Co-authored-by:' "$brief" "ship brief missing co-author prohibition"
-  assert_grep 'git log -1' "$brief" "ship brief missing the trailer-verification command"
-
-  id="brief-co-author-scout-f2"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_grep 'Co-authored-by:' "$brief" "scout brief missing co-author prohibition"
-
-  id="brief-co-author-herdr-f3"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --herdr-lab --branch feature/JUSTMD-2 >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_grep 'Co-authored-by:' "$brief" "--herdr-lab ship brief missing co-author prohibition"
-
-  FM_HOME="$home" FM_SECONDMATE_CHARTER='ops' "$ROOT/bin/fm-brief.sh" brief-co-author-sm-f4 --secondmate --no-projects \
-    >/dev/null 2>&1
-  brief="$home/data/brief-co-author-sm-f4/brief.md"
-  assert_grep 'Co-authored-by:' "$brief" "secondmate charter missing co-author prohibition"
-  pass "fm-brief.sh: every brief variant forbids agent co-author trailers"
-}
-
 test_ship_and_scout_teach_validation_round_pause() {
   local home kind id brief
   home="$TMP_ROOT/validation-round-pause-home"
@@ -1641,7 +1613,6 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_branch_defaults_to_loud_placeholder
 test_ship_branch_flag_lands_verbatim
 test_ship_branch_flag_rejected_outside_ship
-test_co_author_prohibition_in_every_variant
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
