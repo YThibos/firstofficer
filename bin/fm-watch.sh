@@ -1537,28 +1537,8 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
 # runs last of the three, so the two cheaper deferrals keep the panes they
 # already own on their existing bounded cadences and only a pane that would
 # otherwise alarm pays for a backend read.
-#
-# The pipeline-liveness read that follows the wait consult exists because a worker blocked on a
-# foreground `no-mistakes axi run` sits on a legitimately static pane for many
-# minutes, so a timer paced purely on pane age escalates it every window and
-# reaches demand-deep-inspection on a crew that was working the whole time.
-# A live pipeline restarts the timer instead of escalating, so the escalation
-# count is not advanced and the next window asks again - the moment the pipeline
-# stops being demonstrably alive, the ordinary escalation follows one window
-# later. Either absorption also clears the count the way handle_paused_stale
-# does, because demand-deep-inspection means the same pane escalated that many
-# times in a row, and a crew demonstrably working in between breaks the row.
-# A window whose task has no running pipeline never gets an `alive` answer at
-# all and behaves exactly as it did before.
-#
-# A pane idle at its prompt is also asked whether its own agent is waiting on a
-# background job it started in its worktree - a test suite, or a backgrounded
-# drive call (crew_background_job_of owns the evidence and its bound). That
-# defers exactly as a live pipeline does. A busy pane is
-# never asked, because its own foreground command has the same process shape
-# and a hung foreground call is what the busy-turn bound exists to catch.
-wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash> [idle|busy]
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 pane=${7:-idle} since age n reason evidence job
+wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash>
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -1575,21 +1555,6 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
         if evidence=$(wedge_wait_evidence "$task") &&
            wedge_defer_wait "$win" "$since_file" "$label" "$age" "$evidence"; then
           return 0
-        fi
-        if crew_pipeline_alive "$task"; then
-          date +%s > "$since_file"
-          rm -f "$escalation_file"
-          triage_log "absorbed $label (pipeline still working, escalation deferred): $win"
-          return
-        fi
-        if [ "$pane" = idle ]; then
-          job=$(crew_background_job_of "$task" "$STATE")
-          if [ -n "$job" ]; then
-            date +%s > "$since_file"
-            rm -f "$escalation_file"
-            triage_log "absorbed $label (idle on its own background job pid $job, escalation deferred): $win"
-            return
-          fi
         fi
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then
           wedge_defer_writing "$win" "$since_file" "$label" "$age"
@@ -1848,7 +1813,7 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
     handle_paused_stale "$win" "$task" "$h"
     return 0
   fi
-  wedge_timer_check "$win" "$since_file" "busy (no completed turn)" "$escalation_file" "$task" "$h" busy
+  wedge_timer_check "$win" "$since_file" "busy (no completed turn)" "$escalation_file" "$task" "$h"
   return 1
 }
 
@@ -3288,29 +3253,15 @@ EOF
           #     Surface immediately so firstmate inspects the inconclusive state
           #     (it may be done via an interactive menu that wrote no done: status,
           #     waiting on a decision, or wedged) instead of leaving the finish to
-          #     wait out the timer - unless the worker declared no wait and its
-          #     idle agent is visibly waiting on its own background job
-          #     (crew_background_job_of), which is absorbed like `working` so the
-          #     wedge timer, not an immediate wake, owns that quiet stretch.
+          #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             task=$(window_to_task "$w" "$STATE")
-            stale_class=$(pause_state_class "$w" "$task")
-            stale_job=
-            if [ "$stale_class" = none ] \
-              && ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
-              stale_job=$(crew_background_job_of "$task" "$STATE")
-              [ -z "$stale_job" ] || stale_class=working
-            fi
-            case "$stale_class" in
+            case "$(pause_state_class "$w" "$task")" in
               working)
                 clear_pause_tracking "$key"
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
-                if [ -n "$stale_job" ]; then
-                  triage_log "absorbed non-terminal stale (idle on its own background job pid $stale_job): $w"
-                else
-                  triage_log "absorbed non-terminal stale (provably working): $w"
-                fi
+                triage_log "absorbed non-terminal stale (provably working): $w"
                 ;;
               paused)
                 handle_paused_stale "$w" "$task" "$h"

@@ -680,42 +680,6 @@ tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
 ```
 
-## Wedge escalation liveness evidence
-
-The CI-monitor exemption in `bin/fm-crew-state.sh --pipeline-liveness` rests on the installed validator's own quiet threshold and CI-monitor bound, checked on 2026-09-03 against no-mistakes v1.41.2.
-
-```sh
-no-mistakes axi status
-no-mistakes axi logs --step ci --run 01M1K1E6GJE46J39EYS36T3Q7P
-```
-
-Observed: the completed run reported `ci,completed,0,1796271`, a CI step of 29m56s, whose entire step log held five entries - monitoring start, checks running, checks passed, one base-branch re-arm, and the merge.
-The installed defaults are `step_quiet_warning: "10m"` and `ci_timeout: "168h"`, so `last_activity` carries the `quiet` prefix for most of any real CI phase while the run is healthy.
-`axi status` builds `active_steps` from the running and fixing steps alone, so a row's presence is itself the evidence that its step is active.
-
-The background-job deferral (`crew_background_job_of` in `bin/fm-classify-lib.sh`) rests on the process shape Claude Code gives its Bash tool commands, checked on 2026-09-25 against Claude Code 2.1.282 on Linux by starting a real background command from a live worker and querying from a foreground shell outside its worktree.
-
-```sh
-# in the worker, as a background Bash command:
-cd <task worktree> && sleep 240
-# from a foreground command whose cwd is outside the worktree:
-bash -c '. bin/fm-classify-lib.sh; crew_background_job_of <task> <state-dir>'
-ps -o pid,ppid,pgid,tty,etime,comm -p <reported pid>
-```
-
-Observed: the reported pid was a `zsh -c` process whose parent was the `claude` process, whose process group id equalled its own pid, with no controlling terminal (`?`), a working directory of the task worktree, and `sleep 240` as its child.
-After the background command was stopped, the same query reported nothing.
-A record naming a different worktree reported only the firstmate session's own background shell in that other directory, never the worker's job.
-No other harness was installed on that host, so for the rest the deferral is unverified and simply never answers where a harness's commands take another shape, leaving their escalation schedule unchanged.
-
-Deterministic entry points:
-
-```sh
-tests/fm-crew-state.test.sh
-tests/fm-watch-triage.test.sh
-tests/fm-watcher-lock.test.sh
-```
-
 ## Parked-by-usage-limit footers
 
 The footers `bin/fm-limit-park-lib.sh` matches for the `claude` harness were read on 2026-09-03 out of the shipped Claude Code binary, version 2.1.259, rather than transcribed from a screenshot.
