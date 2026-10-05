@@ -15,7 +15,6 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-LIB="$ROOT/bin/fm-session-lock-lib.sh"
 LOCK="$ROOT/bin/fm-lock.sh"
 TMP_ROOT=$(fm_test_tmproot fm-session-lock-limit-stop)
 BASE_PATH=$PATH
