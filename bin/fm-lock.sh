@@ -241,7 +241,7 @@ if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   fi
   # A holder stopped on a usage limit is the one live holder the claim below may
   # take over, so only a holder that is not provably stopped refuses early.
-  if fm_harness_pid_alive "$old" && ! fm_session_limit_stopped "$old" "$FM_HOME"; then
+  if fm_harness_pid_alive "$old" && ! fm_session_limit_stopped "$old" "$FM_HOME" "$STATE"; then
     refuse_live_owner "$old"
   fi
 fi
@@ -269,7 +269,7 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     fm_session_lock_owned_by_self "$STATE" && confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
     if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
-      if fm_session_limit_stopped "$old" "$FM_HOME"; then
+      if fm_session_limit_stopped "$old" "$FM_HOME" "$STATE"; then
         TOOK_OVER=$old
       else
         refuse_live_owner "$old"

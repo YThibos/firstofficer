@@ -484,8 +484,7 @@ It checks that a newly appended keyed decision is classified without rereading e
 
 `tests/fm-subagent-pretool-check.test.sh` proves Claude retains only the non-status Bash seatbelts.
 
-`tests/fm-session-lock-identity.test.sh` covers the shared harness-identity rules behind `fm_harness_pid_alive`, including the versioned-launcher argv[0] match, the non-harness versioned process it must still reject, and dead or unrelated live pids.
-`tests/fm-session-lock-limit-stop.test.sh` covers the shared-service boundary that keeps that identity off the Claude background daemon every session shares, and the usage-limit takeover `bin/fm-lock.sh` allows on top of it.
+`tests/fm-session-lock-identity.test.sh` covers the unclaimed-standby rule behind `fm_harness_pid_alive`, and `tests/fm-session-lock-limit-stop.test.sh` covers the usage-limit takeover `bin/fm-lock.sh` allows on top of the shared ownership model.
 
 `tests/fm-claude-stop-autoarm.test.sh` covers:
 
