@@ -116,13 +116,6 @@ The exception has these limits:
 - Malformed, absent, dead, or ancestry-uncertain lock records do not satisfy this Claude-specific exception and retain the ordinary guard behavior.
 - A missing or mismatched sidecar or an untrusted id adds nothing to the verdict, so a live owner outside the ancestry still takes this exit exactly as before.
 
-### Stand-down for a foreign fleet-lock holder
-
-Before any mode blocks, the guard stands down when another live harness session holds the home's fleet lock, `state/.lock`.
-Repairing supervision is a fleet mutation that only the lock holder may perform, so blocking any other session only forces turns it is forbidden to use; in 2026-09 a read-only Claude primary was held in a Stop-hook loop this way until its usage limit ran out, twice.
-The holder test is the session lock's own: `fm_session_lock_owned_by_self` and `fm_harness_pid_alive` in `bin/fm-session-lock-lib.sh`, whose contract [`session-lock.md`](session-lock.md) owns.
-A missing, malformed, dead, or otherwise reclaimable lock is not that case, because this session can claim it, so the guard still blocks there.
-
 ### Pull-warning verdict by supervision model
 
 `bin/fm-guard.sh`, the pull warning, instead uses the model-aware `fm_watcher_supervision_verdict` from `bin/fm-wake-lib.sh`.
@@ -396,10 +389,6 @@ Claude drops that exit 2 when it terminated the hook at the configured timeout i
 The first fresh exhausted-failure epoch preserves its handoff without consuming a blocked-stop count.
 Later fresh failed epochs advance the same monotonic progression instead of resetting it.
 When none of those proofs appears, the guard re-blocks up to `FM_CLAUDE_TURNEND_BLOCK_BUDGET` times (default 3, below Claude's 8-block override).
-That bound is a hard per-session cap, recorded in `state/.turnend-claude-hard-cap` keyed only by the Claude session id and independent of every epoch rule below: once a session has been blocked that many times, every further would-be block is allowed instead, with one loud `systemMessage` line the first time.
-Only positive proof that supervision is back clears the cap, either an idle home or a completed failure-episode reset (`fm_failure_episode_reset` in `bin/fm-wake-lib.sh`), so no epoch accounting, ledger rewrite, or failure-notice change can restart it.
-A cap that cannot be recorded allows the stop, because an unrecordable cap bounds nothing.
-It exists because the epoch rules decide only which stops block, and a session that cannot act on a block, such as one whose wake drain the permission classifier keeps denying, would otherwise be forced to continue until its usage limit ran out.
 In Claude mode, positive watcher recovery clears the block budget, failure notice, and attended alarm together under the existing budget lock before either hook reports ordinary recovery.
 
 The block budget is charged by two rules:
@@ -423,8 +412,8 @@ The one loud attended fail-open is available only when all of these hold:
 - A final check finds neither a healthy watcher nor an automatic continuation.
 
 After that alarm, the Stop auto-arm suppresses further exit-2 continuations until positive watcher recovery, so the final fail-open remains reachable.
-The alarm cannot repeat during that failure episode, and a later unhealthy stop blocks again only while the hard cap above still has room.
-A positively verified healthy watcher clears the failure notice, alarm, block budget, and hard cap for a future independent episode.
+The alarm cannot repeat during that failure episode, and a later unhealthy stop blocks again.
+A positively verified healthy watcher clears the failure notice, alarm, and block budget for a future independent episode.
 A Claude failure notice describes the automatic mechanism as broken and does not direct a routine manual background arm.
 
 ### Passive adapters
@@ -583,8 +572,6 @@ Child crewmate and scout worktrees are already outside the shared primary scope,
 `tests/fm-turnend-guard.test.sh` covers:
 
 - The predicate.
-- The stand-down for a session whose fleet lock another live harness holds, reproducing the 2026-09 loop.
-- The per-session hard cap surviving every epoch and ledger reset and clearing only on healthy supervision.
 - Main and secondmate primary scope.
 - Child-worktree exclusion.
 - `FM_HOME` and `FM_STATE_OVERRIDE` precedence.
