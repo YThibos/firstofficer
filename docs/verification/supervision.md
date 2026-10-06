@@ -372,17 +372,7 @@ No live unattended Claude background session ran on the verifying machine: that 
 The same suite ingests a keyed remote-secondmate parent reply through the real adapter, establishes the incremental OPEN DECISIONS cursor, interrupts supervision, and proves re-arm replays every unacknowledged queue row plus the still-open decision through the ordinary drain path.
 It also covers decision-only recovery, interrupted handling, handling-window generation reuse, non-fatal moved-generation acknowledgement with sequence-bounded consumption, and a persistent successor remaining live after recovery is acknowledged.
 
-On 2026-08-20 with Claude Code 2.1.235, a session launched from a versioned release binary could not acquire its home lock at all: Claude Code execs that binary directly, so the process name is the version string (`2.1.235`), which matches no harness name and is not the bare `node` or `python` the interpreter fallback expected.
-That fix added a rule reading argv[0] rather than the rest of the command line, so a process that merely mentions a harness in an argument still cannot claim a home's lock; `fm_harness_process_matches()` now owns that rule together with the path-component evidence above.
-`bin/fm-session-lock-lib.sh` owns the full rule and `tests/fm-session-lock-identity.test.sh` pins the argv[0] cases deterministically.
-
-On 2026-08-27 with Claude Code 2.1.247, that same walk was found resolving a background session to `claude daemon run`, the supervisor every background session on the machine descends from and which outlives all of them.
-`ps -eo pid,ppid,comm,args` showed the session's own host `claude bg-pty-host` (pid 3617, process name `2.1.247`) parented directly by that daemon (pid 3492, process name `claude`), and because the daemon is claude-named the walk extended past the host and returned the daemon instead.
-That breaks ownership twice: the daemon never exits, so a lock recording it reads as live forever and refuses every later session, and every concurrent background session in the home resolves to that one pid, so no two of them can tell each other apart.
-`fm_harness_process_matches()` now rejects a process shared across sessions before any of its three rules, matching the subcommand in argv[1] rather than a substring of the command line, so the walk stops one hop below such a process and keeps the session's own host, and a lock already recording one reads back as stale and reclaimable.
-Re-run against the same live processes, the daemon is rejected while pids 3617, 3655, 2827, and a plain foreground `claude` all still resolve as harnesses.
-
-On the same date, `bin/fm-lock.sh` gained the one takeover a live holder permits: a holder whose session is positively identified as stopped on a usage limit.
+On 2026-08-27, `bin/fm-lock.sh` gained the one takeover a live holder permits: a holder whose session is positively identified as stopped on a usage limit.
 The two verbatim messages `bin/fm-transcript-limit-stop.mjs` matches, `You've hit your session limit` and `You've hit your monthly spend limit`, were both read from real transcripts under `~/.claude/projects`, alongside transient `API Error:` records that must never authorise a takeover.
 Run over the 60 real transcripts on that machine containing the session-limit text, the classifier called 28 stopped and 32 still working, the latter being sessions that resumed after the limit cleared and therefore end on an ordinary record.
 Review of that change found the transcript tail alone insufficient: resuming a limit-stopped session reuses its session id and its `.jsonl`, so until the resumed session writes a new conversational record the tail still ends on the limit error while that session is live and holding the lock.
@@ -390,36 +380,15 @@ The same 60-transcript survey confirms resumed sessions continue in the same fil
 The takeover therefore also requires the last record's own instant to be at or after the holder process's start time, read from that process's age via the POSIX `ps -o etime=` field rather than from any file timestamp, and refuses when either value is missing or unparseable.
 `etimes` was tried first and rejected: it is a procps extension that BSD `ps` refuses outright, so on macOS, a supported host, every takeover would have refused and the feature would have been a silent no-op.
 
-A later review found the sibling window still open: a holder's argv is fixed at exec, so a session that replaces its conversation in place through `/clear`, `/new`, or `/fork` keeps naming the transcript of the session it replaced, whose tail is the limit record that same process wrote.
-Claude Code's per-pid session record at `<config-root>/sessions/<pid>.json` was checked against every live session on that machine: it carries the session's CURRENT `sessionId`, its `cwd`, and a `procStart` that exactly matches field 22 of `/proc/<pid>/stat`, and its `sessionId` resolves to a real existing transcript in every case.
-The takeover now refuses when such a record inside the holder's own process tree names a different session, as a purely restrictive cross-check: resolution still comes from argv alone, and a record that is missing, unreadable, unparseable, or whose `procStart` does not match the live process adds no restriction at all.
-That `procStart` verification needs `/proc`, so on a non-Linux host every record is unverifiable and the cross-check changes nothing there.
-
-A third review closed the last resolution window, in the argv the two rules above both trust.
-The session id was resolved from the space-joined string `ps -o args=` prints, in which a real `--session-id <uuid>` pair cannot be told apart from that text inside a single argument.
-That was reproduced on 2026-08-28 with Claude Code 2.1.247 against the live session implementing the change, whose task brief is one argv element and quotes a session id:
-
-```sh
-ps -o args= -p 9378 | sed 's/.* --session-id //; s/ .*//'
-tr '\0' '\n' < /proc/9378/cmdline | grep -cx -- --session-id
-node bin/fm-transcript-limit-stop.mjs \
-  ~/.claude/projects/-home-thibyann001-firstofficer/8d537afb-bead-496f-9d7d-d2bdc7c8d6d8.jsonl 0
-```
-
-Observed result: the flattened parse yielded `8d537afb-bead-496f-9d7d-d2bdc7c8d6d8`, a session that process has never run; the discrete argv holds `0` elements equal to `--session-id`; and the classifier exits `0` on that quoted session's transcript.
-A working session would therefore have had its lock taken on a stranger's limit-stop evidence.
-`fm_claude_session_id()` now reads the NUL-separated elements of `/proc/<pid>/cmdline` and takes the element after a `--session-id` element, so the pair is unambiguous.
-There is deliberately no fallback to the flattened string, because a fallback reinstates the ambiguity, which makes the takeover Linux-only and a no-op on macOS; that supersedes the earlier `etimes` rationale above, where portable process age was expected to be what carried the feature to Darwin.
-The live sessions on that machine were re-checked in the same pass.
-Pids 2768, 2769, 2823, and 2825 each expose exactly one `--session-id` argv element followed by a session id, of which 2769 and 2823 name a transcript present on disk while 2768 and 2825 name one that does not exist yet and therefore refuse, as an unreadable transcript must.
-Pid 9378, a session started with no explicit session id, exposes no such element at all and is unresolvable, which is the documented consequence for any session whose id never reaches its own argv.
+The takeover now reads the holder's session id from `state/.lock-session`, the trusted id the holder recorded beside the lock and which `bin/fm-lock.sh` refreshes when that same process re-keys its conversation with `/clear`, so neither the holder's argv nor Claude Code's per-pid records are consulted for it.
+That consolidation onto the shared ownership model replaced an earlier argv and per-pid-record resolution, which needed `/proc` and was Linux-only; with the start time read through `ps -o etime=`, the takeover no longer depends on `/proc` at all.
+No live limit-stopped session was available when that change was made, so its coverage is the deterministic suite below.
 
 The transcript directory mangling was checked at the same time and deliberately left narrow.
 All 72 real project directories on that machine were compared with the working directory each transcript records internally, 72 of 72 matched the `/` and `.` to `-` rule exactly, and the only special characters appearing in any recorded path were `-`, `.` and `/`.
 Widening it to every non-alphanumeric character was rejected because it would break a path holding an underscore that resolves correctly today, and a path mangled differently only ever yields no transcript, which refuses.
 
-`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins every half deterministically, including a resumed-session case that fails without that start-time condition, a replaced-session case that fails without the per-pid cross-check, and a quoted-session-id case that fails without the discrete argv read.
-That suite's fixture holders are real processes carrying the observed argv, so each session id under test is read from a live process rather than supplied to the code under test.
+`docs/session-lock.md` owns the ownership contract and `tests/fm-session-lock-limit-stop.test.sh` pins every half deterministically, including a resumed-session case that fails without that start-time condition, a re-keyed-session case that refuses on the recorded id, and an argv case that refuses because argv is never a session-id source.
 
 On 2026-09-25 with Claude Code 2.1.282, a home's lock was found held by an unclaimed Claude Code standby, which is why the captain's real session started read-only and the turn-end guard then blocked it in a loop.
 The background daemon keeps pre-warmed spare session hosts, and its own log records each one and each claim:
@@ -678,42 +647,6 @@ tests/fm-wake-queue.test.sh
 tests/fm-subagent-pretool-check.test.sh
 tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
-```
-
-## Wedge escalation liveness evidence
-
-The CI-monitor exemption in `bin/fm-crew-state.sh --pipeline-liveness` rests on the installed validator's own quiet threshold and CI-monitor bound, checked on 2026-09-03 against no-mistakes v1.41.2.
-
-```sh
-no-mistakes axi status
-no-mistakes axi logs --step ci --run 01M1K1E6GJE46J39EYS36T3Q7P
-```
-
-Observed: the completed run reported `ci,completed,0,1796271`, a CI step of 29m56s, whose entire step log held five entries - monitoring start, checks running, checks passed, one base-branch re-arm, and the merge.
-The installed defaults are `step_quiet_warning: "10m"` and `ci_timeout: "168h"`, so `last_activity` carries the `quiet` prefix for most of any real CI phase while the run is healthy.
-`axi status` builds `active_steps` from the running and fixing steps alone, so a row's presence is itself the evidence that its step is active.
-
-The background-job deferral (`crew_background_job_of` in `bin/fm-classify-lib.sh`) rests on the process shape Claude Code gives its Bash tool commands, checked on 2026-09-25 against Claude Code 2.1.282 on Linux by starting a real background command from a live worker and querying from a foreground shell outside its worktree.
-
-```sh
-# in the worker, as a background Bash command:
-cd <task worktree> && sleep 240
-# from a foreground command whose cwd is outside the worktree:
-bash -c '. bin/fm-classify-lib.sh; crew_background_job_of <task> <state-dir>'
-ps -o pid,ppid,pgid,tty,etime,comm -p <reported pid>
-```
-
-Observed: the reported pid was a `zsh -c` process whose parent was the `claude` process, whose process group id equalled its own pid, with no controlling terminal (`?`), a working directory of the task worktree, and `sleep 240` as its child.
-After the background command was stopped, the same query reported nothing.
-A record naming a different worktree reported only the firstmate session's own background shell in that other directory, never the worker's job.
-No other harness was installed on that host, so for the rest the deferral is unverified and simply never answers where a harness's commands take another shape, leaving their escalation schedule unchanged.
-
-Deterministic entry points:
-
-```sh
-tests/fm-crew-state.test.sh
-tests/fm-watch-triage.test.sh
-tests/fm-watcher-lock.test.sh
 ```
 
 ## Parked-by-usage-limit footers

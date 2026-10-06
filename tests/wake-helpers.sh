@@ -64,7 +64,7 @@ make_case() {
 set -u
 if [ "${1:-}" = "list-windows" ]; then
   if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
-    for w in $FM_FAKE_TMUX_WINDOWS; do printf '%s\n' "${w#*:}"; done
+    printf '%s\n' "$FM_FAKE_TMUX_WINDOWS"
   elif [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
     printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}"
   fi
@@ -114,13 +114,7 @@ SH
 # A per-id override FM_FAKE_CREW_STATE_<sanitized-id> wins; otherwise the shared
 # FM_FAKE_CREW_STATE; otherwise an unknown verdict (NOT provably working), the
 # safe default so a test that forgets to set one surfaces rather than absorbs.
-#
-# --pipeline-liveness is answered the same way from FM_FAKE_PIPELINE_LIVENESS
-# (or its per-id override), defaulting to `none` - no attributed run - which is
-# the answer that leaves every escalation path behaving exactly as it did before
-# the probe existed.
-# Exporting FM_FAKE_CREW_STATE_LOG appends one line per current-state read (a
-# liveness probe is not one), so a test that
+# Exporting FM_FAKE_CREW_STATE_LOG appends one line per call, so a test that
 # asserts how many current-state reads a path spends - the reads are the costly
 # half of watcher triage - can count them instead of inferring them.
 make_fake_crew_state() {  # <fakebin>
@@ -128,17 +122,9 @@ make_fake_crew_state() {  # <fakebin>
   cat > "$fakebin/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
-mode=state
-if [ "${1:-}" = --pipeline-liveness ]; then mode=liveness; shift; fi
 id=${1:-}
-[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || [ "$mode" = liveness ] || printf '%s\n' "$id" >> "$FM_FAKE_CREW_STATE_LOG"
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "$id" >> "$FM_FAKE_CREW_STATE_LOG"
 key=$(printf '%s' "$id" | tr -c 'A-Za-z0-9' '_')
-if [ "$mode" = liveness ]; then
-  var="FM_FAKE_PIPELINE_LIVENESS_$key"
-  val=${!var:-${FM_FAKE_PIPELINE_LIVENESS:-}}
-  printf '%s\n' "${val:-none}"
-  exit 0
-fi
 var="FM_FAKE_CREW_STATE_$key"
 val=${!var:-${FM_FAKE_CREW_STATE:-}}
 printf '%s\n' "${val:-state: unknown · source: none · fake default}"
@@ -376,60 +362,4 @@ dead_pid() {
     p=$((p + 1))
   done
   printf '%s\n' "$p"
-}
-
-# --- fake harness agent with one child process ------------------------------
-# The real process shape a harness gives a background job, with no harness, for
-# the crew_background_job_of regressions (bin/fm-classify-lib.sh).
-# Start one fake agent named <agent-name> in <cwd>, give it one child of <shape>,
-# and print "<agent-pid> <child-pid>":
-#   detached-shell     a shell leading its own session, no terminal: a job
-#   detached-nonshell  a non-shell leading its own session: a long-lived helper
-#   attached-shell     a shell left in the agent's own process group
-start_fake_agent_job() {  # <dir> <agent-name> <cwd> <shape>
-  local dir=$1 name=$2 cwd=$3 shape=$4 bin pidfile i=0
-  bin="$dir/agents/$name"
-  pidfile="$dir/agents/$name.$shape.child"
-  mkdir -p "$dir/agents"
-  cat > "$bin" <<'SH'
-#!/bin/bash
-cd "$1" || exit 1
-case "$2" in
-  detached-shell) perl -e 'use POSIX (); POSIX::setsid(); exec "bash", "-c", "sleep 120; true"' </dev/null >/dev/null 2>&1 & ;;
-  detached-nonshell) perl -e 'use POSIX (); POSIX::setsid(); exec "sleep", "120"' </dev/null >/dev/null 2>&1 & ;;
-  attached-shell) bash -c 'sleep 120; true' </dev/null >/dev/null 2>&1 & ;;
-esac
-echo $! > "$3"
-wait
-SH
-  chmod +x "$bin"
-  rm -f "$pidfile"
-  "$bin" "$cwd" "$shape" "$pidfile" </dev/null >/dev/null 2>&1 &
-  while [ ! -s "$pidfile" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-  # Let the child finish its setsid and exec before anyone reads its shape.
-  sleep 0.3
-  printf '%s %s' "$!" "$(cat "$pidfile" 2>/dev/null)"
-}
-
-stop_fake_agent_job() {  # <agent-pid> <child-pid>
-  kill "$2" "$1" 2>/dev/null || true
-  wait "$1" 2>/dev/null || true
-}
-
-# The shape assertions every case below depends on: without them a platform
-# that names a script process after its interpreter, or a setsid that silently
-# failed, would turn every "not reported" assertion vacuous.
-assert_fake_job_shape() {  # <agent-pid> <child-pid> <expect: agent|other> <label>
-  local agent=$1 child=$2 expect=$3 label=$4 comm got
-  if ! command -v fm_agent_process_classify_name >/dev/null 2>&1; then
-    # shellcheck source=bin/fm-agent-process-lib.sh
-    . "$ROOT/bin/fm-agent-process-lib.sh"
-  fi
-  comm=$(ps -o comm= -p "$agent" 2>/dev/null)
-  got=$(fm_agent_process_classify_name "$comm")
-  if [ "$got" != "$expect" ]; then
-    stop_fake_agent_job "$agent" "$child"
-    fail "$label: the fake agent process reads as '$got' (comm '$comm'), not '$expect', so the case would prove nothing"
-  fi
-  kill -0 "$child" 2>/dev/null || { stop_fake_agent_job "$agent" "$child"; fail "$label: the fake agent's child is not running"; }
 }

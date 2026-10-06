@@ -922,6 +922,25 @@ EOF
   printf '%s\n' "$current"
 }
 
+# The subset of status_open_decisions the task raised about its own work: a
+# reserved-namespace key is raised by a supervisor library about the task (a
+# pending-reply escalation), a `remote-reply-continuity-` key is the parent's
+# own blocker about a broken remote reply mirror
+# (bin/fm-procevent-remote-reply.sh), and a `captain-hold-` key relays a child
+# decision a secondmate escalated to the captain (bin/fm-captain-hold.sh) while
+# it keeps working, so the task is not waiting on any of them. Pending-reply
+# recovery and a fire-and-forget retry ring consult this set and leave a task
+# alone while it is non-empty.
+status_own_open_decisions() {  # <status-file>
+  local line prefix
+  status_open_decisions "$1" | while IFS= read -r line || [ -n "$line" ]; do
+    for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT} remote-reply-continuity- captain-hold-; do
+      case "$line" in "$prefix"*) continue 2 ;; esac
+    done
+    printf '%s\n' "$line"
+  done
+}
+
 # 0 when the fold above still holds at least one decision OPENED by
 # `needs-decision` - the status side's own record that a human was asked
 # something and has not answered. A `blocked` record is deliberately not this: a
@@ -1038,6 +1057,28 @@ EOF
   printf '%s' "$verb"
 }
 
+# The status file inside <state> that is this home's outbound parent channel
+# rather than a self-home task status log, printed; empty when there is none.
+# Only a remote mate home resolves one - its state/parent-replies.status is the
+# parent channel (bin/fm-parent-channel-lib.sh owns that resolution, sourced
+# lazily here because that library sources this one at its top level, so a
+# top-level source would be circular). A main home, a local mate - whose
+# channel lives in the parent home - or an unusable identity or binding keeps
+# every file, so ordinary task logs fold and wake exactly as before. The home
+# is the directory containing <state>, the <home>/state layout every caller of
+# these fleet-wide scans shares; a state dir outside such a home excludes
+# nothing. Callers compare the resolved path, never the file name, so a
+# parent-replies.status in any other home shape stays an ordinary task log.
+status_scan_parent_channel_exclude() {  # <state>
+  local state=$1 exclude
+  if ! command -v fm_parent_channel_outbound_status >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-parent-channel-lib.sh
+    . "$_FM_CLASSIFY_LIB_DIR/fm-parent-channel-lib.sh"
+  fi
+  exclude=$(fm_parent_channel_outbound_status "$(dirname "$state")" "$state") || return 0
+  printf '%s\n' "$exclude"
+}
+
 # Fleet-wide wrapper around status_open_decisions: scans every task's status
 # log under <state> and prefixes each still-open decision with its owning task
 # id, so a per-wake or per-session surface can print the consolidated open set
@@ -1046,9 +1087,11 @@ EOF
 # one "<task>\t<key>\t<verb>\t<note>" line per open decision, in glob (task id)
 # order; prints nothing when none are open.
 scan_open_decisions() {  # <state>
-  local state=$1 f task open line
+  local state=$1 f task open line exclude
+  exclude=$(status_scan_parent_channel_exclude "$state")
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
+    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
     open=$(status_open_decisions "$f") || continue
     [ -n "$open" ] || continue
@@ -1339,9 +1382,11 @@ status_open_decisions_incremental() {  # <status-file> [<captured-end-offset>]
 # the whole-file status_open_decisions, so a fleet-wide per-drain scan stays
 # bounded by new appends rather than total lifetime log size across every task.
 scan_open_decisions_incremental() {  # <state>
-  local state=$1 f task open line
+  local state=$1 f task open line exclude
+  exclude=$(status_scan_parent_channel_exclude "$state")
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
+    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
     open=$(status_open_decisions_incremental "$f") || continue
     [ -n "$open" ] || continue
@@ -1356,9 +1401,11 @@ EOF
 }
 
 status_presentation_snapshot() {  # <state>
-  local state=$1 f task size ident
+  local state=$1 f task size ident exclude
+  exclude=$(status_scan_parent_channel_exclude "$state")
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
+    [ "$f" = "$exclude" ] && continue
     [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     size=$(_fm_status_file_size "$f") || return 1
@@ -1970,9 +2017,11 @@ status_line_is_unread_surface() {  # <status-line>
 # Prints nothing when none are unread. Directory scan rejects status symlinks
 # the same way scan_open_decisions does.
 scan_unread_surface_lines() {  # <state>
-  local state=$1 f task lines line
+  local state=$1 f task lines line exclude
+  exclude=$(status_scan_parent_channel_exclude "$state")
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
+    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
     lines=$(status_new_lines_since_cursor "$f") || return 1
     [ -n "$lines" ] || continue
@@ -2460,136 +2509,11 @@ crew_is_provably_working() {  # <id>
   [ "$(crew_absorb_class "$1")" = working ]
 }
 
-# 0 when crew <id>'s attributed no-mistakes pipeline is demonstrably doing work
-# right now, from the run's own active-step activity and agent pid rather than
-# from anything the pane renders.
-#
-# A worker blocked on one foreground `axi run` produces no output for as long as
-# the run takes, so its pane is legitimately static and indistinguishable from a
-# wedged one by pane state alone. This is the signal that tells them apart, and
-# it is deliberately narrow: only a positively alive step answers 0, so a
-# pipeline that has genuinely stopped - and a wedged agent whose activity has
-# gone quiet - still escalate on the ordinary path.
-#
-# bin/fm-crew-state.sh --pipeline-liveness owns the decision and the evidence;
-# a crew with no attributed run answers `none`, which is not `alive`, so a task
-# that is simply idle is untouched by this. Costly (a bounded no-mistakes call),
-# so callers ask only at the moment an escalation would otherwise fire.
-crew_pipeline_alive() {  # <id>
-  [ -n "$1" ] || return 1
-  [ "$("$FM_CREW_STATE_BIN" --pipeline-liveness "$1" 2>/dev/null || true)" = alive ]
-}
-
 # 0 if crew <id>'s authoritative current state is a declared external-wait pause.
 # The stale path absorbs such a crew (on a long re-surface cadence) instead of
 # escalating a possible wedge.
 crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
-}
-
-# Longest a single background job may keep a quiet worker off the wedge alarm,
-# measured from when the job started. A forgotten long-lived job - a dev server,
-# a `tail -f` - must not hide a worker that wedged beside it for ever, so past
-# this bound the job is no evidence and the ordinary escalation resumes. The
-# default comfortably covers a full test suite or a long CI wait. A value that is
-# not a positive integer is not a bound, so the default applies instead.
-FM_BG_JOB_MAX_SECS=${FM_BG_JOB_MAX_SECS:-7200}
-
-# Seconds from a `ps -o etime=` value, [[dd-]hh:]mm:ss; empty when unparseable.
-fm_etime_secs() {  # <etime>
-  local e=$1 d=0 h=0 m=0 s=0 rest
-  case "$e" in *-*) d=${e%%-*}; e=${e#*-} ;; esac
-  rest=$e
-  s=${rest##*:}; rest=${rest%:*}
-  [ "$rest" != "$e" ] || return 0
-  m=${rest##*:}
-  case "$rest" in *:*) h=${rest%%:*} ;; esac
-  case "$d$h$m$s" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s' $(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))
-}
-
-# Print the pid of a live background job crew <id>'s own agent started inside
-# its recorded worktree, or nothing.
-#
-# A worker that starts a long command in the background - a full test suite,
-# or the `no-mistakes axi run` drive call its brief tells it to background -
-# goes back to its prompt and renders nothing until that command finishes. Its
-# pane is then legitimately static for as long as the job runs, which is exactly
-# the shape the wedge timer exists to catch, so without this it wedge-escalated
-# every window for the whole wait (2026-09-25: more than ten escalations across
-# a 50-minute CI wait whose run the pipeline-liveness read could not attribute).
-#
-# The evidence is kernel process structure, never anything a pane renders. A
-# job counts only when every one of these holds for one process:
-#   - it is a shell (bin/fm-agent-process-lib.sh owns that vocabulary), so a
-#     harness's long-lived helper - an MCP server, a language server - never
-#     reads as work in progress;
-#   - it leads its own process group and has no controlling terminal: the
-#     harness detached it as a command of its own, rather than it being the
-#     pane's login shell or something typed at a terminal;
-#   - its parent is a verified harness process, so it is the agent's own job;
-#   - its working directory is inside this task's recorded worktree, which is
-#     what attributes it to THIS worker when several run at once;
-#   - it started no more than FM_BG_JOB_MAX_SECS ago.
-# Verified on Claude Code, whose Bash tool, foreground and background alike,
-# runs each command as a detached `<shell> -c` child of the claude process
-# (docs/verification/runtime-backends.md). A harness whose commands do not take
-# that shape simply never answers, so its workers escalate exactly as before.
-#
-# Callers must ask only about a pane that is idle at its prompt and only at the
-# moment an escalation would otherwise fire: a busy pane's own foreground command
-# has the same shape, and a hung foreground call is exactly what the busy-turn
-# bound must still catch. A kind=secondmate task is excluded outright because
-# its home runs its own supervision in background shells whether or not the mate
-# is doing anything, the same reason the worktree write probe excludes it.
-#
-# Every unanswerable question lands on no evidence - no worktree, no classifier,
-# an unreadable process table or working directory - because this suppresses an
-# alarm, and that is the one direction an unanswerable question may never decide.
-# Cost: one `ps` of the process table, plus one working-directory read for each
-# detached shell whose parent is a harness.
-crew_background_job_of() {  # <id> [state-dir]
-  local id=$1 state=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} wt kind max
-  local pid etime pcomm comm age cwd
-  [ -n "$id" ] && [ -n "$state" ] || return 0
-  wt=$(grep '^worktree=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-  [ -n "$wt" ] && [ -d "$wt" ] || return 0
-  wt=$(cd "$wt" 2>/dev/null && pwd -P) || return 0
-  kind=$(grep '^kind=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-  [ "$kind" != secondmate ] || return 0
-  if ! command -v fm_agent_process_classify_name >/dev/null 2>&1; then
-    # shellcheck source=bin/fm-agent-process-lib.sh
-    . "$_FM_CLASSIFY_LIB_DIR/fm-agent-process-lib.sh" 2>/dev/null || return 0
-  fi
-  max=$FM_BG_JOB_MAX_SECS
-  case "$max" in ''|*[!0-9]*|0) max=7200 ;; esac
-  while IFS=$'\t' read -r pid etime pcomm comm; do
-    [ "$(fm_agent_process_classify_name "$comm")" = shell ] || continue
-    [ "$(fm_agent_process_classify_name "$pcomm")" = agent ] || continue
-    age=$(fm_etime_secs "$etime")
-    [ -n "$age" ] && [ "$age" -le "$max" ] || continue
-    if [ -d "/proc/$pid" ]; then
-      cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
-    else
-      cwd=$(fm_run_timed 5 lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1 || true)
-    fi
-    case "$cwd" in
-      "$wt"|"$wt"/*) printf '%s' "$pid"; return 0 ;;
-    esac
-  done < <(LC_ALL=C ps -A -o pid= -o ppid= -o pgid= -o etime= -o tty= -o comm= 2>/dev/null \
-    | awk '{
-        c = $6; for (i = 7; i <= NF; i++) c = c " " $i
-        comm[$1] = c; ppid[$1] = $2; pgid[$1] = $3; et[$1] = $4; tty[$1] = $5
-      }
-      END {
-        for (p in comm) {
-          if (pgid[p] != p) continue
-          if (tty[p] != "?" && tty[p] != "??" && tty[p] != "-") continue
-          if (!(ppid[p] in comm)) continue
-          printf "%s\t%s\t%s\t%s\n", p, et[p], comm[ppid[p]], comm[p]
-        }
-      }')
-  return 0
 }
 
 # The one spelling of the verdict component that says a parked gate's answer is

@@ -11,9 +11,11 @@
 # Claude session id below matches the id recorded beside a live lock. Neither
 # signal ever fails open: no id, no sidecar, an untrusted id, or a different
 # recorded id leaves the ancestry verdict exactly as it was.
-# It also owns the ONE limit-stop test that lets a fresh session take the lock
-# from a holder that is still running but stopped on a usage limit; see
-# docs/session-lock.md for the ownership contract and its safety rationale.
+# It also owns two fork-only rules that sit on top of that decision: an unclaimed
+# Claude Code standby is never a live lock holder, and the ONE limit-stop test
+# that lets a fresh session take the lock from a holder that is still running
+# but stopped on a usage limit; see docs/session-lock.md for both contracts and
+# their safety rationale.
 # This file is sourced by scripts and has no side effects on source.
 
 # Cursor process identity is NOT expressible as a command-name pattern and is
@@ -30,71 +32,6 @@ unset _FM_SESSION_LOCK_LIB_DIR
 # Directory this lib was sourced from, so the node helper below is found from
 # the same code root as the rest of bin/ no matter which home is being served.
 FM_SESSION_LOCK_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Assign the basename of argv[0] in command line $1 to the variable named $2,
-# and fail when there is no argv[0]. It assigns rather than echoes so the
-# identity path below stays free of subshells, and it reads argv[0] ONLY,
-# never the rest of the command line, so a process that merely mentions a
-# harness in an argument is never mistaken for one.
-fm_argv0_basename() {
-  local argv0=$1
-  argv0=${argv0#"${argv0%%[![:space:]]*}"}
-  argv0=${argv0%%[[:space:]]*}
-  [ -n "$argv0" ] || return 1
-  printf -v "$2" '%s' "${argv0##*/}"
-}
-
-# True when process name $1 / command line $2 belong to Claude Code, by the
-# same two names fm_harness_identity would match it on and no others. Both the
-# shared-service test below and the limit-stop test further down need this one
-# question answered the same way, so it lives here rather than in either.
-fm_harness_is_claude() {
-  local comm=$1 args=$2 argv0base
-  case "${comm##*/}" in *claude*) return 0 ;; esac
-  fm_argv0_basename "$args" argv0base || return 1
-  case "$argv0base" in *claude*) return 0 ;; esac
-  return 1
-}
-
-# True when process name $1 / command line $2 belong to a harness process that
-# SERVES MANY SESSIONS AT ONCE rather than being one session's own host.
-#
-# Claude Code's background sessions run under `claude daemon run`, a supervisor
-# that outlives every session it starts and is shared by all of them. It is
-# claude-named, so without this test the ancestry walk below happily extends
-# past a background session's own host and returns the daemon, with two
-# consequences that both break ownership outright: the daemon never exits, so a
-# lock recording it looks live forever and every later session is refused; and
-# every concurrent background session in the home resolves to that same pid, so
-# no two of them can tell each other apart.
-#
-# The rule matches the subcommand in argv[1], never a substring of the whole
-# command line, so a session that merely mentions the word elsewhere is not
-# mistaken for a shared service.
-fm_harness_shared_service() {
-  local comm=$1 args=$2 rest argv1
-  fm_harness_is_claude "$comm" "$args" || return 1
-  rest=${args#"${args%%[![:space:]]*}"}
-  argv1=${rest#* }
-  [ "$argv1" != "$rest" ] || return 1
-  [ "${argv1%%[[:space:]]*}" = daemon ]
-}
-
-# True when the shared-service process $1 was started by a Claude process,
-# which makes it one front-end session's own transient daemon rather than the
-# machine-wide supervisor every background session descends from. Only the
-# ancestry walk consults this, to pass through such a daemon; it is never
-# itself selected, and a daemon whose parent is not Claude still ends the walk.
-fm_harness_daemon_owned_by_claude() {  # <pid>
-  local ppid pcomm pargs
-  ppid=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
-  case "$ppid" in '' | *[!0-9]*) return 1 ;; esac
-  [ "$ppid" -gt 1 ] || return 1
-  pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null) || return 1
-  pargs=$(ps -o args= -p "$ppid" 2>/dev/null)
-  fm_harness_shared_service "$pcomm" "$pargs" && return 1
-  fm_harness_is_claude "$pcomm" "$pargs"
-}
 
 # Print field $2 of /proc/$1/stat, counted from 0 at the state field that
 # follows the process name, or fail when it cannot be read. The name is skipped
@@ -115,16 +52,13 @@ fm_proc_stat_field() {
 
 # Print the path of the per-pid record Claude Code currently keeps for pid $1,
 # or fail when there is no record that can be TRUSTED for that pid. Claude Code
-# keeps one such record per session process at <config-root>/sessions/<pid>.json,
-# holding that session's current sessionId and the procStart of the process it
-# belongs to.
+# keeps one such record per session process at <config-root>/sessions/<pid>.json.
 #
 # A pid is reused, so the record is only trusted when its procStart matches the
 # live process's own start value in /proc/<pid>/stat; anything else is a leftover
 # from a pid that has since been recycled. /proc exists only on Linux, so on any
 # other host that verification cannot be performed at all and every record is
-# therefore unverifiable, which every caller treats exactly like an absent one -
-# leaving existing behaviour untouched there.
+# therefore unverifiable, which every caller treats exactly like an absent one.
 fm_claude_trusted_record() {
   local pid=$1 record started recorded
   started=$(fm_proc_stat_field "$pid" 19) || return 1
@@ -137,44 +71,6 @@ fm_claude_trusted_record() {
   printf '%s' "$record"
 }
 
-# Print the session id in pid $1's trusted per-pid record, or fail when there is
-# no trusted record or it names no session.
-fm_claude_recorded_session_id() {
-  local record id
-  record=$(fm_claude_trusted_record "$1") || return 1
-  id=$(sed -n \
-    's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' \
-    "$record" 2>/dev/null | head -n 1)
-  [ -n "$id" ] || return 1
-  printf '%s' "$id"
-}
-
-# True when pid $1 is a process Claude Code itself records as hosting a live
-# session: the SESSION HOST, the process a session's own tool calls and hooks
-# both run as children of.
-#
-# This is the only identity in a Claude session that is fixed for the whole of
-# it. The name-and-argv rules below resolve a process by how it was LAUNCHED,
-# and Claude Code re-hosts a session it moves into a background job: the
-# launching `claude` client stays alive in the terminal while the session itself
-# is handed to a daemon-spawned pty host that is then reparented to init. The
-# ancestry walk therefore answers with a different pid before and after that
-# move, and the pid it answered with first - a client in an unrelated process
-# tree - stays alive for the rest of the session, so it reads back as a live
-# harness holding the home and every later check concludes some OTHER session
-# owns it. The session host has neither problem: it is one process for one
-# session, it is what both a tool call and a Stop hook descend from, and it is
-# gone the moment the session is.
-#
-# Verification is Claude Code's own per-pid record, pid-reuse checked, so this
-# only ever answers yes for a process Claude currently calls a session. Where it
-# cannot be verified at all - any non-Linux host, an older Claude Code, a
-# session with no record yet - it answers no and the rules below decide exactly
-# as they did before.
-fm_claude_session_host() {
-  fm_claude_recorded_session_id "$1" >/dev/null 2>&1
-}
-
 # True when pid $1 is an UNCLAIMED Claude Code standby: a pre-warmed spare
 # session host (`claude bg-spare`) the background daemon keeps ready for the
 # next session to claim, whose trusted per-pid record still carries
@@ -183,67 +79,16 @@ fm_claude_session_host() {
 # A standby runs the project's SessionStart hooks while it is being pre-warmed,
 # long before anyone uses it, so without this it claims the home's session lock
 # and then sits on it indefinitely: it never takes a turn, never exits, and
-# reads as a live verified session host, so the captain's real session starts
-# read-only. Claude Code drops the flag from the record the moment a client
-# claims the standby, so a claimed one is an ordinary session host and nothing
-# here applies to it. Its argv cannot tell the two apart, because a claimed
-# standby keeps its `bg-spare` command line for the rest of the session; the
-# record is the only signal, and an untrusted or absent record answers no.
+# reads as a live harness, so the captain's real session starts read-only.
+# Claude Code drops the flag from the record the moment a client claims the
+# standby, so a claimed one is an ordinary session and nothing here applies to
+# it. Its argv cannot tell the two apart, because a claimed standby keeps its
+# `bg-spare` command line for the rest of the session; the record is the only
+# signal, and an untrusted or absent record answers no.
 fm_claude_session_is_spare() {
   local record
   record=$(fm_claude_trusted_record "$1" 2>/dev/null) || return 1
   grep -q '"spare"[[:space:]]*:[[:space:]]*true' "$record" 2>/dev/null
-}
-
-# Print the pid of the CURRENT process's own verified Claude session host, by
-# walking real parent links (up to 16 hops) until one of them is a host. It
-# answers the same question fm_harness_ancestry_pid short-circuits on, and only
-# that question: where no record can be verified anywhere in the ancestry it
-# fails, and every caller then leaves the existing rules deciding.
-fm_claude_own_session_host_pid() {
-  local pid=$$
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
-    if fm_claude_session_host "$pid"; then
-      printf '%s' "$pid"
-      return 0
-    fi
-    [ "$pid" -gt 1 ] || return 1
-    pid=$(fm_proc_stat_field "$pid" 1) || return 1
-    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  done
-  return 1
-}
-
-# True when lock holder $1 is a SUPERSEDED host of the session this call runs
-# in, because its own trusted per-pid record names the very same session id as
-# this session's current host.
-#
-# That identity is positive proof rather than an inference. Claude Code keeps
-# one record per host process and re-hosts a session it moves into a background
-# job, so two live pids naming one session id are the client the captain
-# launched and the pty host the session was handed to, in that order. A lock
-# claimed BEFORE that move records the client, which stays alive and
-# claude-named for the rest of the session, and without this the home would read
-# as held by another live session forever and the Stop-owned auto-arm could
-# never claim it.
-#
-# Only that positive match ever refuses. A holder whose record names a DIFFERENT
-# session id is another live session and keeps its lock; a holder with no record,
-# an unverifiable one, or one whose procStart does not match the live process
-# adds no evidence at all and is decided exactly as before; and where this
-# session's own host cannot be resolved - any host without /proc, an older Claude
-# Code, a session that has not written its record yet - nothing here applies.
-# The holder that IS this session's current host is not superseded by anything
-# and is deliberately excluded, so a session never reads its own live lock as
-# reclaimable.
-fm_claude_superseded_own_host() {
-  local holder=$1 holder_id own_pid own_id
-  case "$holder" in ''|*[!0-9]*) return 1 ;; esac
-  holder_id=$(fm_claude_recorded_session_id "$holder") || return 1
-  own_pid=$(fm_claude_own_session_host_pid) || return 1
-  [ "$own_pid" != "$holder" ] || return 1
-  own_id=$(fm_claude_recorded_session_id "$own_pid") || return 1
-  [ "$holder_id" = "$own_id" ]
 }
 
 # Known harness command names; extend when a new adapter is verified. omp is
@@ -293,9 +138,6 @@ FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
   FM_HARNESS_IS_CLAUDE=0
-  # A process that serves many sessions at once is never one session's
-  # identity, whichever rule below would otherwise match it.
-  fm_harness_shared_service "$comm" "$args" && return 1
   base=$(basename -- "$comm")
   if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
     case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
@@ -341,33 +183,16 @@ fm_harness_process_matches() {  # <comm> <args>
 # claude), with no non-harness process between them. Which pid in that run is the
 # session cannot be read off the ancestry at all, so the whole contiguous run is
 # reported and the callers below decide what they need from it.
-#
-# A verified Claude session host short-circuits every naming rule and ends the
-# run on sight, because it answers the question the walk is only approximating:
-# which process IS this session. Stopping there also keeps the Claude extension
-# from climbing out of the session into the client that launched it, whose pid
-# the session loses the moment Claude re-hosts it as a background job (see
-# fm_claude_session_host). The shared-service rejection is the one test that
-# still precedes it, so a process serving many sessions is never selected.
 fm_harness_ancestry_pids() {
   local pid=$$ comm args extending=0 printed=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if ! fm_harness_shared_service "$comm" "$args" && fm_claude_session_host "$pid"; then
-      printf '%s\n' "$pid"
-      return 0
-    fi
     if fm_harness_process_matches "$comm" "$args"; then
       printf '%s\n' "$pid"
       printed=1
       [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
       extending=1
-    elif [ "$extending" -eq 1 ] && fm_harness_shared_service "$comm" "$args" \
-      && fm_harness_daemon_owned_by_claude "$pid"; then
-      # A daemon a Claude front-end started for itself sits inside that one
-      # session's chain, so the walk passes through it, never selecting it.
-      :
     elif [ "$extending" -eq 1 ]; then
       break
     fi
@@ -406,25 +231,14 @@ EOF
 }
 
 # True if $1 is a live process that looks like a verified harness.
-# A verified Claude session host counts, because the walk above records one and
-# a holder it just recorded must not read back as stale to every guard: a
-# session host is named after its release version, so no naming rule matches it.
-# A superseded host of THIS session never counts, whatever its name: the home it
-# holds is this session's own across a re-host, so it is reclaimable rather than
-# held by someone else. An unclaimed standby never counts either, because it is
-# not a session anyone is using (fm_claude_session_is_spare).
-# A process shared across sessions is rejected before the host check as well as
-# before the naming rules, so a lock recording one stays reclaimable by every
-# route.
+# An unclaimed standby never counts, because it is not a session anyone is
+# using (fm_claude_session_is_spare), so a lock one holds reads as stale.
 fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
-  fm_claude_superseded_own_host "$pid" && return 1
   fm_claude_session_is_spare "$pid" && return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)
-  fm_harness_shared_service "$comm" "$args" && return 1
-  fm_claude_session_host "$pid" && return 0
   fm_harness_process_matches "$comm" "$args"
 }
 
@@ -653,46 +467,8 @@ fm_session_lock_inspect() {  # <state>
 # The bar is deliberately asymmetric: taking the lock from a session that is
 # genuinely working is far worse than refusing one that is finished, so ONLY a
 # positively identified limit stop returns true and every other outcome -
-# unknown harness, unresolvable session id, missing, unreadable, or unparseable
+# unknown harness, no recorded session id, missing, unreadable, or unparseable
 # transcript, or any other last record - returns false and keeps refusing.
-
-# Print the session id carried in the argv of process $1, or fail when there is
-# none that can be read UNAMBIGUOUSLY. Only a session hosted with an explicit
-# --session-id can be traced back to its transcript; a session whose id never
-# reaches its own argv (a plain foreground `claude`) is unresolvable and
-# therefore never taken over.
-#
-# It reads the discrete argv elements from /proc/<pid>/cmdline, where they are
-# NUL separated, and never the single space-joined string ps prints. Flattened,
-# there is no way to tell a real "--session-id <uuid>" pair from that same text
-# sitting INSIDE one argument - a prompt, a file path, a command a wrapper was
-# handed - so a live session merely carrying those words in an argument would
-# resolve to a transcript that is not its own and could then be taken over on a
-# stranger's evidence. As discrete elements the pair is unambiguous: the flag is
-# an element of its own and the id is the element that follows it.
-#
-# /proc is Linux-only and there is deliberately no fallback to the flattened
-# string, because such a fallback would reinstate exactly the ambiguity this
-# closes. Where discrete argv cannot be read, macOS included, this refuses and
-# the takeover is simply unavailable on that host. That is the intended trade,
-# and the same one the whole test makes: a missed takeover, never a wrong one.
-fm_claude_session_id() {
-  local pid=$1 arg id='' next=0
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ -r "/proc/$pid/cmdline" ] || return 1
-  while IFS= read -r -d '' arg; do
-    if [ "$next" -eq 1 ]; then
-      id=$arg
-      break
-    fi
-    if [ "$arg" = --session-id ]; then
-      next=1
-    fi
-  done < "/proc/$pid/cmdline"
-  printf '%s' "$id" \
-    | grep -qE '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$' || return 1
-  printf '%s' "$id"
-}
 
 # Print the directory Claude Code keeps transcripts in for working directory $1.
 # It names that directory after the absolute path with every "/" and every "."
@@ -722,8 +498,7 @@ fm_claude_transcript_dir() {
 #
 # It reads the POSIX "etime" field in its [[dd-]hh:]mm:ss form rather than the
 # plain seconds of "etimes", because the latter is a procps extension that BSD
-# ps rejects outright and macOS is a supported host: on Darwin every takeover
-# would otherwise refuse and the feature would be a silent no-op there.
+# ps rejects outright and macOS is a supported host.
 fm_process_start_epoch() {
   local pid=$1 elapsed days=0 hours=0 mins secs rest part
   elapsed=$(ps -o etime= -p "$pid" 2>/dev/null) || return 1
@@ -743,109 +518,37 @@ fm_process_start_epoch() {
     - (10#$days * 86400 + 10#$hours * 3600 + 10#$mins * 60 + 10#$secs) ))"
 }
 
-# True when pid $1 is pid $2 or one of its descendants, walking up to 16 hops of
-# real parent links. Bounded in both directions: the hop count caps the walk,
-# and reaching pid 1 or an unreadable process ends it, so a process outside the
-# holder's own tree is never reported as being in it.
-fm_pid_in_tree() {
-  local pid=$1 root=$2
-  case "$pid$root" in ''|*[!0-9]*) return 1 ;; esac
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
-    [ "$pid" = "$root" ] && return 0
-    [ "$pid" -gt 1 ] || return 1
-    pid=$(fm_proc_stat_field "$pid" 1) || return 1
-    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  done
-  return 1
-}
-
-# True when the session lock holder $1 is demonstrably NOT working on session id
-# $2 any more, because a trusted per-pid record inside its own process tree names
-# a different session.
+# True when lock-holder pid $1, holding the lock in state dir $3 for home $2, is
+# stopped on a usage limit.
 #
-# A holder's argv is fixed at exec, so a live session that replaces its
-# conversation in place (/clear, /new, /fork) keeps pointing at the transcript of
-# the session it replaced - whose tail is still the limit record that same
-# process wrote before the replacement. Without this the holder would be taken
-# over while actively working.
+# The holder's session id is the one recorded beside the lock in
+# state/.lock-session, which the holder itself wrote under the trusted-id gate
+# above and which bin/fm-lock.sh refreshes when that same process re-keys its
+# conversation (/clear), so it names the conversation the holder is on now.
+# A lock with no sidecar, or one that does not hold a session id, has nothing
+# tying the holder to a transcript and is never taken over.
 #
-# Inside this function the record is purely restrictive and may only ever
-# refuse. Resolution itself is argv first and the per-pid record only as a
-# fallback (fm_session_limit_stopped), but that order is decided before this
-# call and nothing here ever widens it. A missing, unreadable, unparseable, or
-# unverifiable record adds no restriction at all, so every existing condition
-# still decides the outcome on its own.
-#
-# The lock records the verified Claude session host whenever there is one, and
-# Claude keys sessions/<pid>.json on exactly that one-process-per-session host,
-# so fm_pid_in_tree matches the holder's own record immediately and the
-# cross-check still covers the record that matters. Only where no host can be
-# verified does the lock fall back to recording the outermost pid of a run
-# while these records are keyed on an inner pid, and there the search covers
-# the holder and its own descendants. It walks the recorded pids rather than
-# the process table, and
-# confines itself to the holder's tree, so a record belonging to an unrelated
-# process is never consulted. A record that names the expected session wins over
-# one that does not, because corroboration may only ever permit.
-fm_claude_session_replaced() {
-  local holder=$1 expected=$2 dir record pid id replaced=1
-  dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions"
-  [ -d "$dir" ] || return 1
-  for record in "$dir"/*.json; do
-    [ -f "$record" ] || continue
-    pid=${record##*/}
-    pid=${pid%.json}
-    case "$pid" in ''|*[!0-9]*) continue ;; esac
-    fm_pid_in_tree "$pid" "$holder" || continue
-    id=$(fm_claude_recorded_session_id "$pid") || continue
-    [ "$id" = "$expected" ] && return 1
-    replaced=0
-  done
-  return "$replaced"
-}
-
-# True when the session behind lock-holder pid $1, running in home $2, is
-# stopped on a usage limit. Everything it needs comes from the holder's own
-# argv and its transcript; nothing is inferred from elapsed time or file
-# timestamps, because Claude rewrites trailing transcript metadata long after a
-# session stops and an mtime therefore says nothing about whether it is idle.
-fm_session_limit_stopped() {
-  local pid=$1 home=$2 args comm session_id transcript classifier started
+# Everything else comes from the holder's transcript and its own process age;
+# nothing is inferred from elapsed time or file timestamps, because Claude
+# rewrites trailing transcript metadata long after a session stops and an mtime
+# therefore says nothing about whether it is idle.
+fm_session_limit_stopped() {  # <pid> <home> <state>
+  local pid=$1 home=$2 state=$3 comm args session_id transcript classifier started
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ -n "$home" ] || return 1
+  [ -n "$home" ] && [ -n "$state" ] || return 1
   classifier="$FM_SESSION_LOCK_LIB_DIR/fm-transcript-limit-stop.mjs"
   [ -f "$classifier" ] || return 1
   command -v node >/dev/null 2>&1 || return 1
+  [ "$(head -n 1 "$state/.lock" 2>/dev/null || true)" = "$pid" ] || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
-  # Claude is the only harness with a verified limit-stop transcript shape. A
-  # verified session host is one by the same evidence fm_harness_pid_alive
-  # accepts it on, and is the shape the lock now records; without it the
-  # takeover this whole path exists for is unreachable for every holder whose
-  # name is its release version.
-  fm_harness_is_claude "$comm" "$args" || fm_claude_session_host "$pid" || return 1
-  # Argv first, unchanged. A verified host that carries no --session-id falls
-  # back to the per-pid record Claude Code keeps for it, which is a stronger
-  # link than argv rather than a looser one: it is that process's own current
-  # session, pid-reuse checked against /proc. A record that cannot be trusted
-  # yields nothing and the refusal stands.
-  #
-  # This deliberately widens the takeover contract, and the captain approved
-  # it: a plain foreground claude with no --session-id was previously never
-  # taken over, and on Linux it now can be, because it is a verified session
-  # host whose id comes from its own record. What keeps that safe is unchanged
-  # - the transcript classification below still has to positively identify a
-  # usage-limit stop, the record is trusted only when its procStart matches the
-  # live process, and the holder must have been running when that last record
-  # was written. Non-Linux hosts are unaffected: no record is verifiable there,
-  # so such a holder is refused exactly as before.
-  session_id=$(fm_claude_session_id "$pid") \
-    || session_id=$(fm_claude_recorded_session_id "$pid") \
-    || return 1
-  # A holder that has since replaced its conversation in place is still working,
-  # under a session id its argv cannot know about. This only ever refuses; where
-  # no trusted record exists it adds nothing and the conditions below decide.
-  fm_claude_session_replaced "$pid" "$session_id" && return 1
+  # Claude is the only harness with a verified limit-stop transcript shape.
+  fm_harness_process_matches "$comm" "$args" || return 1
+  [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || return 1
+  session_id=$(fm_session_lock_recorded_session_id "$state") || return 1
+  # The id becomes a path component below, so only an exact session id passes.
+  printf '%s' "$session_id" \
+    | grep -qE '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$' || return 1
   transcript="$(fm_claude_transcript_dir "$home")/$session_id.jsonl"
   [ -f "$transcript" ] && [ -r "$transcript" ] || return 1
   # Resuming a limit-stopped session reuses its session id and its transcript,
@@ -887,7 +590,7 @@ fm_session_lock_report() {
     return 0
   fi
   if ! fm_session_lock_owned_by_self "$state"; then
-    if fm_session_limit_stopped "$holder" "$home"; then
+    if fm_session_limit_stopped "$holder" "$home" "$state"; then
       echo "limit-stopped $holder"
     else
       echo "held $holder"

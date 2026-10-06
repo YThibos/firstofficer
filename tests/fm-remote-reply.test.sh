@@ -102,13 +102,16 @@ stop_reply_listener() {
 
 # Block until this generation's capture has been applied. A live listener keeps
 # its claim across polls, so start is only launched when nothing owns the source.
+# Ownership is re-sampled about once a second, as a live home's supervision cycle
+# does: a manual handle re-arms the source, which can supersede the listener in
+# its re-listen gap, and that listener still reads live while it exits.
 await_reply_result() { # <result-path>
-  local result=$1 handled=${1%.result}.handled _
-  if [ "$(reply_owner)" != live ]; then
-    remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" >/dev/null 2>&1 &
-  fi
-  for _ in $(seq 1 800); do
+  local result=$1 handled=${1%.result}.handled i
+  for i in $(seq 0 799); do
     [ -s "$result" ] && [ -f "$handled" ] && return 0
+    if [ $((i % 20)) -eq 0 ] && [ "$(reply_owner)" != live ]; then
+      remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" >/dev/null 2>&1 &
+    fi
     sleep 0.05
   done
   return 1
@@ -121,6 +124,36 @@ sha256_file() {
     sha256sum "$1" | awk '{print $1}'
   fi
 }
+
+# Drive the real delta-reader executable across its unchanged-file wait.
+# The recording sleep appends a complete line after the initial empty snapshot,
+# so the next snapshot must deliver it without consuming or modifying the log.
+delta_cadence_case() {
+  local label=$1 override=$2 expected=$3 dir log empty_hash
+  dir="$TMP_ROOT/delta-$label"
+  mkdir -p "$dir/bin" "$dir/home/state"
+  log="$dir/home/state/replies.status"
+  : > "$log"
+  empty_hash=$(sha256_file "$log")
+  cat > "$dir/bin/sleep" <<'SH'
+#!/bin/bash
+printf '%s\n' "$1" >> "$FM_DELTA_SLEEP_LOG"
+printf 'cadence-delivered\n' >> "$FM_DELTA_APPEND_LOG"
+exec /bin/sleep "$@"
+SH
+  chmod +x "$dir/bin/sleep"
+  FM_HOME="$dir/home" PATH="$dir/bin:$PATH" FM_REMOTE_DELTA_POLL_SECONDS="$override" \
+    FM_DELTA_SLEEP_LOG="$dir/sleeps" FM_DELTA_APPEND_LOG="$log" \
+    "$BASH" "$ROOT/bin/fm-remote-delta-read.sh" state/replies.status 0 "$empty_hash" 30 \
+    > "$dir/result" || fail "$label delta reader failed"
+  [ "$(cat "$dir/sleeps")" = "$expected" ] || fail "$label delta reader did not wait $expected seconds"
+  assert_grep 'status=delta' "$dir/result" "$label delta reader did not publish a delta"
+  assert_grep 'cadence-delivered' "$dir/result" "$label delta reader lost the appended complete line"
+  [ "$(cat "$log")" = cadence-delivered ] || fail "$label delta reader changed its source log"
+  pass "$label delta reader waits $expected seconds then delivers a non-destructive complete-line delta"
+}
+delta_cadence_case default '' 0.5
+delta_cadence_case override 0.07 0.07
 
 ADAPTER="$ROOT/bin/fm-procevent-remote-reply.sh"
 SID=$(remote_env "$ADAPTER" source-id ios)
@@ -694,6 +727,9 @@ pass "source-line identity survives commit failure and cursor-loss recapture"
 # the reserved key over.
 # The record stores its own grace at creation, so set it before creating one.
 export FM_PENDING_REPLY_GRACE_SECS=0
+# Answer the mate's earlier decisions and blocker first: a recovery repost waits
+# while the mate has one of its own open (tests/fm-pending-reply.test.sh).
+printf 'resolved [key=%s]: answered\n' rough-cut-version ctl default >> "$PARENT/state/ios.status"
 ESCALATED_CORR=$(fm_pending_reply_create "$PARENT" "$PARENT/state" ios 'confirm the notarization')
 [ -n "$ESCALATED_CORR" ] || fail "could not create the pending-reply record to escalate"
 fm_pending_reply_mark_delivered "$PARENT/state" "$ESCALATED_CORR" \

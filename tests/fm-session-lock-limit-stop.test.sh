@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# tests/fm-session-lock-limit-stop.test.sh - session-lock ownership boundaries:
-# which process a session resolves to, and when a live holder may be taken over.
+# tests/fm-session-lock-limit-stop.test.sh - when a live session-lock holder
+# may be taken over because its session stopped on a usage limit.
 #
-# Both halves are safety-critical in the same direction. Resolving a session to
-# a process shared by every session in the machine makes a lock permanent and
-# makes two sessions indistinguishable; taking a lock from a session that is
-# still working destroys that session's authority mid-flight. So the shared
-# service must never be selected, and only a positively identified usage-limit
-# stop may be taken over.
+# Taking a lock from a session that is still working destroys that session's
+# authority mid-flight, so only a positively identified usage-limit stop may be
+# taken over. The holder's session id comes from the state/.lock-session sidecar
+# the holder itself recorded beside the lock, never from its argv.
 #
 # Process shapes come from a fixture `ps` table rather than real Claude
-# processes, because the shapes under test (a background session under the
-# shared daemon, a session stopped on a limit) cannot be produced on demand.
+# processes, because a session stopped on a limit cannot be produced on demand.
 # Liveness still uses real background processes, so kill -0 means what it says.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-LIB="$ROOT/bin/fm-session-lock-lib.sh"
 LOCK="$ROOT/bin/fm-lock.sh"
 TMP_ROOT=$(fm_test_tmproot fm-session-lock-limit-stop)
 BASE_PATH=$PATH
@@ -60,12 +56,8 @@ start_holder() {
 }
 
 # start_argv_holder <dir> <arg>...: a real live process whose OWN argv is the
-# given elements, so a fixture holder's session id is resolved from real
-# discrete argv rather than from anything this suite could hand the code under
-# test. That distinction is the point of several cases below: the fixture `ps`
-# table supplies the process NAME and command line identity is classified from,
-# while the session id can only come from the live process itself. Echoes its
-# pid.
+# given elements, for the one case that proves argv is never a session-id
+# source. Echoes its pid.
 start_argv_holder() {
   local dir=$1 prog="$1/argv-holder" pid
   shift
@@ -88,13 +80,6 @@ SH
   printf '%s\n' "$pid" >> "$HOLDER_PIDS"
   printf '%s\n' "$pid"
 }
-
-# proc_supported: the takeover reads a holder's discrete argv from
-# /proc/<pid>/cmdline and verifies a per-pid record against /proc/<pid>/stat,
-# neither of which exists off Linux. There it refuses by design, so the cases
-# that assert a takeover HAPPENS, or that a record restricted one, have nothing
-# to assert and say so instead of failing.
-proc_supported() { [ -r "/proc/$$/cmdline" ] && [ -r "/proc/$$/stat" ]; }
 
 # make_case <name>: a case directory with a home, a fakebin, and an empty
 # process table. Echoes "<dir>|<home>|<fakebin>|<table>".
@@ -195,51 +180,6 @@ add_process() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" "${6:-0}" >> "$1"
 }
 
-# The two Claude process shapes this suite depends on, observed verbatim on a
-# real machine: a background session's own host (its release version is the
-# process name and its session id is in its argv) and the shared supervisor
-# every background session in the machine descends from.
-#
-# The host shape is stated once, as discrete argv, because the suite needs it
-# both ways: session_host_argv sets SESSION_HOST_ARGV for the live process a
-# fixture starts, and session_host_args renders those same elements the way ps
-# flattens them for the fixture table. Deriving one from the other is what keeps
-# a fixture's process table and its own live process from ever describing
-# different command lines.
-SESSION_HOST_ARGV=()
-session_host_argv() {  # <version> <session-id>
-  SESSION_HOST_ARGV=(
-    claude bg-pty-host --bg-pty-host "/tmp/cc-daemon/pty/$2.sock" 238 54
-    -- "/opt/claude/versions/$1" --session-id "$2" --agent claude
-  )
-}
-
-session_host_args() {  # <version> <session-id>
-  session_host_argv "$1" "$2"
-  printf '%s' "${SESSION_HOST_ARGV[*]}"
-}
-
-daemon_args() {
-  printf '/usr/local/bin/claude daemon run --json-path /home/u/.claude/daemon.json --origin transient'
-}
-
-# walk_from <dir> <table> <fakebin> <parent-pid>: run the ancestry walk from a
-# real process spliced into the fixture table under <parent-pid>.
-walk_from() {
-  local dir=$1 table=$2 fakebin=$3 parent=$4 driver="$1/walk.sh"
-  cat > "$driver" <<'SH'
-#!/usr/bin/env bash
-set -u
-printf '%s\t%s\tzsh\t-zsh\n' "$$" "$FM_TEST_PS_PARENT" >> "$FM_TEST_PS_TABLE"
-# shellcheck source=/dev/null
-. "$FM_TEST_LIB"
-fm_harness_ancestry_pid
-SH
-  chmod +x "$driver"
-  env PATH="$fakebin:$BASE_PATH" FM_TEST_PS_TABLE="$table" FM_TEST_LIB="$LIB" \
-    FM_TEST_PS_PARENT="$parent" "$driver"
-}
-
 # transcript_path <home> <session-id>: where Claude Code keeps that session's
 # transcript for a session working in <home>, under the fixture config root.
 transcript_path() {
@@ -293,13 +233,15 @@ write_transcript() {
 # session whose own harness pid is <session-pid>, defaulting to init so the
 # claim resolves to the transient process itself.
 claim() {
-  env PATH="$2:$BASE_PATH" FM_TEST_PS_TABLE="$3" FM_HOME="$1" \
+  env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+    PATH="$2:$BASE_PATH" FM_TEST_PS_TABLE="$3" FM_HOME="$1" \
     FM_TEST_PS_DEFAULT_PPID="${4:-1}" \
     CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" "$LOCK"
 }
 
 lock_status() {  # <home> <fakebin> <table> [session-pid]
-  env PATH="$2:$BASE_PATH" FM_TEST_PS_TABLE="$3" FM_HOME="$1" \
+  env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+    PATH="$2:$BASE_PATH" FM_TEST_PS_TABLE="$3" FM_HOME="$1" \
     FM_TEST_PS_DEFAULT_PPID="${4:-1}" \
     CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" "$LOCK" status
 }
@@ -313,106 +255,31 @@ add_session() {
   printf '%s\n' "$pid"
 }
 
-# --- the shared-service boundary -------------------------------------------
-
-test_walk_stops_below_the_shared_daemon() {
-  local rec dir home fakebin table host daemon resolved
-  rec=$(make_case walk-daemon)
-  IFS='|' read -r dir home fakebin table <<EOF
-$rec
-EOF
-  daemon=4001
-  host=4002
-  add_process "$table" "$daemon" 1 claude "$(daemon_args)"
-  add_process "$table" "$host" "$daemon" 2.1.237 "$(session_host_args 2.1.237 aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee)"
-  resolved=$(walk_from "$dir" "$table" "$fakebin" "$host")
-  [ "$resolved" = "$host" ] \
-    || fail "background session resolved to '$resolved', not its own host $host"
-  pass "the ancestry walk stops at a background session's own host, not the shared daemon"
-}
-
-test_two_background_sessions_resolve_apart() {
-  local rec dir home fakebin table daemon host_a host_b a b
-  rec=$(make_case walk-two-sessions)
-  IFS='|' read -r dir home fakebin table <<EOF
-$rec
-EOF
-  daemon=4101
-  host_a=4102
-  host_b=4103
-  add_process "$table" "$daemon" 1 claude "$(daemon_args)"
-  add_process "$table" "$host_a" "$daemon" 2.1.237 "$(session_host_args 2.1.237 aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa)"
-  add_process "$table" "$host_b" "$daemon" 2.1.237 "$(session_host_args 2.1.237 bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb)"
-  a=$(walk_from "$dir" "$table" "$fakebin" "$host_a")
-  b=$(walk_from "$dir" "$table" "$fakebin" "$host_b")
-  [ "$a" = "$host_a" ] && [ "$b" = "$host_b" ] \
-    || fail "concurrent background sessions resolved to '$a' and '$b', not $host_a and $host_b"
-  [ "$a" != "$b" ] || fail "two concurrent background sessions resolved to the same pid $a"
-  pass "two concurrent background sessions resolve to their own hosts, never a shared pid"
-}
-
-test_nested_claude_run_still_resolves_outermost() {
-  local rec dir home fakebin table outer inner resolved
-  rec=$(make_case walk-nested)
-  IFS='|' read -r dir home fakebin table <<EOF
-$rec
-EOF
-  outer=4201
-  inner=4202
-  add_process "$table" "$outer" 1 2.1.237 "claude bg-pty-host --bg-pty-host /tmp/cc-daemon/spare/x.pty.sock 200 50 -- /opt/claude/versions/2.1.237 --bg-spare /tmp/cc-daemon/spare/x.claim.sock"
-  add_process "$table" "$inner" "$outer" 2.1.237 "claude bg-spare --bg-spare /tmp/cc-daemon/spare/x.claim.sock"
-  resolved=$(walk_from "$dir" "$table" "$fakebin" "$inner")
-  [ "$resolved" = "$outer" ] \
-    || fail "nested claude run resolved to '$resolved', not its outermost pid $outer"
-  pass "a genuine nested claude run still resolves to the outermost pid of that run"
-}
-
-test_daemon_holder_is_not_a_live_session() {
-  local rec dir home fakebin table daemon session out
-  rec=$(make_case liveness-daemon)
-  IFS='|' read -r dir home fakebin table <<EOF
-$rec
-EOF
-  daemon=$(start_holder)
-  session=$(start_holder)
-  add_process "$table" "$daemon" 1 claude "$(daemon_args)"
-  add_process "$table" "$session" "$daemon" 2.1.237 "$(session_host_args 2.1.237 cccccccc-3333-3333-3333-cccccccccccc)"
-
-  printf '%s\n' "$daemon" > "$home/state/.lock"
-  out=$(lock_status "$home" "$fakebin" "$table")
-  assert_contains "$out" "lock: stale" "a lock recording the live shared daemon was reported as a live session"
-
-  printf '%s\n' "$session" > "$home/state/.lock"
-  out=$(lock_status "$home" "$fakebin" "$table")
-  assert_contains "$out" "lock: held by live harness pid $session" "a live session's own host was not reported as a live holder"
-  pass "the shared daemon is never a live session holder, while a session host still is"
-}
-
 # --- taking over a session stopped by a usage limit -------------------------
 
-# limit_stop_case <name> <tail-kind> [holder-age] [record-timestamp]: a home
-# whose lock is held by a live Claude session with a transcript of the given
-# shape. The holder defaults to an hour old against a record written now, which
-# is a session that hit the limit while running; a caller overrides both to
-# build the resumed session, whose process is younger than its own last record.
+# limit_stop_case <name> <tail-kind> [holder-age] [record-timestamp] [comm] [args]:
+# a home whose lock is held by a live Claude session, with that session's id
+# recorded beside the lock and a transcript of the given shape. The holder
+# defaults to an hour old against a record written now, which is a session that
+# hit the limit while running; a caller overrides both to build the resumed
+# session, whose process is younger than its own last record. The holder's
+# process shape defaults to a plain claude, and a caller passes another to cover
+# the version-named executable Claude Code's native installer runs.
 # Echoes "<home>|<fakebin>|<table>|<holder-pid>|<transcript>".
+LIMIT_SESSION_ID=dddddddd-4444-4444-4444-dddddddddddd
 limit_stop_case() {
-  local name=$1 kind=$2 age=${3:-3600} at=${4:-} rec dir home fakebin table
-  local holder session_id transcript
+  local name=$1 kind=$2 age=${3:-3600} at=${4:-} comm=${5:-claude}
+  local args=${6:-claude --dangerously-skip-permissions} rec dir home fakebin table
+  local holder transcript
   rec=$(make_case "$name")
   IFS='|' read -r dir home fakebin table <<EOF
 $rec
 EOF
-  session_id=dddddddd-4444-4444-4444-dddddddddddd
-  # A real process carrying the observed argv, because the session id is read
-  # from the live process and not from the fixture table. Its own argv[0] is the
-  # helper rather than "claude", which changes nothing: only the --session-id
-  # element and the one after it are ever read.
-  session_host_argv 2.1.235 "$session_id"
-  holder=$(start_argv_holder "$dir" "${SESSION_HOST_ARGV[@]}")
-  add_process "$table" "$holder" 1 2.1.235 "${SESSION_HOST_ARGV[*]}" "$age"
+  holder=$(start_holder)
+  add_process "$table" "$holder" 1 "$comm" "$args" "$age"
   printf '%s\n' "$holder" > "$home/state/.lock"
-  transcript=$(transcript_path "$home" "$session_id")
+  printf '%s\n' "$LIMIT_SESSION_ID" > "$home/state/.lock-session"
+  transcript=$(transcript_path "$home" "$LIMIT_SESSION_ID")
   [ "$kind" = none ] || write_transcript "$transcript" "$kind" ${at:+"$at"}
   printf '%s|%s|%s|%s|%s\n' "$home" "$fakebin" "$table" "$holder" "$transcript"
 }
@@ -425,10 +292,6 @@ seconds_ago() {
 
 test_limit_stopped_holder_is_taken_over() {
   local rec home fakebin table holder transcript out status=0 recorded session
-  if ! proc_supported; then
-    pass "the takeover needs a holder's discrete argv and is not evaluated on this host"
-    return 0
-  fi
   rec=$(limit_stop_case takeover limit-stop)
   IFS='|' read -r home fakebin table holder transcript <<EOF
 $rec
@@ -493,56 +356,57 @@ EOF
 
 test_unresolvable_holders_refuse() {
   local rec dir home fakebin table holder status name
-  local -a argv
-  for name in no-session-id non-claude; do
+  for name in no-sidecar malformed-sidecar non-claude; do
     status=0
     rec=$(make_case "unresolvable-$name")
     IFS='|' read -r dir home fakebin table <<EOF
 $rec
 EOF
-    # The non-Claude holder deliberately carries a real --session-id pair, so
-    # its refusal can only come from the harness test and not from an absence.
+    holder=$(start_holder)
     case "$name" in
-      no-session-id) argv=(claude --dangerously-skip-permissions) ;;
-      non-claude) argv=(codex --session-id dddddddd-4444-4444-4444-dddddddddddd) ;;
+      non-claude) add_process "$table" "$holder" 1 codex 'codex' 3600 ;;
+      *) add_process "$table" "$holder" 1 claude 'claude --dangerously-skip-permissions' 3600 ;;
     esac
-    holder=$(start_argv_holder "$dir" "${argv[@]}")
-    add_process "$table" "$holder" 1 "${argv[0]}" "${argv[*]}"
     printf '%s\n' "$holder" > "$home/state/.lock"
+    # The non-Claude holder deliberately carries a real recorded id, so its
+    # refusal can only come from the harness test and not from an absence; the
+    # malformed one would name a path outside the transcript directory.
+    case "$name" in
+      no-sidecar) : ;;
+      malformed-sidecar) printf '%s\n' "../$LIMIT_SESSION_ID" > "$home/state/.lock-session" ;;
+      non-claude) printf '%s\n' "$LIMIT_SESSION_ID" > "$home/state/.lock-session" ;;
+    esac
     # A transcript that WOULD authorise a takeover, so the refusal can only come
     # from failing to tie this holder to it.
-    write_transcript "$(transcript_path "$home" dddddddd-4444-4444-4444-dddddddddddd)" limit-stop
+    write_transcript "$(transcript_path "$home" "$LIMIT_SESSION_ID")" limit-stop
     claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
     expect_code 1 "$status" "a '$name' holder must keep refusing the claim"
     [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a '$name' holder lost its lock"
   done
-  pass "a holder with no resolvable session id, and one that is not Claude, both keep refusing"
+  pass "a holder with no recorded session id, a malformed one, or one that is not Claude keeps refusing"
 }
 
-test_session_id_inside_one_argument_is_not_read() {
+test_session_id_in_argv_is_not_read() {
   local rec dir home fakebin table holder status=0 planted
   local -a argv
-  rec=$(make_case argv-one-argument)
+  rec=$(make_case argv-not-a-source)
   IFS='|' read -r dir home fakebin table <<EOF
 $rec
 EOF
-  planted=dddddddd-4444-4444-4444-dddddddddddd
-  # A live session whose own prompt carries the words a flattened command line
-  # cannot tell apart from a real flag pair - which is exactly what a session
-  # working on this mechanism looks like. Its discrete argv holds no
-  # --session-id element at all, so nothing ties it to the transcript below.
-  argv=(claude -p "explain how --session-id $planted resolves a transcript")
+  planted=$LIMIT_SESSION_ID
+  # A live session whose argv carries a real --session-id pair, with nothing
+  # recorded beside the lock. Only the sidecar the holder wrote ties it to a
+  # transcript, so argv must never stand in for it.
+  argv=(claude --session-id "$planted")
   holder=$(start_argv_holder "$dir" "${argv[@]}")
-  add_process "$table" "$holder" 1 claude "${argv[*]}"
+  add_process "$table" "$holder" 1 claude "${argv[*]}" 3600
   printf '%s\n' "$holder" > "$home/state/.lock"
-  # A transcript that WOULD authorise a takeover under the planted id, so the
-  # refusal can only come from declining to read that id out of one argument.
   write_transcript "$(transcript_path "$home" "$planted")" limit-stop
   claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
-  expect_code 1 "$status" "a session id quoted inside one argument was read as the holder's own"
+  expect_code 1 "$status" "a session id read from the holder's argv authorised a takeover"
   [ "$(cat "$home/state/.lock")" = "$holder" ] \
-    || fail "a working session lost its lock to a session id it had merely quoted"
-  pass "a --session-id pair inside a single argument is never read as the holder's own session"
+    || fail "a holder lost its lock on a session id it never recorded beside the lock"
+  pass "a --session-id in the holder's argv is never read as the recorded session"
 }
 
 test_resumed_session_keeps_its_lock() {
@@ -588,10 +452,6 @@ EOF
 
 test_takeover_is_not_attributed_to_other_readers() {
   local rec home fakebin table holder transcript out taker other
-  if ! proc_supported; then
-    pass "takeover attribution needs a holder's discrete argv and is not evaluated on this host"
-    return 0
-  fi
   rec=$(limit_stop_case attribution limit-stop)
   IFS='|' read -r home fakebin table holder transcript <<EOF
 $rec
@@ -611,197 +471,69 @@ EOF
   pass "only the session that took the lock over is told it did"
 }
 
-# --- the per-pid session record cross-check ---------------------------------
+# --- the sidecar names the conversation the holder is on now ------------------
 #
-# Claude Code keeps one record per live session process at
-# <config-root>/sessions/<pid>.json naming that session's CURRENT session id, so
-# a holder that replaced its conversation in place can be told apart from one
-# still working on the session its argv names. The record is only trusted when
-# its procStart matches the live process, which needs /proc and therefore only
-# exists on Linux; elsewhere every record is unverifiable and the cross-check
-# adds nothing, which is exactly what these cases assert for an absent one.
-
-# proc_start_ticks <pid>: field 22 of /proc/<pid>/stat, the value Claude Code
-# records as procStart.
-proc_start_ticks() {
-  awk '{ sub(/^[^)]*\) /, ""); print $20 }' "/proc/$1/stat"
-}
-
-# write_session_record <pid> <session-id> [proc-start]: a real per-pid session
-# record, defaulting to the live process's true start value.
-write_session_record() {
-  local pid=$1 id=$2 start=${3:-}
-  [ -n "$start" ] || start=$(proc_start_ticks "$pid")
-  mkdir -p "$CLAUDE_CONFIG_DIR/sessions"
-  printf '{"pid":%s,"sessionId":"%s","cwd":"/tmp","procStart":"%s","kind":"interactive"}\n' \
-    "$pid" "$id" "$start" > "$CLAUDE_CONFIG_DIR/sessions/$pid.json"
-}
-
-test_replaced_session_keeps_its_lock() {
+# A live session that replaces its conversation in place (/clear) re-keys its
+# session id, and bin/fm-lock.sh refreshes the sidecar to the new id when that
+# same process confirms its lock. The old conversation's transcript can still
+# end on the limit error, so the takeover must follow the recorded id rather
+# than any transcript that merely belongs to the holder's past.
+test_rekeyed_session_keeps_its_lock() {
   local rec home fakebin table holder transcript status=0
-  if ! proc_supported; then
-    pass "the replaced-session cross-check needs /proc and is not evaluated on this host"
-    return 0
-  fi
-  # The reported defect: the holder hit the limit under the session its argv
-  # names, then replaced its conversation in place and is working again under a
-  # new one. Its argv, and so the transcript this resolves, cannot know that.
-  rec=$(limit_stop_case replaced limit-stop)
+  rec=$(limit_stop_case rekeyed limit-stop)
   IFS='|' read -r home fakebin table holder transcript <<EOF
 $rec
 EOF
-  write_session_record "$holder" eeeeeeee-5555-5555-5555-eeeeeeeeeeee
+  printf '%s\n' eeeeeeee-5555-5555-5555-eeeeeeeeeeee > "$home/state/.lock-session"
+  write_transcript "$(transcript_path "$home" eeeeeeee-5555-5555-5555-eeeeeeeeeeee)" working
   claim "$home" "$fakebin" "$table" >/dev/null 2>&1 || status=$?
-  expect_code 1 "$status" "a holder working under a replaced session was taken over"
+  expect_code 1 "$status" "a holder working under a re-keyed session was taken over"
   [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a working holder lost its lock"
-  pass "a holder whose current session differs from the one its argv names keeps its lock"
+  pass "a holder whose recorded session is still working keeps its lock, whatever an older transcript says"
 }
 
-test_absent_session_record_still_takes_over() {
-  local rec home fakebin table holder transcript session status=0
-  if ! proc_supported; then
-    pass "the absent-record case needs a holder's discrete argv and is not evaluated on this host"
-    return 0
-  fi
-  rec=$(limit_stop_case no-record limit-stop)
-  IFS='|' read -r home fakebin table holder transcript <<EOF
-$rec
-EOF
-  [ -e "$CLAUDE_CONFIG_DIR/sessions/$holder.json" ] \
-    && fail "this case depends on the holder having no per-pid record"
-  session=$(add_session "$table")
-  claim "$home" "$fakebin" "$table" "$session" >/dev/null 2>&1 || status=$?
-  expect_code 0 "$status" "a holder with no per-pid record was refused, so the cross-check did more than restrict"
-  [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the takeover did not record the taking session"
-  pass "a holder with no per-pid record is taken over exactly as before"
-}
-
-test_stale_session_record_is_ignored() {
-  local rec home fakebin table holder transcript session status=0
-  if ! proc_supported; then
-    pass "the stale-record case needs /proc and is not evaluated on this host"
-    return 0
-  fi
-  rec=$(limit_stop_case stale-record limit-stop)
-  IFS='|' read -r home fakebin table holder transcript <<EOF
-$rec
-EOF
-  # A record left behind by a process that once had this pid: it names another
-  # session, but its procStart belongs to that dead process, so it is not this
-  # holder's record and must not restrict anything.
-  write_session_record "$holder" eeeeeeee-6666-6666-6666-eeeeeeeeeeee 1
-  session=$(add_session "$table")
-  claim "$home" "$fakebin" "$table" "$session" >/dev/null 2>&1 || status=$?
-  expect_code 0 "$status" "a record from a reused pid was trusted and blocked the takeover"
-  [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the takeover did not record the taking session"
-  pass "a per-pid record whose procStart does not match the live process is ignored"
-}
-
-# --- the session host shape -------------------------------------------------
+# --- the version-named executable ---------------------------------------------
 #
-# The lock records the verified session host, a process named after its release
-# version that no naming rule matches on its own - which is why the liveness
-# test accepts one on the record alone. The limit-stop path has to reach the
-# same holder, or the takeover is unreachable for every lock the walk records
-# and a limit-stopped session holds its home read-only until its process exits.
-# The fixtures above are claude-named, so they cannot see that; these are not.
+# Claude Code's native installer runs a per-session executable named after its
+# release version, so neither its process name nor its basename says claude.
+# Upstream's harness identity recognises it by the whole `claude` path
+# component in argv[0], and the takeover has to reach the same holder.
+VERSIONED_ARGS='/opt/claude/versions/2.1.235 --agent claude'
 
-# session_host_case <name> <tail-kind>: a home whose lock is held by a live
-# holder in the session host shape - named after its release version, with no
-# --session-id anywhere in its own argv - identifiable only through Claude
-# Code's verified per-pid record. Echoes "<home>|<fakebin>|<table>|<holder-pid>".
-session_host_case() {
-  local name=$1 kind=$2 rec dir home fakebin table holder session_id
-  local -a argv
-  rec=$(make_case "$name")
-  IFS='|' read -r dir home fakebin table <<EOF
-$rec
-EOF
-  session_id=ffffffff-7777-7777-7777-ffffffffffff
-  argv=(/opt/claude/versions/2.1.235 --agent claude)
-  holder=$(start_argv_holder "$dir" "${argv[@]}")
-  add_process "$table" "$holder" 1 2.1.235 "${argv[*]}" 3600
-  printf '%s\n' "$holder" > "$home/state/.lock"
-  write_session_record "$holder" "$session_id"
-  write_transcript "$(transcript_path "$home" "$session_id")" "$kind"
-  printf '%s|%s|%s|%s\n' "$home" "$fakebin" "$table" "$holder"
-}
-
-test_limit_stopped_session_host_is_taken_over() {
-  local rec home fakebin table holder session out status=0
-  if ! proc_supported; then
-    pass "the session-host takeover needs a verified per-pid record and is not evaluated on this host"
-    return 0
-  fi
-  rec=$(session_host_case host-takeover limit-stop)
-  IFS='|' read -r home fakebin table holder <<EOF
+test_limit_stopped_versioned_holder_is_taken_over() {
+  local rec home fakebin table holder transcript session out status=0
+  rec=$(limit_stop_case versioned-takeover limit-stop 3600 '' 2.1.235 "$VERSIONED_ARGS")
+  IFS='|' read -r home fakebin table holder transcript <<EOF
 $rec
 EOF
   out=$(lock_status "$home" "$fakebin" "$table")
   assert_contains "$out" "held by a session stopped by a usage limit" \
-    "a limit-stopped session host was reported as another live session holding the lock"
+    "a limit-stopped version-named holder was reported as another live session holding the lock"
 
   session=$(add_session "$table")
   out=$(claim "$home" "$fakebin" "$table" "$session") || status=$?
-  expect_code 0 "$status" "a limit-stopped session host must not refuse the claim"
+  expect_code 0 "$status" "a limit-stopped version-named holder must not refuse the claim"
   assert_contains "$out" "stopped by a usage limit" "the takeover did not say why it was allowed"
   [ "$(cat "$home/state/.lock")" = "$session" ] \
     || fail "the lock was not handed to the session that took it over"
-  pass "a limit-stopped holder in the session host shape is identified and taken over"
+  pass "a limit-stopped version-named holder is identified and taken over"
 }
 
-test_working_session_host_still_refuses() {
-  local rec home fakebin table holder status=0 out
-  if ! proc_supported; then
-    pass "the working session-host case needs a verified per-pid record and is not evaluated on this host"
-    return 0
-  fi
-  rec=$(session_host_case host-working working)
-  IFS='|' read -r home fakebin table holder <<EOF
+test_working_versioned_holder_still_refuses() {
+  local rec home fakebin table holder transcript status=0 out
+  rec=$(limit_stop_case versioned-working working 3600 '' 2.1.235 "$VERSIONED_ARGS")
+  IFS='|' read -r home fakebin table holder transcript <<EOF
 $rec
 EOF
   out=$(claim "$home" "$fakebin" "$table" 2>&1) || status=$?
-  expect_code 1 "$status" "a working session host must still refuse the claim"
+  expect_code 1 "$status" "a working version-named holder must still refuse the claim"
   assert_contains "$out" "another live firstmate session holds the lock" "the refusal lost its own explanation"
-  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a working session host lost its lock"
-  pass "a session host that is still working keeps its lock"
-}
-
-test_unverifiable_session_host_record_is_never_a_takeover() {
-  local rec home fakebin table holder out
-  if ! proc_supported; then
-    pass "the unverifiable-record case needs /proc and is not evaluated on this host"
-    return 0
-  fi
-  rec=$(session_host_case host-stale-record limit-stop)
-  IFS='|' read -r home fakebin table holder <<EOF
-$rec
-EOF
-  # The only thing tying this holder to a transcript is its record, and its
-  # procStart now belongs to a process that once had this pid, so nothing in the
-  # record can be trusted. The holder is still a live harness by its own
-  # executable path (a whole `claude` component of argv[0]), so the lock reads
-  # held and the claim refuses; the untrustworthy record never lets the
-  # limit-stop path speak for it.
-  write_session_record "$holder" ffffffff-7777-7777-7777-ffffffffffff 1
-  out=$(lock_status "$home" "$fakebin" "$table")
-  assert_contains "$out" "held by live harness" "a live versioned session executable did not read as holding the lock"
-  out=$(claim "$home" "$fakebin" "$table" 2>&1)
-  assert_contains "$out" "another live firstmate session holds the lock" \
-    "a live holder with an untrustworthy record did not refuse the claim"
-  assert_not_contains "$out" "stopped by a usage limit" \
-    "a holder identified only by an untrustworthy record was taken over as limit-stopped"
-  assert_not_contains "$out" "takeover" \
-    "a holder identified only by an untrustworthy record was announced as a takeover"
-  pass "a session host whose per-pid record cannot be trusted is never taken over"
+  [ "$(cat "$home/state/.lock")" = "$holder" ] || fail "a working version-named holder lost its lock"
+  pass "a version-named holder that is still working keeps its lock"
 }
 
 test_status_names_the_takeover_command() {
   local rec home fakebin table holder transcript out
-  if ! proc_supported; then
-    pass "reporting a limit-stopped holder needs its discrete argv and is not evaluated on this host"
-    return 0
-  fi
   rec=$(limit_stop_case status-report limit-stop)
   IFS='|' read -r home fakebin table holder transcript <<EOF
 $rec
@@ -816,24 +548,17 @@ EOF
 CLAUDE_CONFIG_DIR="$TMP_ROOT/claude-config"
 export CLAUDE_CONFIG_DIR
 mkdir -p "$CLAUDE_CONFIG_DIR"
-test_walk_stops_below_the_shared_daemon
-test_two_background_sessions_resolve_apart
-test_nested_claude_run_still_resolves_outermost
-test_daemon_holder_is_not_a_live_session
 test_limit_stopped_holder_is_taken_over
 test_working_holder_still_refuses
 test_quoted_limit_message_does_not_steal_a_lock
 test_ambiguous_transcripts_refuse
 test_unresolvable_holders_refuse
-test_session_id_inside_one_argument_is_not_read
+test_session_id_in_argv_is_not_read
 test_resumed_session_keeps_its_lock
 test_missing_record_instant_refuses
 test_unreadable_start_time_refuses
-test_replaced_session_keeps_its_lock
-test_absent_session_record_still_takes_over
-test_stale_session_record_is_ignored
-test_limit_stopped_session_host_is_taken_over
-test_working_session_host_still_refuses
-test_unverifiable_session_host_record_is_never_a_takeover
+test_rekeyed_session_keeps_its_lock
+test_limit_stopped_versioned_holder_is_taken_over
+test_working_versioned_holder_still_refuses
 test_takeover_is_not_attributed_to_other_readers
 test_status_names_the_takeover_command
