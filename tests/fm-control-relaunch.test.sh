@@ -39,12 +39,24 @@ TMP_ROOT=$(fm_test_tmproot fm-control-relaunch)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 TASK_TMPS=()
+TMUX_SOCKET_DIRS=()
 
+HOLDER_PIDS=()
 relaunch_cleanup() {
-  local d
+  local d p
+  for p in "${HOLDER_PIDS[@]:-}"; do
+    [ -n "$p" ] && kill "$p" 2>/dev/null
+  done
+  for d in "${TMUX_SOCKET_DIRS[@]:-}"; do
+    [ -n "$d" ] || continue
+    for p in "$d"/*; do
+      [ -S "$p" ] && /usr/bin/env tmux -S "$p" kill-server 2>/dev/null
+    done
+  done
   for d in "${TASK_TMPS[@]:-}"; do
     [ -n "$d" ] && rm -rf "$d"
   done
+  chmod -R u+w "$TMP_ROOT" 2>/dev/null
   rm -rf "$TMP_ROOT"
 }
 trap relaunch_cleanup EXIT
@@ -239,7 +251,7 @@ run_control() {  # <case-dir> <args...>
     -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
-    FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
+    FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" TMUX_TMPDIR="$dir/tmuxtmp" \
     FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
     FM_REAL_GIT="${FM_REAL_GIT:-}" FM_FAKE_GIT_FAILURE="${FM_FAKE_GIT_FAILURE:-}" \
     FM_REAL_MV="${FM_REAL_MV:-}" FM_FAKE_COMPLETE_JOURNAL_MV_FAIL="${FM_FAKE_COMPLETE_JOURNAL_MV_FAIL:-}" \
@@ -261,7 +273,7 @@ run_spawn() {  # <case-dir> <args...>
     -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
-    FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
+    FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" TMUX_TMPDIR="$dir/tmuxtmp" \
     "$SPAWN" "$@" 2>&1
 }
 
@@ -1845,17 +1857,28 @@ strand_endpoint() {  # <case-dir> <id>
   : > "$1/fake/windows"
 }
 
-# Every tmux `missing` refuses on BOTH verbs, whatever produced it. tmux is the
-# one verified backend whose absence cannot be proven from a task record: the
-# record carries no socket identity for the endpoint, and any inventory
-# describes only the server this process happens to address. So a window that
-# is merely on a server this seat cannot reach is indistinguishable from one
-# that was destroyed, and neither verb will guess.
+# hold_worktree <case-dir>: a live process whose working directory is the task's
+# worktree - what a surviving pane shell or agent on an unreachable tmux server
+# looks like from here.
+# shellcheck disable=SC2031
+hold_worktree() {  # <case-dir>
+  local pid
+  pid=$(cd "$1/wt" && { /bin/sleep 300 >/dev/null 2>&1 & echo $!; })
+  HOLDER_PIDS+=("$pid")
+  printf '%s\n' "$pid"
+}
+
+# A tmux `missing` on a record that carries no server identity (written before
+# spawn recorded one) refuses on BOTH verbs whenever the legacy proof cannot
+# establish absence. A live process holding the worktree is the decisive case:
+# the window may be on a tmux server this seat cannot address, and its agent
+# would be duplicated by a guess.
 assert_tmux_missing_refuses() {  # <case-dir> <id> <what-was-staged>
   local dir=$1 id=$2 what=$3 out rc brief_before
 
   out=$(run_spawn "$dir" "$id" --relaunch --harness claude); rc=$?
   expect_code 1 "$rc" "relaunch must refuse a tmux endpoint whose absence cannot be proven ($what)"$'\n'"$out"
+  assert_contains "$out" "still have its worktree" "the refusal should name the surviving process ($what)"
   assert_absent "$dir/fake/created-windows" "a refused relaunch must not create a window ($what)"
   assert_absent "$dir/fake/created-sessions" "a refused relaunch must not create a session ($what)"
   [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch must send nothing into any pane ($what)"
@@ -1876,16 +1899,17 @@ assert_tmux_missing_refuses() {  # <case-dir> <id> <what-was-staged>
   [ ! -s "$dir/fake/literal" ] || fail "a refused transaction must launch nothing ($what)"
 }
 
-test_tmux_refuses_a_window_missing_from_its_session() {
+test_tmux_legacy_refuses_a_window_missing_from_its_session_while_its_worktree_is_held() {
   local dir
   dir=$(new_case tmux-gone rl60)
   add_ship_task "$dir" rl60 claude
   strand_endpoint "$dir" rl60
+  hold_worktree "$dir" >/dev/null
   assert_tmux_missing_refuses "$dir" rl60 "window absent from a readable session inventory"
-  pass "tmux: a window absent from its session refuses both verbs rather than being assumed gone"
+  pass "tmux legacy record: a window absent from its session refuses both verbs while a process holds the worktree"
 }
 
-test_tmux_refuses_a_session_that_cannot_be_found() {
+test_tmux_legacy_refuses_a_session_that_cannot_be_found_while_its_worktree_is_held() {
   local dir
   dir=$(new_case tmux-nosession rl61)
   add_ship_task "$dir" rl61 claude
@@ -1893,19 +1917,297 @@ test_tmux_refuses_a_session_that_cannot_be_found() {
   # TMUX_TMPDIR/socket: definitive about the SESSION, silent about whether the
   # window and its agent survived elsewhere.
   : > "$dir/fake/session-missing"
+  hold_worktree "$dir" >/dev/null
   assert_tmux_missing_refuses "$dir" rl61 "recorded session not found"
-  pass "tmux: an unfindable session refuses both verbs, so a live agent is never duplicated"
+  pass "tmux legacy record: an unfindable session refuses both verbs while a process holds the worktree"
 }
 
-test_tmux_refuses_when_the_server_is_gone() {
+test_tmux_legacy_refuses_a_dead_server_while_its_worktree_is_held() {
   local dir
   dir=$(new_case tmux-noserver rl62)
   add_ship_task "$dir" rl62 claude
-  # No server on the socket this process addresses. Another server may still be
-  # running the task's window, and the record cannot say which socket is its.
   : > "$dir/fake/server-dead"
+  hold_worktree "$dir" >/dev/null
   assert_tmux_missing_refuses "$dir" rl62 "no tmux server on this socket"
-  pass "tmux: a dead server on this socket refuses both verbs rather than proving absence"
+  pass "tmux legacy record: a dead server refuses both verbs while a process holds the worktree"
+}
+
+test_tmux_legacy_refuses_while_another_server_answers() {
+  local dir out rc sockdir
+  dir=$(new_case tmux-sibling rl64)
+  add_ship_task "$dir" rl64 claude
+  strand_endpoint "$dir" rl64
+  # A second socket in this user's tmux socket directory whose server answers:
+  # the window may simply live there.
+  sockdir="$dir/tmuxtmp/tmux-$(id -u)"
+  mkdir -p "$sockdir"
+  : > "$sockdir/sibling"
+  out=$(run_spawn "$dir" rl64 --relaunch --harness claude); rc=$?
+  expect_code 1 "$rc" "a legacy record must refuse while another tmux server answers"$'\n'"$out"
+  assert_contains "$out" "another tmux server answers on $sockdir/sibling" \
+    "the refusal should name the server that may still hold the window"
+  assert_absent "$dir/fake/created-windows" "a refused relaunch must not create a window"
+  out=$(run_control "$dir" rl64 exit); rc=$?
+  expect_code 1 "$rc" "exit must refuse too"$'\n'"$out"
+  assert_not_contains "$out" "endpoint-gone" "exit must not claim a stop it cannot see"
+  pass "tmux legacy record: another answering tmux server refuses both verbs"
+}
+
+test_tmux_legacy_record_is_reclaimed_when_absence_is_proven() {
+  local dir out rc head_before
+  dir=$(new_case tmux-legacy-reclaim rl65)
+  add_ship_task "$dir" rl65 claude
+  seed_backlog "$dir" rl65 in_flight
+  : > "$dir/fake/server-dead"
+  printf 'unlanded\n' > "$dir/wt/unlanded.txt"
+  head_before=$(git -C "$dir/wt" rev-parse HEAD)
+  out=$(run_control "$dir" rl65 exit); rc=$?
+  expect_code 0 "$rc" "exit on a provably gone legacy tmux endpoint should succeed"$'\n'"$out"
+  assert_contains "$out" "endpoint-gone rl65" "exit should report the endpoint gone, not a preserved stop"
+  [ ! -s "$dir/fake/literal" ] || fail "nothing may be sent to a gone endpoint"
+  rm -f "$dir/fake/server-dead"
+  : > "$dir/fake/windows"
+  out=$(run_control "$dir" rl65 relaunch --note "the server was lost; resume"); rc=$?
+  expect_code 0 "$rc" "relaunch should reclaim a provably gone legacy tmux endpoint"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/created-windows" 2>/dev/null)" "fm-rl65" \
+    "the reclaim must create one fresh window for the task"
+  [ "$(wc -l < "$dir/fake/created-windows")" -eq 1 ] || fail "the reclaim must create exactly one window"
+  [ "$(meta_field "$dir" rl65 worktree)" = "$dir/wt" ] || fail "the reclaim must keep the recorded worktree"
+  [ "$(meta_field "$dir" rl65 endpoint_task_id)" = rl65 ] || fail "the reclaim must keep the task identity"
+  [ "$(git -C "$dir/wt" rev-parse HEAD)" = "$head_before" ] || fail "the reclaim must not move the worktree's commits"
+  [ "$(cat "$dir/wt/unlanded.txt")" = unlanded ] || fail "the reclaim must keep uncommitted changes"
+  pass "tmux legacy record: a provably gone endpoint is reclaimed in its recorded worktree"
+}
+
+# --- tmux reclaim against real tmux servers ---------------------------------
+#
+# The recorded-identity proof talks to real tmux servers through their own
+# sockets, so these cases run real tmux on isolated socket directories with a
+# stand-in agent (a script named `claude`), never touching the developer's own
+# servers.
+
+# real_tmux_case <name> <id> -> sets REAL_DIR; returns 1 when tmux is absent.
+REAL_DIR=
+real_tmux_case() {  # <name> <id>
+  local id=$2 dir
+  command -v tmux >/dev/null 2>&1 || return 1
+  dir=$(new_case "$1" "$id")
+  add_ship_task "$dir" "$id" claude firstmate
+  seed_backlog "$dir" "$id" in_flight
+  mkdir -p "$dir/realbin" "$dir/tmuxtmp" "$dir/away"
+  TMUX_SOCKET_DIRS+=("$dir/tmuxtmp/tmux-$(id -u)" "$dir/away/tmux-$(id -u)")
+  printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$dir/realbin/claude"
+  chmod +x "$dir/realbin/claude"
+  REAL_DIR=$dir
+}
+
+real_tmux() {  # <case-dir> <tmux args...>
+  local dir=$1; shift
+  env -u TMUX TMUX_TMPDIR="$dir/tmuxtmp" tmux "$@"
+}
+
+# record_server_identity <case-dir> <id> [<tmux-tmpdir>]: what spawn records.
+record_server_identity() {
+  local dir=$1 id=$2 tmpdir=${3:-$1/tmuxtmp} out
+  out=$(env -u TMUX TMUX_TMPDIR="$tmpdir" tmux display-message -p -t '=firstmate:' '#{pid} #{start_time} #{socket_path}')
+  {
+    echo "tmux_socket=${out#* * }"
+    echo "tmux_server_pid=${out%% *}"
+    out=${out#* }
+    echo "tmux_server_start=${out%% *}"
+  } >> "$dir/home/state/$id.meta"
+}
+
+run_real_control() {  # <case-dir> <args...>
+  local dir=$1; shift
+  mkdir -p "$dir/user-home"
+  env -u TMUX -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
+    -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
+    PATH="$dir/realbin:$PATH" FM_HOME="$dir/home" TMUX_TMPDIR="$dir/tmuxtmp" \
+    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' FM_SPAWN_NO_GUARD=1 \
+    FM_CONTROL_POLL=0.1 FM_CONTROL_EXIT_WAIT=2 FM_CONTROL_LAUNCH_WAIT=20 \
+    "$CONTROL" "$@" 2>&1
+}
+
+test_tmux_recorded_identity_reclaims_a_window_lost_with_its_server() {
+  local dir out rc old_pid head_before
+  real_tmux_case tmux-real-reclaim rl80 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir/wt"
+  real_tmux "$dir" new-window -d -t firstmate: -n fm-rl80 -c "$dir/wt"
+  record_server_identity "$dir" rl80
+  old_pid=$(meta_field "$dir" rl80 tmux_server_pid)
+  printf 'unlanded\n' > "$dir/wt/unlanded.txt"
+  head_before=$(git -C "$dir/wt" rev-parse HEAD)
+  # A machine restart or a lost tmux server: the window goes with its server.
+  real_tmux "$dir" kill-server
+
+  out=$(run_real_control "$dir" rl80 exit); rc=$?
+  expect_code 0 "$rc" "exit should prove a window lost with its recorded server gone"$'\n'"$out"
+  assert_contains "$out" "endpoint-gone rl80" "exit should report the endpoint gone"
+
+  out=$(run_real_control "$dir" rl80 relaunch --note "the server was lost; resume"); rc=$?
+  expect_code 0 "$rc" "relaunch should reclaim a window lost with its recorded server"$'\n'"$out"
+  assert_contains "$out" "relaunched rl80" "the reclaim should report the relaunch"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl80 \
+    || fail "the reclaim must create the task's window"
+  [ "$(real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -cx fm-rl80)" -eq 1 ] \
+    || fail "the reclaim must create exactly one window"
+  [ "$(real_tmux "$dir" display-message -p -t '=firstmate:fm-rl80' '#{pane_current_path}')" = "$(cd "$dir/wt" && pwd -P)" ] \
+    || fail "the fresh window must open in the recorded worktree"
+  [ -n "$(meta_field "$dir" rl80 tmux_server_pid)" ] && [ "$(meta_field "$dir" rl80 tmux_server_pid)" != "$old_pid" ] \
+    || fail "the rebound record must name the new tmux server"
+  [ "$(meta_field "$dir" rl80 worktree)" = "$dir/wt" ] || fail "the reclaim must keep the recorded worktree"
+  [ "$(git -C "$dir/wt" rev-parse HEAD)" = "$head_before" ] || fail "the reclaim must not move the worktree's commits"
+  [ "$(cat "$dir/wt/unlanded.txt")" = unlanded ] || fail "the reclaim must keep uncommitted changes"
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux: a window lost with its recorded server is reclaimed in place, with a fresh server identity recorded"
+}
+
+test_tmux_legacy_record_is_reclaimed_against_real_tmux() {
+  local dir out rc
+  real_tmux_case tmux-real-legacy rl81 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir/wt"
+  real_tmux "$dir" new-window -d -t firstmate: -n fm-rl81 -c "$dir/wt"
+  # A record written before spawn recorded its server: refused before this fix.
+  real_tmux "$dir" kill-server
+  out=$(run_real_control "$dir" rl81 relaunch --note "the server was lost; resume"); rc=$?
+  expect_code 0 "$rc" "a legacy record should be reclaimed once its absence is proven"$'\n'"$out"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl81 \
+    || fail "the legacy reclaim must create the task's window"
+  [ -n "$(meta_field "$dir" rl81 tmux_socket)" ] || fail "the rebound record must now carry its server identity"
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux legacy record: reclaimed against real tmux, and the record gains its server identity"
+}
+
+test_tmux_legacy_record_is_reclaimed_beside_its_own_server_behind_a_symlinked_socket_dir() {
+  local dir out rc sock pid
+  real_tmux_case tmux-real-legacy-link rl86 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # The seat's own server keeps running; only the task's window is gone. The
+  # socket directory is reached through a symlink, so $TMUX (which tmux writes
+  # with the real path) and the directory listing name the same server by
+  # different paths.
+  ln -s "$dir/tmuxtmp" "$dir/tmuxlink"
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir"
+  real_tmux "$dir" new-window -d -t firstmate: -n fm-rl86 -c "$dir/wt"
+  real_tmux "$dir" kill-window -t '=firstmate:fm-rl86'
+  sock=$(real_tmux "$dir" display-message -p '#{socket_path}')
+  pid=$(real_tmux "$dir" display-message -p '#{pid}')
+  mkdir -p "$dir/user-home"
+  out=$(env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
+    -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
+    TMUX="$sock,$pid,0" TMUX_TMPDIR="$dir/tmuxlink" \
+    PATH="$dir/realbin:$PATH" FM_HOME="$dir/home" \
+    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' FM_SPAWN_NO_GUARD=1 \
+    FM_CONTROL_POLL=0.1 FM_CONTROL_EXIT_WAIT=2 FM_CONTROL_LAUNCH_WAIT=20 \
+    "$CONTROL" rl86 relaunch --note "the window was lost; resume" 2>&1); rc=$?
+  expect_code 0 "$rc" "the seat's own server must not count as a sibling under another path"$'\n'"$out"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl86 \
+    || fail "the legacy reclaim must create the task's window"
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux legacy record: the seat's own server reached through a symlinked socket directory is not a sibling"
+}
+
+test_tmux_refuses_a_window_alive_on_its_recorded_server_out_of_reach() {
+  local dir out rc
+  real_tmux_case tmux-real-away rl82 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # The task's window lives on a server in ANOTHER socket directory, which the
+  # control process does not address: its own read says `missing`.
+  env -u TMUX TMUX_TMPDIR="$dir/away" tmux new-session -d -s firstmate -c "$dir/wt"
+  env -u TMUX TMUX_TMPDIR="$dir/away" tmux new-window -d -t firstmate: -n fm-rl82 -c "$dir/wt"
+  record_server_identity "$dir" rl82 "$dir/away"
+  out=$(run_real_control "$dir" rl82 exit); rc=$?
+  expect_code 1 "$rc" "a window still on its recorded server must not be claimed stopped"$'\n'"$out"
+  assert_contains "$out" "still exists on the recorded tmux server" "the refusal should say where the window still is"
+  out=$(run_real_control "$dir" rl82 relaunch --note "must never launch"); rc=$?
+  expect_code 1 "$rc" "relaunch must refuse a window still on its recorded server"$'\n'"$out"
+  env -u TMUX TMUX_TMPDIR="$dir/away" tmux list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl82 \
+    || fail "the surviving window must be left alone"
+  real_tmux "$dir" has-session 2>/dev/null && fail "a refused relaunch must not stand up a server"
+  env -u TMUX TMUX_TMPDIR="$dir/away" tmux kill-server 2>/dev/null
+  pass "tmux: a window alive on its recorded server out of this seat's reach refuses both verbs"
+}
+
+# shellcheck disable=SC2031
+test_tmux_refuses_while_the_recorded_server_process_may_still_run() {
+  local dir out rc fakepid
+  real_tmux_case tmux-real-orphan rl83 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # The recorded server no longer answers on its socket (its socket file was
+  # removed), but a tmux process with its recorded pid is still running. Its
+  # recorded start lies hours before the process's elapsed time suggests, as
+  # after a host sleep that stopped the boot clock but not the wall clock.
+  mkdir -p "$dir/fakeserver"
+  cp /bin/sleep "$dir/fakeserver/tmux"
+  "$dir/fakeserver/tmux" 300 &
+  fakepid=$!
+  HOLDER_PIDS+=("$fakepid")
+  {
+    echo "tmux_socket=$dir/tmuxtmp/tmux-$(id -u)/default"
+    echo "tmux_server_pid=$fakepid"
+    echo "tmux_server_start=$(( $(date +%s) - 7200 ))"
+  } >> "$dir/home/state/rl83.meta"
+  out=$(run_real_control "$dir" rl83 exit); rc=$?
+  expect_code 1 "$rc" "a recorded server that may still run must not be claimed gone"$'\n'"$out"
+  assert_contains "$out" "may still be running" "the refusal should name the surviving server"
+  out=$(run_real_control "$dir" rl83 relaunch --note "must never launch"); rc=$?
+  expect_code 1 "$rc" "relaunch must refuse too"$'\n'"$out"
+  kill "$fakepid" 2>/dev/null
+  pass "tmux: a recorded server process that may still run refuses both verbs"
+}
+
+# shellcheck disable=SC2031
+test_tmux_refuses_while_the_recorded_server_runs_behind_a_replaced_socket() {
+  local dir out rc fakepid
+  real_tmux_case tmux-real-replaced rl85 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # A new server took over the recorded socket path while the recorded server,
+  # pid still running, kept its windows.
+  mkdir -p "$dir/fakeserver"
+  cp /bin/sleep "$dir/fakeserver/tmux"
+  "$dir/fakeserver/tmux" 300 &
+  fakepid=$!
+  HOLDER_PIDS+=("$fakepid")
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir/wt"
+  {
+    echo "tmux_socket=$(real_tmux "$dir" display-message -p '#{socket_path}')"
+    echo "tmux_server_pid=$fakepid"
+    echo "tmux_server_start=$(( $(date +%s) - 7200 ))"
+  } >> "$dir/home/state/rl85.meta"
+  out=$(run_real_control "$dir" rl85 exit); rc=$?
+  expect_code 1 "$rc" "a recorded server behind a replaced socket must not be claimed gone"$'\n'"$out"
+  assert_contains "$out" "may still be running" "the refusal should name the surviving server"
+  out=$(run_real_control "$dir" rl85 relaunch --note "must never launch"); rc=$?
+  expect_code 1 "$rc" "relaunch must refuse too"$'\n'"$out"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl85 \
+    && fail "a refused relaunch must not create a window"
+  kill "$fakepid" 2>/dev/null
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux: a recorded server process still running behind a replaced socket refuses both verbs"
+}
+
+test_tmux_reclaims_when_the_recorded_server_pid_was_reused() {
+  local dir out rc
+  real_tmux_case tmux-real-pid-reuse rl84 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # After a reboot a new server answers on the recorded socket with the
+  # recorded pid but a later start time, so the recorded server cannot be alive.
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir/wt"
+  record_server_identity "$dir" rl84
+  sed -i "s/^tmux_server_start=.*/tmux_server_start=$(( $(meta_field "$dir" rl84 tmux_server_start) - 3600 ))/" \
+    "$dir/home/state/rl84.meta"
+  out=$(run_real_control "$dir" rl84 exit); rc=$?
+  expect_code 0 "$rc" "a reused recorded pid must not keep a gone window from being proven gone"$'\n'"$out"
+  assert_contains "$out" "endpoint-gone rl84" "exit should report the endpoint gone"
+  out=$(run_real_control "$dir" rl84 relaunch --note "the machine restarted; resume"); rc=$?
+  expect_code 0 "$rc" "relaunch should reclaim despite the reused pid"$'\n'"$out"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl84 \
+    || fail "the reclaim must create the task's window"
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux: a recorded pid answering on its socket with a later start time does not block the reclaim"
 }
 
 test_reclaim_refuses_an_unreadable_endpoint() {
@@ -2442,9 +2744,18 @@ test_spawn_relaunch_refuses_a_pending_authoritative_close
 test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
-test_tmux_refuses_a_window_missing_from_its_session
-test_tmux_refuses_a_session_that_cannot_be_found
-test_tmux_refuses_when_the_server_is_gone
+test_tmux_legacy_refuses_a_window_missing_from_its_session_while_its_worktree_is_held
+test_tmux_legacy_refuses_a_session_that_cannot_be_found_while_its_worktree_is_held
+test_tmux_legacy_refuses_a_dead_server_while_its_worktree_is_held
+test_tmux_legacy_refuses_while_another_server_answers
+test_tmux_legacy_record_is_reclaimed_when_absence_is_proven
+test_tmux_recorded_identity_reclaims_a_window_lost_with_its_server
+test_tmux_legacy_record_is_reclaimed_against_real_tmux
+test_tmux_legacy_record_is_reclaimed_beside_its_own_server_behind_a_symlinked_socket_dir
+test_tmux_refuses_a_window_alive_on_its_recorded_server_out_of_reach
+test_tmux_refuses_while_the_recorded_server_process_may_still_run
+test_tmux_refuses_while_the_recorded_server_runs_behind_a_replaced_socket
+test_tmux_reclaims_when_the_recorded_server_pid_was_reused
 test_reclaim_refuses_an_unreadable_endpoint
 test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server

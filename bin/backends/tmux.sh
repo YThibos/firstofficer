@@ -431,3 +431,174 @@ fm_backend_tmux_agent_alive() {  # <target>
     *) printf 'unknown' ;;
   esac
 }
+
+# --- endpoint absence proof --------------------------------------------------
+#
+# fm_backend_agent_state's tmux `missing` describes only the server THIS
+# process addresses, so on its own it cannot tell a destroyed window from one on
+# a server this seat cannot see. The functions below are the tmux half of the
+# control plane's absence proof (bin/fm-control-lib.sh's
+# fm_control_endpoint_absence_verdict owns the argument and the verdicts); each
+# prints "<verdict>\t<reason>" with verdict gone or unproven.
+
+# fm_backend_tmux_server_identity: the identity of the tmux server at <socket>
+# (or the ambient one when <socket> is empty) as
+# "<socket_path>\t<server-pid>\t<server-start-time>". Returns nonzero, printing
+# nothing, when no server answers. A socket path alone is not an identity: a
+# restarted server reuses it, so the pid and start time pin the exact server a
+# window was created on.
+fm_backend_tmux_server_identity() {  # [<socket>] [<session>]
+  local socket=${1-} session=${2-} out pid start path
+  local -a sock=() tgt=()
+  [ -z "$socket" ] || sock=(-S "$socket")
+  [ -z "$session" ] || tgt=(-t "=$session:")
+  # tmux escapes control characters in display-message output, so the fields
+  # are space-separated with the socket path, the only one that may hold a
+  # space, last.
+  out=$(LC_ALL=C tmux "${sock[@]}" display-message -p "${tgt[@]}" '#{pid} #{start_time} #{socket_path}' 2>/dev/null) || return 1
+  pid=${out%% *}
+  out=${out#* }
+  start=${out%% *}
+  path=${out#* }
+  case "$pid:$start" in
+    *[!0-9:]*|:*|*:) return 1 ;;
+  esac
+  [ -n "$path" ] && [ "$path" != "$start" ] || return 1
+  printf '%s\t%s\t%s\n' "$path" "$pid" "$start"
+}
+
+# Whether <pid> is a running tmux process. Any process that cannot be shown NOT
+# to be tmux counts as one, so an unreadable process table never proves a
+# server dead.
+fm_backend_tmux_pid_is_tmux() {  # <pid>
+  local comm
+  case "${1-}" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$1" 2>/dev/null || [ -e "/proc/$1" ] || return 1
+  comm=$(ps -p "$1" -o comm= 2>/dev/null) || return 0
+  case "$comm" in
+    *tmux*) return 0 ;;
+  esac
+  return 1
+}
+
+# fm_backend_tmux_recorded_absence: the proof for a record that carries its
+# endpoint's server identity (tmux_socket, tmux_server_pid,
+# tmux_server_start, written at spawn). The recorded server is asked directly
+# through its own socket, so the answer is about the task's endpoint and not
+# about whichever server this process happens to address:
+#   - the recorded server answers with the recorded identity: the window's
+#     name absent from every session on it is `gone`; a window still there is
+#     `unproven`, because this seat's own read could not see it.
+#   - a server with the recorded pid but another start time answers on that
+#     socket: that pid now belongs to a later server, as after a reboot, so the
+#     recorded server is `gone`.
+#   - another server answers on that socket, or none does: the recorded server
+#     is gone unless its recorded pid is still a running tmux process (a server
+#     whose socket file was removed keeps running), which is `unproven`.
+fm_backend_tmux_recorded_absence() {  # <target> <socket> <pid> <start>
+  local target=$1 socket=$2 pid=$3 start=$4 window identity windows
+  window=${target#*:}
+  if identity=$(fm_backend_tmux_server_identity "$socket"); then
+    identity=${identity#*$'\t'}
+    if [ "$identity" = "$pid"$'\t'"$start" ]; then
+      # Every session, not only the recorded one: a window moved or a session
+      # renamed on that server is still the task's live window.
+      windows=$(LC_ALL=C tmux -S "$socket" list-windows -a -F '#{window_name}' 2>/dev/null) || {
+        printf 'unproven\tthe recorded tmux server at %s answered but its windows could not be read' "$socket"
+        return 0
+      }
+      if printf '%s\n' "$windows" | grep -Fqx -- "$window"; then
+        printf 'unproven\twindow %s still exists on the recorded tmux server at %s, which this process does not address' "$window" "$socket"
+        return 0
+      fi
+      printf 'gone\t'
+      return 0
+    fi
+    if [ "${identity%%$'\t'*}" = "$pid" ]; then
+      printf 'gone\t'
+      return 0
+    fi
+  fi
+  if fm_backend_tmux_pid_is_tmux "$pid"; then
+    printf 'unproven\tthe recorded tmux server (pid %s) no longer answers on %s but may still be running' "$pid" "$socket"
+    return 0
+  fi
+  printf 'gone\t'
+}
+
+# fm_backend_tmux_worktree_holders: pids of live processes, other than this
+# process and its ancestors, whose working directory is <worktree> or below it.
+# Returns nonzero when the process table's working directories cannot be read
+# at all, so an unreadable table never reads as "nobody".
+fm_backend_tmux_worktree_holders() {  # <worktree>
+  local wt pid cwd self=${BASHPID:-$$} p
+  local -a mine=()
+  wt=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  p=$self
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
+    mine+=("$p")
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ') || break
+  done
+  if [ -d /proc/self ] && [ -r /proc/self/cwd ]; then
+    for cwd in /proc/[0-9]*/cwd; do
+      pid=${cwd#/proc/}
+      pid=${pid%/cwd}
+      cwd=$(readlink "$cwd" 2>/dev/null) || continue
+      case "$cwd" in
+        "$wt"|"$wt"/*) ;;
+        *) continue ;;
+      esac
+      case " ${mine[*]} " in *" $pid "*) continue ;; esac
+      printf '%s\n' "$pid"
+    done
+    return 0
+  fi
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -a -d cwd -u "$(id -u)" -Fpn 2>/dev/null | awk -v wt="$wt" '
+    /^p/ { pid = substr($0, 2) }
+    /^n/ { n = substr($0, 2); if (n == wt || index(n, wt "/") == 1) print pid }
+  ' | while IFS= read -r pid; do
+    case " ${mine[*]} " in *" $pid "*) continue ;; esac
+    printf '%s\n' "$pid"
+  done
+}
+
+# fm_backend_tmux_legacy_absence: the proof for a record written before spawn
+# recorded its server identity. It cannot ask the endpoint's own server, so it
+# proves the two things a surviving agent would need instead:
+#   - no tmux server other than the one this process addresses (told apart by
+#     its pid and start time, not its socket path) answers on any socket in
+#     this user's tmux socket directory (${TMUX_TMPDIR:-/tmp}/tmux-UID), so the
+#     window was not merely on a sibling server; and
+#   - no live process has the recorded worktree as its working directory, so
+#     no shell or agent of the task survives anywhere, even on a server started
+#     on a socket outside that directory.
+fm_backend_tmux_legacy_absence() {  # <target> <worktree>
+  local wt=${2-} dir ambient f identity holders
+  [ -n "$wt" ] && [ -d "$wt" ] || {
+    printf 'unproven\tthe record carries no tmux server identity and no readable worktree to check for surviving processes'
+    return 0
+  }
+  dir="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+  ambient=$(fm_backend_tmux_server_identity) && ambient=${ambient#*$'\t'} || ambient=
+  for f in "$dir"/*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    if tmux -S "$f" list-sessions >/dev/null 2>&1; then
+      if [ -n "$ambient" ] && identity=$(fm_backend_tmux_server_identity "$f") \
+        && [ "${identity#*$'\t'}" = "$ambient" ]; then
+        continue
+      fi
+      printf 'unproven\tthe record carries no tmux server identity, and another tmux server answers on %s, so the window may still be alive there' "$f"
+      return 0
+    fi
+  done
+  holders=$(fm_backend_tmux_worktree_holders "$wt") || {
+    printf 'unproven\tthe record carries no tmux server identity, and which processes hold its worktree cannot be read here'
+    return 0
+  }
+  if [ -n "$holders" ]; then
+    printf 'unproven\tthe record carries no tmux server identity, and live process(es) %s still have its worktree %s as their working directory' "$(printf '%s' "$holders" | tr '\n' ' ' | sed 's/ $//')" "$wt"
+    return 0
+  fi
+  printf 'gone\t'
+}

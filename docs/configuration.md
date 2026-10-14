@@ -474,6 +474,8 @@ Task meta records `backend=` only for a non-default backend; an absent `backend=
 
 - Every new task records `endpoint_task_id=` as the cleanup binding between the metadata filename and its opaque runtime endpoint.
 
+- A tmux task additionally records `tmux_socket=`, `tmux_server_pid=`, and `tmux_server_start=`, the server its window lives on, so a lost window can be proven gone ([`docs/agent-control.md`](agent-control.md#reclaiming-a-task-whose-endpoint-is-gone)); a record without them takes the legacy proof described there.
+
 - A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`.
 
 - A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
