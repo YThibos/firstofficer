@@ -21,7 +21,8 @@
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
+#     [--decision-card <json-file>]
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
@@ -56,6 +57,34 @@
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
+#
+# DECISION CARDS AND STABLE D NUMBERS.
+# `--decision-card <json-file>` attaches the presentation of the call - what
+# bin/fm-captain-report.sh renders in its decision box - and gives the call a
+# stable decision number. The card is one JSON object of at most 8192 bytes:
+#   {"title": "...", "context": "...", "projects": ["JustMasterData"],
+#    "options": [{"key": "A", "text": "..."}, {"key": "B", "text": "..."}],
+#    "recommend": {"key": "A", "why": "..."}}
+# title, every option text, recommend.why, and the optional context are each
+# one non-empty line; projects (optional, default []) is a set of one-line
+# project names, joined with " + " by renderers; options lists at least two
+# choices keyed by distinct single capital letters; recommend.key names one of
+# them. Unknown fields are refused. The validated card is stored compactly on a
+# `Captain decision card:` body line beside a `Captain decision id: D<n>` line,
+# directly under the hold-set stamp and origin lines, so the held task stays the
+# single record of the call. The number is assigned once per hold lifecycle:
+# repeating an active hold keeps its number (a new card replaces the old one),
+# while a new lifecycle - holding released work again - gets a fresh number,
+# because the earlier answer retired the old one; a new lifecycle held without a
+# card drops the retired card and number. The number lines stay in the body
+# through the answer and close, so a closed call keeps recording its retired id.
+# Numbers come from the home's `data/decision-seq` counter, updated under
+# `state/.decision-seq.lock`: the next number is one past the larger of that
+# counter and the highest D<n> token found anywhere in this home's backlog and
+# its Done archive (markdown) or listed task bodies (other backends), so a
+# lost or stale counter never reissues a number already used, and numbers that
+# leave the backlog through archive pruning stay retired through the counter.
+# With a card, `hold` prints `decision-id: D<n>` on a second output line.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -254,7 +283,14 @@ CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
+DECISION_SEQ_FILE="$DATA/decision-seq"
+DECISION_SEQ_LOCK="$STATE/.decision-seq.lock"
+DECISION_SEQ_LOCK_HELD=0
 captain_hold_cleanup() {
+  if [ "$DECISION_SEQ_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$DECISION_SEQ_LOCK" || true
+    DECISION_SEQ_LOCK_HELD=0
+  fi
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -850,6 +886,183 @@ write_hold_origin() {  # <task-id> <shown-body> <origin-or-empty>
   rm -f -- "$tmp"
 }
 
+# The decision card and stable D number of a call, stored on their own body
+# lines under the hold-set stamp and origin. The header comment owns the card
+# schema and numbering contract.
+DECISION_CARD_MAX_BYTES=8192
+# shellcheck disable=SC2016
+DECISION_CARD_FILTER='
+  def one_line($label):
+    if type == "string" and length > 0 and (test("[\r\n]") | not) then .
+    else error("\($label) must be one non-empty line") end;
+  if type != "object" then error("the card must be a JSON object") else . end
+  | (keys - ["context", "options", "projects", "recommend", "title"]) as $extra
+  | if ($extra | length) > 0 then error("unknown card field(s): \($extra | join(", "))") else . end
+  | .title |= one_line("title")
+  | if has("context") then .context |= one_line("context") else . end
+  | .projects = (.projects // [])
+  | if (.projects | type) != "array" then error("projects must be an array") else . end
+  | .projects |= map(one_line("each project"))
+  | if (.projects | unique | length) != (.projects | length) then error("projects must not repeat") else . end
+  | if (.options | type) != "array" or (.options | length) < 2 then error("options must list at least two choices") else . end
+  | .options |= map(
+      if type != "object" then error("each option must be an object") else . end
+      | if (keys - ["key", "text"] | length) > 0 then error("an option has unknown fields") else . end
+      | if (.key | type) == "string" and (.key | test("^[A-Z]$")) then . else error("each option key must be one capital letter") end
+      | .text |= one_line("each option text"))
+  | if ([.options[].key] | unique | length) != (.options | length) then error("option keys must not repeat") else . end
+  | if (.recommend | type) != "object" then error("recommend must be an object naming an option and why") else . end
+  | if (.recommend | keys - ["key", "why"] | length) > 0 then error("recommend has unknown fields") else . end
+  | . as $card
+  | if ([$card.options[].key] | index($card.recommend.key)) == null then error("recommend.key must name one of the options") else . end
+  | .recommend.why |= one_line("recommend.why")
+  | {title, context, projects, options: [.options[] | {key, text}], recommend: {key: .recommend.key, why: .recommend.why}}
+  | if .context == null then del(.context) else . end
+'
+
+DECISION_CARD_JSON=''
+load_decision_card() {  # <path>; sets DECISION_CARD_JSON to the validated compact card
+  local path=$1 size out
+  [ -n "$path" ] || fail "--decision-card requires a JSON file"
+  { [ -f "$path" ] && [ -r "$path" ]; } || fail "decision card file is not readable: $path"
+  size=$(wc -c < "$path" | tr -d '[:space:]')
+  [ "$size" -le "$DECISION_CARD_MAX_BYTES" ] \
+    || fail "decision card $path is $size bytes; at most $DECISION_CARD_MAX_BYTES are accepted"
+  command -v jq >/dev/null 2>&1 || fail "jq is required to validate a decision card"
+  if ! out=$(jq -ce "$DECISION_CARD_FILTER" "$path" 2>&1); then
+    fail "invalid decision card $path: $(printf '%s\n' "$out" | sed 's/^jq: error (at [^)]*): //' | head -1)"
+  fi
+  DECISION_CARD_JSON=$out
+}
+
+body_decision_id() {  # <decoded-task-body>
+  printf '%s\n' "$1" | sed -n 's/^Captain decision id: \(D[0-9][0-9]*\)$/\1/p' | head -1
+}
+
+# Rewrite the body as: the hold-set stamp and any origin line, then the
+# decision lines (omitted when <decision-id> is empty), then the rest with every
+# earlier decision line removed.
+write_decision_card() {  # <task-id> <shown-body> <decision-id-or-empty> <card-json-or-empty>
+  local id=$1 body=$2 decision_id=$3 card=$4 header header_lines rest new_body tmp
+  body=$(decode_shown_value "$body") \
+    || fail "could not decode the existing body for $id"
+  [ -n "$(body_hold_set_timestamp "$body")" ] \
+    || fail "task $id lost its hold-set stamp before its decision card was recorded"
+  header=$(printf '%s\n' "$body" | awk 'NR == 1 { print; next } /^Captain hold origin: / { print; next } { exit }')
+  header_lines=$(printf '%s\n' "$header" | wc -l | tr -d '[:space:]')
+  rest=$(printf '%s\n' "$body" | sed "1,${header_lines}d" | awk '!/^Captain decision (id|card): /' \
+    | awk 'NF || started { started = 1; print }')
+  new_body=$header
+  if [ -n "$decision_id" ]; then
+    new_body=$(printf '%s\nCaptain decision id: %s\nCaptain decision card: %s' "$new_body" "$decision_id" "$card")
+  fi
+  if [ -n "$rest" ]; then
+    new_body=$(printf '%s\n\n%s' "$new_body" "$rest")
+  fi
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-card.XXXXXX") \
+    || fail "cannot stage the decision card"
+  if ! printf '%s\n' "$new_body" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot stage the decision card for $id"
+  fi
+  if ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+    rm -f -- "$tmp"
+    fail "could not record the decision card on $id"
+  fi
+  rm -f -- "$tmp"
+}
+
+# The markdown Done archive tasks-axi writes: the `[markdown] archive` path of
+# the addressing root's .tasks.toml, else done-archive.md beside the backlog.
+decision_seq_archive_path() {  # <root> <backlog-file>
+  local root=$1 backlog=$2 configured=''
+  if [ -f "$root/.tasks.toml" ]; then
+    configured=$(awk '
+      /^[[:space:]]*\[/ { section = $0; gsub(/[[:space:]]/, "", section); next }
+      section == "[markdown]" && /^[[:space:]]*archive[[:space:]]*=/ {
+        sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*(#.*)?$/, "")
+        gsub(/^["\047]|["\047]$/, ""); print; exit
+      }' "$root/.tasks.toml")
+  fi
+  case "$configured" in
+    '') printf '%s/done-archive.md\n' "$(dirname -- "$backlog")" ;;
+    /*) printf '%s\n' "$configured" ;;
+    *) printf '%s/%s\n' "$root" "$configured" ;;
+  esac
+}
+
+# The highest D<n> token in this home's task records, or 0. A token preceded by
+# a word or base64 character (as inside an encoded hold reason) is not a number.
+decision_seq_scan_max() {
+  local data root backend file archive state records
+  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  root=$(fm_backlog_root "$data") || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  backend=$(fm_tasks_axi_backend "$root") || fail "the backlog backend cannot be resolved for $DATA"
+  records=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-seq-scan.XXXXXX") \
+    || fail "cannot stage the decision-number scan"
+  if [ "$backend" = markdown ]; then
+    file=$(fm_backlog_file "$data") || { rm -f -- "$records"; fail "$FM_BACKLOG_TRANSITION_ERROR"; }
+    archive=$(decision_seq_archive_path "$root" "$file")
+    for file in "$file" "$archive"; do
+      [ ! -f "$file" ] || cat -- "$file" >> "$records" \
+        || { rm -f -- "$records"; fail "cannot read $file for the decision-number scan"; }
+    done
+  else
+    for state in queued in_flight "done"; do
+      tasks_axi list --state "$state" --fields body >> "$records" 2>/dev/null \
+        || { rm -f -- "$records"; fail "cannot list $state tasks for the decision-number scan"; }
+    done
+  fi
+  perl -ne '
+      while (/(?<![A-Za-z0-9_+\/=-])D([0-9]{1,6})(?![A-Za-z0-9_])/g) { $max = $1 + 0 if $1 + 0 > $max }
+      END { print $max + 0, "\n" }' "$records" \
+    || { rm -f -- "$records"; fail "the decision-number scan failed"; }
+  rm -f -- "$records"
+}
+
+decision_seq_counter() {  # prints the stored counter, or nothing when absent
+  local value
+  [ -e "$DECISION_SEQ_FILE" ] || return 0
+  value=$(tr -d '[:space:]' < "$DECISION_SEQ_FILE") || fail "cannot read $DECISION_SEQ_FILE"
+  case "$value" in
+    ''|*[!0-9]*) fail "$DECISION_SEQ_FILE must hold one decimal number, not: $value" ;;
+  esac
+  printf '%s\n' "$((10#$value))"
+}
+
+decision_seq_write() {  # <number>
+  local tmp
+  tmp=$(umask 077; mktemp "$DECISION_SEQ_FILE.XXXXXX") || fail "cannot stage $DECISION_SEQ_FILE"
+  if ! printf '%s\n' "$1" > "$tmp" || ! mv -f -- "$tmp" "$DECISION_SEQ_FILE"; then
+    rm -f -- "$tmp"
+    fail "cannot write $DECISION_SEQ_FILE"
+  fi
+}
+
+decision_seq_lock() {
+  fm_lock_acquire_wait "$DECISION_SEQ_LOCK"
+  DECISION_SEQ_LOCK_HELD=1
+}
+
+decision_seq_unlock() {
+  [ "$DECISION_SEQ_LOCK_HELD" = 1 ] || return 0
+  fm_lock_release "$DECISION_SEQ_LOCK"
+  DECISION_SEQ_LOCK_HELD=0
+}
+
+DECISION_ALLOCATED=''
+allocate_decision_id() {  # sets DECISION_ALLOCATED to the next unused D<n>
+  local counter scanned last
+  decision_seq_lock
+  counter=$(decision_seq_counter) || exit $?
+  scanned=$(decision_seq_scan_max) || exit $?
+  last=${counter:-0}
+  [ "$scanned" -le "$last" ] || last=$scanned
+  decision_seq_write "$((last + 1))"
+  decision_seq_unlock
+  DECISION_ALLOCATED="D$((last + 1))"
+}
+
 refuse_self_inventory() {
   local origin=$1 entry=$2 meta="$STATE/$1.meta"
   if list_has_key "$(meta_value "$meta" decision_keys)" "$entry"; then
@@ -903,6 +1116,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
+  local card_file='' decision_id='' existing_decision_id
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -912,12 +1126,14 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --decision-card) shift; card_file=${1:-}; [ -n "$card_file" ] || fail "--decision-card requires a JSON file" ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
+  [ -z "$card_file" ] || load_decision_card "$card_file"
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
   if [ -n "$origin" ]; then
@@ -985,6 +1201,22 @@ command_hold() {
     previous_origin=$(body_hold_origin "$(show_field_value "$show" body)")
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
   fi
+  # Like the stamp, the card and its number are published before the hold
+  # annotation, so a snapshot never sees this lifecycle's hold without them.
+  task_show_or_fail "$id" "task $id disappeared before recording its decision card"
+  existing_decision_id=$(body_decision_id "$(show_field_value "$show" body)")
+  if [ -n "$card_file" ]; then
+    if [ "$preserve_hold_set" = 1 ] && [ -n "$existing_decision_id" ]; then
+      decision_id=$existing_decision_id
+    else
+      allocate_decision_id
+      decision_id=$DECISION_ALLOCATED
+    fi
+    write_decision_card "$id" "$(show_field "$show" body)" "$decision_id" "$DECISION_CARD_JSON"
+  elif [ "$preserve_hold_set" = 0 ] && [ -n "$existing_decision_id" ]; then
+    # A new lifecycle never inherits the number its earlier answer retired.
+    write_decision_card "$id" "$(show_field "$show" body)" '' ''
+  fi
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \
       || hold_status=$?
@@ -1009,6 +1241,7 @@ command_hold() {
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
   printf '%s\n' "$id"
+  [ -z "$decision_id" ] || printf 'decision-id: %s\n' "$decision_id"
 }
 
 # Record a resolution block beneath any leading active hold-set stamp,

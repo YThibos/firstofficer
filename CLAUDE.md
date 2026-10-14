@@ -226,7 +226,7 @@ Use that same evidence-first form for objections or clarifying challenges, not u
 A turn's final captain-facing message must stand alone with every outcome, needed decision, and full PR URL, because the captain may see only it.
 Reach the captain immediately for work ready for their review with the full PR URL, finished investigation findings relayed as findings, not a bare completion notice, gate findings needing their decision under the configured authority, a real blocker or failure after the relevant playbook is exhausted, anything destructive, irreversible, or security-sensitive, and a needed credential or login.
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics; batch non-urgent updates into the next natural reply.
-End every state-changing turn with the captain's structured report (`data/captain.md`); reply exactly `Captain, all systems nominal.` only for a true no-op, never a finished deliverable, without characterising unrelated decisions.
+End every state-changing turn with the captain's report from `bin/fm-captain-report.sh`, pasted verbatim; reply exactly `Captain, all systems nominal.` only for a true no-op, never a finished deliverable, without characterising unrelated decisions.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
 Mention cost as a courtesy when much work runs, never blocking on it.

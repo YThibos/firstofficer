@@ -15,7 +15,7 @@ This document records the deterministic mechanism, structured surfaces, compatib
 | How does a keyed answer from chat or a board reach the call? | [Answer-time resolution](#answer-time-resolution) |
 | How is a call closed when it stopped being a question? | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
 | Why did a decision card disappear from the board? | [Card hygiene](#card-hygiene-a-landed-subject-is-not-a-live-call) |
-| Where does a hold appear in snapshots and Bearings? | [Structured read surfaces](#structured-read-surfaces) |
+| Where does a hold appear in snapshots, Bearings, and the captain report? | [Structured read surfaces](#structured-read-surfaces) |
 | What does a `RECORD DIVERGENCE` section mean? | [Record divergence](#record-divergence) |
 | How do rows from older installs still work? | [Compatibility with pre-collapse installs](#compatibility-with-pre-collapse-installs) |
 | Which tests prove this, and how is the record refreshed? | [Verification record](#verification-record) |
@@ -67,6 +67,8 @@ Repeat and edge cases:
   If that write fails, the backend hold is not attempted.
 - The reason may contain parentheses, semicolons, quotes, and line breaks.
   [`bin/fm-hold-reason-lib.sh`](../bin/fm-hold-reason-lib.sh) owns the storage encoding and compatibility rules; [`bin/fm-tasks-axi.sh --help`](../bin/fm-tasks-axi.sh) owns the public read commands and output contract.
+- `--decision-card` attaches the call's report presentation and assigns it a stable `D<n>` number from the home's `data/decision-seq` counter, never renumbered or reused.
+  [`bin/fm-captain-hold.sh --help`](../bin/fm-captain-hold.sh) owns the card schema and numbering rules.
 
 ### Answering a call (`answer`)
 
@@ -385,6 +387,13 @@ It preserves every captain hold in the bounded queued inventory of the owning ho
 `--all-decisions` reveals every captain hold available within the remote-summary bound and drops its gate.
 An available hold is therefore never in both Captain's Call and Charted Next.
 An actively worked held task may also appear in Underway, which reports running work independently of those decision buckets.
+
+### Captain report placement
+
+`bin/fm-captain-report.sh` reads the same `hold_bucket` through `bin/fm-fleet-snapshot.sh --backlog`.
+Unlike Bearings, it keeps `aged` holds in NEEDS YOUR DECISION, because age never answers a call.
+`dated` and `blocked` holds render in PARKED with their `D<n>` number and why they wait.
+The script header owns the full layout and source contract.
 
 ### Accepted limits
 
