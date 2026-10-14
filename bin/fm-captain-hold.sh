@@ -36,7 +36,6 @@
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
 #   fm-captain-hold.sh reconcile note <task-id> --note-file <path>
-#   fm-captain-hold.sh decision-ids [--seed]
 #
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
@@ -86,13 +85,6 @@
 # lost or stale counter never reissues a number already used, and numbers that
 # leave the backlog through archive pruning stay retired through the counter.
 # With a card, `hold` prints `decision-id: D<n>` on a second output line.
-# Wherever a task id names a captain call - `answer`, `answers` keys, and
-# `complete`/`verify` inventory entries - `D<n>` is accepted as an alias for the
-# one still-held task carrying that number, when no task has that literal id; a
-# number carried by two held tasks is refused rather than guessed.
-# `decision-ids` prints `last=D<n> source=<counter|scan|none> next=D<n+1>`;
-# `--seed` additionally writes the counter from the scan when it is absent, and
-# leaves an existing counter untouched.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -781,7 +773,7 @@ resolve_migrated_entry() {  # <origin-or-empty> <entry>
 # Prints "<resolved id> <how>", where <how> is exact, legacy, migrated-note or
 # migrated-prefix, so a caller can record which evidence carried the attestation.
 resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
-  local origin=$1 entry=$2 legacy migrated rc alias_id
+  local origin=$1 entry=$2 legacy migrated rc
   if task_show "$entry"; then
     printf '%s exact' "$entry"
     return 0
@@ -792,10 +784,6 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
       printf '%s legacy' "$legacy"
       return 0
     fi
-  fi
-  if alias_id=$(resolve_decision_alias "$entry"); then
-    printf '%s alias' "$alias_id"
-    return 0
   fi
   rc=0
   migrated=$(resolve_migrated_entry "$origin" "$entry") || rc=$?
@@ -1075,26 +1063,6 @@ allocate_decision_id() {  # sets DECISION_ALLOCATED to the next unused D<n>
   DECISION_ALLOCATED="D$((last + 1))"
 }
 
-# The one still-held task carrying decision number <entry> (D<n>). Returns 1
-# when <entry> is not a decision number or no held task carries it, and refuses
-# a number two held tasks carry instead of choosing between them.
-resolve_decision_alias() {  # <entry>
-  local entry=$1 data ids id matches='' count=0
-  [[ "$entry" =~ ^D[0-9]+$ ]] || return 1
-  data=$(fm_backlog_data_absolute "$DATA") || return 1
-  ids=$(fm_backlog_row_list "$data" --state held 2>/dev/null | awk -F, '
-    /^  [A-Za-z0-9._-]+,/ { id = $1; sub(/^ +/, "", id); print id }')
-  for id in $ids; do
-    task_show "$id" || continue
-    [ "$(body_decision_id "$(show_field_value "$TASK_SHOW_OUTPUT" body)")" = "$entry" ] || continue
-    matches="$matches $id"
-    count=$((count + 1))
-  done
-  [ "$count" -gt 0 ] || return 1
-  [ "$count" -eq 1 ] || fail "decision number $entry is carried by more than one held task:$matches"
-  printf '%s' "${matches# }"
-}
-
 refuse_self_inventory() {
   local origin=$1 entry=$2 meta="$STATE/$1.meta"
   if list_has_key "$(meta_value "$meta" decision_keys)" "$entry"; then
@@ -1369,7 +1337,7 @@ remove_interrupted_answer_stamp() {  # <task-id>
 }
 
 command_answer() {
-  local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence alias_id
+  local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1382,9 +1350,6 @@ command_answer() {
   done
   validate_slug task-id "$id"
   load_decision "$decision_file"
-  if ! task_show "$id"; then
-    alias_id=$(resolve_decision_alias "$id") && id=$alias_id
-  fi
   acquire_task_control_lock "$id"
   require_tasks_axi
   task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
@@ -2240,41 +2205,6 @@ EOF
 # exist holds nothing. Every read failure over a record that DOES exist is a 2,
 # printed to stderr, because a mechanical closer must never read "cannot tell"
 # as permission to close.
-command_decision_ids() {
-  local seed=0 counter scanned last source next
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --seed) seed=1 ;;
-      *) usage >&2; exit 2 ;;
-    esac
-    shift
-  done
-  decision_seq_lock
-  counter=$(decision_seq_counter) || exit $?
-  scanned=$(decision_seq_scan_max) || exit $?
-  if [ "$seed" = 1 ] && [ -z "$counter" ]; then
-    decision_seq_write "$scanned"
-    counter=$scanned
-  fi
-  decision_seq_unlock
-  if [ -n "$counter" ] && [ "$counter" -ge "$scanned" ]; then
-    last=$counter
-    source=counter
-  elif [ "$scanned" -gt 0 ]; then
-    last=$scanned
-    source=scan
-  else
-    last=0
-    source=none
-  fi
-  next=$((last + 1))
-  if [ "$last" -eq 0 ]; then
-    printf 'last=none source=%s next=D%s\n' "$source" "$next"
-  else
-    printf 'last=D%s source=%s next=D%s\n' "$last" "$source" "$next"
-  fi
-}
-
 command_open() {  # <task-id> [--identity] [--distinguish-absent]
   local id='' identity=0 distinguish_absent=0 data state root file backend show shown_body
   while [ "$#" -gt 0 ]; do
@@ -2354,7 +2284,6 @@ case "${1:-}" in
   open) shift; command_open "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   reconcile) shift; command_reconcile "$@" ;;
-  decision-ids) shift; command_decision_ids "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

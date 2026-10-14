@@ -157,8 +157,8 @@ test_open_decisions_are_cumulative_until_answered() {
   assert_contains "$out" "D1    First open call" "a turn file reworded or dropped a carded call"
   assert_contains "$out" "D2    Second open call" "a call the turn file never mentioned was dropped"
   printf 'Captain: D1 A\n' > "$home/answer.txt"
-  run_captain "$home" answer D1 --decision-file "$home/answer.txt" >/dev/null \
-    || fail "the decision number alias did not answer the call"
+  run_captain "$home" answer first-call --decision-file "$home/answer.txt" >/dev/null \
+    || fail "could not answer the first call"
   out=$(run_report "$home") || fail "the report did not render after the answer"
   assert_contains "$out" "NEEDS YOUR DECISION ══ 1 open" "the answered call is still counted"
   assert_not_contains "$out" "First open call" "the answered call is still in the decision box"
@@ -222,6 +222,24 @@ test_aged_calls_stay_open_and_parked_calls_keep_their_numbers() {
   assert_contains "$out" "D3 A blocked call - blocked by Prerequisite work" \
     "the blocked call lost its number or its blocker in PARKED"
   pass "an aged call stays open in full, and parked calls keep their number and reason"
+}
+
+# An answer retires the number; a later non-captain hold of the same task
+# must not bring the retired number or the old question back.
+test_a_retired_number_stays_out_of_parked() {
+  local home out
+  home=$(make_home retired)
+  hold_card "$home" infra-work "Pick a path" '["JustAuth"]'
+  printf 'Captain: go ahead\n' > "$home/answer.txt"
+  run_captain "$home" answer infra-work --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "could not release the call"
+  tasks_in "$home" hold infra-work --reason "waiting on infra"
+  out=$(run_report "$home") || fail "the report did not render"
+  assert_contains "$out" "PARKED  (1)" "the plain hold is not parked"
+  assert_contains "$out" "Call infra-work - on hold" "the plain hold is not shown by its task title"
+  assert_not_contains "$out" "D1" "the retired decision number came back"
+  assert_not_contains "$out" "Pick a path" "the answered question came back"
+  pass "a retired decision number stays out of PARKED when the task is held again for another reason"
 }
 
 test_items_group_under_project_titles() {
@@ -320,6 +338,7 @@ test_busy_report_renders_the_chosen_layout
 test_open_decisions_are_cumulative_until_answered
 test_backlog_shows_only_when_nothing_is_open_or_ongoing
 test_aged_calls_stay_open_and_parked_calls_keep_their_numbers
+test_a_retired_number_stays_out_of_parked
 test_items_group_under_project_titles
 test_width_is_fixed_and_narrows_to_a_smaller_pane
 test_cardless_calls_and_invalid_input_are_reported

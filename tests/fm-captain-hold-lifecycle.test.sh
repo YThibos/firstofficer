@@ -4685,40 +4685,33 @@ test_decision_card_assigns_stable_numbers() {
   pass "a decision card numbers the call past every used number, keeps it on repeat, and is projected"
 }
 
-# D<n> names its held task wherever a task id names a captain call, and a
-# number is never issued twice even after its records leave the backlog.
-test_decision_numbers_alias_and_never_repeat() {
+# A decision number is never issued twice, even after its records leave the
+# backlog.
+test_decision_numbers_never_repeat() {
   local home out show
-  home=$(make_home decision-alias)
+  home=$(make_home decision-never-repeat)
   write_decision_card "$home/card.json" "Pick the rollout"
   run_captain "$home" hold rollout-call --title "Rollout call" --reason "rollout choice" \
     --repo sample --decision-card "$home/card.json" >/dev/null || fail "could not hold the rollout call"
   run_captain "$home" hold rename-call --title "Rename call" --reason "rename choice" \
     --repo sample --decision-card "$home/card.json" >/dev/null || fail "could not hold the rename call"
   printf 'Captain: D1 A\n' > "$home/d1.txt"
-  run_captain "$home" answer D1 --decision-file "$home/d1.txt" >/dev/null \
-    || fail "answer did not accept the D1 alias"
+  run_captain "$home" answer rollout-call --decision-file "$home/d1.txt" >/dev/null \
+    || fail "could not answer the rollout call"
   show=$(tasks_in "$home" show rollout-call --full)
-  assert_contains "$show" "state: done" "the D1 alias did not close its task"
+  assert_contains "$show" "state: done" "the answer did not close the rollout call"
   assert_contains "$show" "Captain decision id: D1" "the closed call no longer records its retired number"
-  out=$(printf 'D2\tB\tCaptain chose B\n' | run_captain "$home" answers --source "chat") \
-    || fail "the keyed-answer intake did not accept the D2 alias: $out"
-  assert_contains "$(tasks_in "$home" show rename-call --full)" "state: done" \
-    "the D2 keyed answer did not close its task"
-  if run_captain "$home" answer D9 --decision-file "$home/d1.txt" >/dev/null 2>&1; then
-    fail "answer accepted a decision number no held task carries"
-  fi
 
   tasks_in "$home" add widget-work "Build the widget" --kind ship --repo sample >/dev/null
   run_captain "$home" hold widget-work --reason "widget choice" --decision-card "$home/card.json" >/dev/null \
     || fail "could not hold the widget work"
   printf 'Captain: go ahead\n' > "$home/go.txt"
-  run_captain "$home" answer D3 --decision-file "$home/go.txt" --release >/dev/null \
-    || fail "could not release the widget work through its number"
+  run_captain "$home" answer widget-work --decision-file "$home/go.txt" --release >/dev/null \
+    || fail "could not release the widget work"
   out=$(run_captain "$home" hold widget-work --reason "a new widget question" \
     --decision-card "$home/card.json") || fail "could not hold the released work again"
   assert_contains "$out" "decision-id: D4" "a new hold lifecycle reused the number its answer retired"
-  run_captain "$home" answer D4 --decision-file "$home/go.txt" --release >/dev/null \
+  run_captain "$home" answer widget-work --decision-file "$home/go.txt" --release >/dev/null \
     || fail "could not release the widget work again"
   run_captain "$home" hold widget-work --reason "a cardless question" >/dev/null \
     || fail "could not hold the widget work without a card"
@@ -4731,7 +4724,7 @@ test_decision_numbers_alias_and_never_repeat() {
   out=$(run_captain "$home" hold fresh-call --title "Fresh call" --reason "fresh choice" \
     --repo sample --decision-card "$home/card.json") || fail "could not hold a call in the emptied backlog"
   assert_contains "$out" "decision-id: D5" "a number was reissued after its records left the backlog"
-  pass "D<n> resolves its held task in every answer channel, and numbers are never issued twice"
+  pass "decision numbers are never issued twice"
 }
 
 test_decision_cards_are_validated_before_numbering() {
@@ -4759,28 +4752,6 @@ test_decision_cards_are_validated_before_numbering() {
   assert_absent "$home/data/decision-seq" "a refused card consumed a decision number"
   assert_not_contains "$(cat "$home/data/backlog.md")" "bad-" "a refused card still created a task"
   pass "invalid decision cards are refused before any task or number is created"
-}
-
-test_decision_ids_reports_and_seeds_the_counter() {
-  local home out
-  home=$(make_home decision-ids)
-  out=$(run_captain "$home" decision-ids) || fail "decision-ids failed on an empty home"
-  assert_equals "last=none source=none next=D1" "$out" "an empty home did not start at D1"
-  printf '## Done\n- [x] old - Captain: "D41 and D7, go" (done 2026-09-01)\n' > "$home/data/done-archive.md"
-  out=$(run_captain "$home" decision-ids) || fail "decision-ids failed after the archive scan"
-  assert_equals "last=D41 source=scan next=D42" "$out" "the scan did not find the highest used number"
-  assert_absent "$home/data/decision-seq" "a plain decision-ids read wrote the counter"
-  out=$(run_captain "$home" decision-ids --seed) || fail "decision-ids --seed failed"
-  assert_equals "last=D41 source=counter next=D42" "$out" "--seed did not write the counter from the scan"
-  printf '60\n' > "$home/data/decision-seq"
-  out=$(run_captain "$home" decision-ids --seed) || fail "decision-ids --seed failed over a counter"
-  assert_equals "last=D60 source=counter next=D61" "$out" "--seed rewrote an existing counter"
-  printf 'sixty\n' > "$home/data/decision-seq"
-  if run_captain "$home" decision-ids >/dev/null 2>"$home/corrupt.err"; then
-    fail "a corrupt decision counter was read as a number"
-  fi
-  assert_contains "$(cat "$home/corrupt.err")" "must hold one decimal number" "the corrupt counter was not named"
-  pass "decision-ids reports the next number and seeds the counter only when it is absent"
 }
 
 test_hold_reason_round_trips_awkward_characters
@@ -4845,6 +4816,5 @@ test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
 test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
 test_decision_card_assigns_stable_numbers
-test_decision_numbers_alias_and_never_repeat
+test_decision_numbers_never_repeat
 test_decision_cards_are_validated_before_numbering
-test_decision_ids_reports_and_seeds_the_counter

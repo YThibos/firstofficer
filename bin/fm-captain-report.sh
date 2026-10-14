@@ -231,11 +231,11 @@ program='
       | select(if .hold_kind == "captain" then (.hold_bucket == "dated" or .hold_bucket == "blocked") else true end)
       | . as $row | reworded
       | {projects,
-         text: ((if $row.decision_id then "\($row.decision_id) " else "" end)
-           + ($row.decision_card.title // .text) + " - " +
-           (if $row.hold_kind != "captain" then "on hold"
-            elif $row.hold_bucket == "dated" then "deferred until \($row.hold_until)"
-            else "blocked by \($row.unresolved_blocker_ids | map($titles[.] // .) | join(", "))" end))}]) as $parked
+         text: (if $row.hold_kind != "captain" then .text + " - on hold"
+           else (if $row.decision_id then "\($row.decision_id) " else "" end)
+             + ($row.decision_card.title // .text) + " - " +
+             (if $row.hold_bucket == "dated" then "deferred until \($row.hold_until)"
+              else "blocked by \($row.unresolved_blocker_ids | map($titles[.] // .) | join(", "))" end) end)}]) as $parked
   | ([$rows[] | select(.state == "queued" and .hold_reason == null)]
       | sort_by(.order) | sort_by(if .since then (.since | explode | map(-.)) else [1] end)) as $queued
   | ([$queued[0:5][] | reworded | {projects, text}]) as $backlog
