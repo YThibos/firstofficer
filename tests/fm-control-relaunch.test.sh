@@ -1860,6 +1860,7 @@ strand_endpoint() {  # <case-dir> <id>
 # hold_worktree <case-dir>: a live process whose working directory is the task's
 # worktree - what a surviving pane shell or agent on an unreachable tmux server
 # looks like from here.
+# shellcheck disable=SC2031
 hold_worktree() {  # <case-dir>
   local pid
   pid=$(cd "$1/wt" && { /bin/sleep 300 >/dev/null 2>&1 & echo $!; })
@@ -2130,6 +2131,7 @@ test_tmux_refuses_a_window_alive_on_its_recorded_server_out_of_reach() {
   pass "tmux: a window alive on its recorded server out of this seat's reach refuses both verbs"
 }
 
+# shellcheck disable=SC2031
 test_tmux_refuses_while_the_recorded_server_process_may_still_run() {
   local dir out rc fakepid
   real_tmux_case tmux-real-orphan rl83 || { echo "skip - tmux is not installed"; return 0; }
@@ -2157,6 +2159,7 @@ test_tmux_refuses_while_the_recorded_server_process_may_still_run() {
   pass "tmux: a recorded server process that may still run refuses both verbs"
 }
 
+# shellcheck disable=SC2031
 test_tmux_refuses_while_the_recorded_server_runs_behind_a_replaced_socket() {
   local dir out rc fakepid
   real_tmux_case tmux-real-replaced rl85 || { echo "skip - tmux is not installed"; return 0; }
