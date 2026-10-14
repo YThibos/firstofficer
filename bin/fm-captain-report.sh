@@ -20,7 +20,8 @@
 #   ONGOING              In-flight worker and program rows.
 #   PARKED               captain holds that are dated (deferred with --until)
 #                        or blocked, each with its D number and why it waits,
-#                        and rows held for any other reason.
+#                        and rows held for any other reason, by task title
+#                        and never with a retired D number.
 #   BACKLOG              Queued rows that are not held, newest filed first,
 #                        top five plus a count of the rest.
 # Only the turn-specific lines come from firstmate, in the optional turn file:
