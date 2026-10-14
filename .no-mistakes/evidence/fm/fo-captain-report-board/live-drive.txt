@@ -1,0 +1,232 @@
+### 1. hold three carded decisions (D numbers assigned)
+c1
+decision-id: D1
+c2
+decision-id: D2
+c3
+decision-id: D3
+c4
+decision-id: D4
+last=D4 source=counter next=D5
+### 2. report at default width 120
+╔══ NEEDS YOUR DECISION ══ 3 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D1    Restart the stopped workers
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╟── JustMasterData + JustAuth ───────────────
+║
+║  D2    Share one sign-in setup
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╟── firstofficer ────────────────────────────
+║
+║  D3    Merge the relaunch fix
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (1)
+───────────────────
+  firstofficer      • Scripted the captain report
+
+ONGOING  (1)
+────────────
+  JustMasterData    • Finish the decision-log backfill (running)
+
+NEXT
+────
+  Fleet             • Watch the fleet
+
+PARKED  (1)
+───────────
+  JustAuth          • D4 Deferred pricing call - deferred until 2026-12-01
+### 3. answer D2 by alias; report again (D2 gone, D1/D3 keep numbers)
+released: c2
+╔══ NEEDS YOUR DECISION ══ 2 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D1    Restart the stopped workers
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╟── firstofficer ────────────────────────────
+║
+║  D3    Merge the relaunch fix
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (0)
+───────────────────
+  Nothing finished this turn
+
+ONGOING  (1)
+────────────
+  JustMasterData    • Finish the backfill
+
+NEXT
+────
+  Nothing planned
+
+PARKED  (1)
+───────────
+  JustAuth          • D4 Deferred pricing call - deferred until 2026-12-01
+### 4. new hold gets fresh D5, never reuses D2; survives counter loss
+c5
+decision-id: D5
+last=D5 source=scan next=D6
+c6
+decision-id: D6
+### 5. re-hold c1 (same lifecycle) keeps D1
+c1
+decision-id: D1
+### 6. aged hold stays in decision box (snapshot 30 days later)
+╔══ NEEDS YOUR DECISION ══ 4 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D1    Restart the stopped workers
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╟── firstofficer ────────────────────────────
+║
+║  D3    Merge the relaunch fix
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+║  D6    Another call
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╟── JustAuth ────────────────────────────────
+║
+║  D5    New call after answer
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation that should wrap at word boundaries under the rail at
+║             narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (0)
+───────────────────
+### 7. width 80 and narrow 60; below-minimum refused
+80
+╔══ NEEDS YOUR DECISION ══ 4 open ══════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D1    Restart the stopped workers
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation
+║             that should wrap at word boundaries under the
+║             rail at narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+║        » Recommended: A - it keeps the work moving
+║
+╟── firstofficer ────────────────────────────
+║
+║  D3    Merge the relaunch fix
+║        Context for the captain.
+║
+║        (A)  Take the first path with a longer explanation
+║             that should wrap at word boundaries under the
+║             rail at narrower widths
+║
+║        (B)  Take the second path
+║
+║        (C)  Do nothing for now
+║
+fm-captain-report: --width must be at least 60 columns
+exit=1
+### 8. emoji text refused
+fm-captain-report: text outside the report glyph allow-list: party 🎉
+exit=1
+### 9. turn file trying to add a decision key refused
+fm-captain-report: unknown turn key(s): decisions
+exit=1
+LAB=/tmp/fm-live.2AVltk

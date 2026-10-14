@@ -1,0 +1,37 @@
+### 10. blocked hold renders in PARKED with D number and blocker title
+PARKED  (2)
+───────────
+  firstofficer      • D6 Another call - blocked by Prerequisite work
+  JustAuth          • D4 Deferred pricing call - deferred until 2026-12-01
+### 11. idle home: BACKLOG shows only when nothing open or ongoing
+╔══ NEEDS YOUR DECISION ══ nothing open ════════════════════════════════════════════════════════════════════════════════
+║  Nothing waiting on you
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (0)
+───────────────────
+  Nothing finished this turn
+
+ONGOING  (0)
+────────────
+  Nothing running
+
+NEXT
+────
+  Nothing planned
+
+BACKLOG  (7)
+────────────
+  JustMasterData    • Queued item 1
+                    • Queued item 2
+                    • Queued item 3
+                    • Queued item 4
+                    • Queued item 5
+  (+2 more queued)
+--- after one item starts (ongoing), BACKLOG section must disappear:
+0
+### 12. inside a 90-column tmux pane the report narrows to 88
+╔══ NEEDS YOUR DECISION ══ 3 open ══════════════════════════════════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+max line width: 88

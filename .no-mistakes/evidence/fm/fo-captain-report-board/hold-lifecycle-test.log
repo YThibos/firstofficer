@@ -1,0 +1,8 @@
+ok - skipped on markdown-only tasks-axi: verify a derived pre-collapse key
+ok - captain-hold mutations address the beads backend without a markdown override
+ok - skipped on markdown-only tasks-axi: captain-hold create under due.required without types.custom
+ok - a decision card numbers the call past every used number, keeps it on repeat, and is projected
+ok - D<n> resolves its held task in every answer channel, and numbers are never issued twice
+ok - invalid decision cards are refused before any task or number is created
+ok - decision-ids reports the next number and seeds the counter only when it is absent
+exit=0
