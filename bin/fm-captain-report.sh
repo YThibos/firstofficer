@@ -11,14 +11,16 @@
 #
 # SOURCES. Everything durable comes from the canonical backlog parse,
 # `bin/fm-fleet-snapshot.sh --backlog`, run against the active FM_HOME:
-#   NEEDS YOUR DECISION  every captain hold whose hold_bucket is "live", with
-#                        its decision card and stable D number from
-#                        bin/fm-captain-hold.sh; a live hold without a card is
-#                        still shown, as "--" with its title and hold reason,
-#                        and named on stderr so it gets a card.
+#   NEEDS YOUR DECISION  every captain hold whose hold_bucket is "live" or
+#                        "aged", with its decision card and stable D number
+#                        from bin/fm-captain-hold.sh; age never moves an
+#                        unanswered call out of the box. A hold without a card
+#                        is still shown, as "--" with its title and hold
+#                        reason, and named on stderr so it gets a card.
 #   ONGOING              In-flight worker and program rows.
-#   PARKED               captain holds that are dated, blocked, or aged, and
-#                        rows held for any other reason.
+#   PARKED               captain holds that are dated (deferred with --until)
+#                        or blocked, each with its D number and why it waits,
+#                        and rows held for any other reason.
 #   BACKLOG              Queued rows that are not held, newest filed first,
 #                        top five plus a count of the rest.
 # Only the turn-specific lines come from firstmate, in the optional turn file:
@@ -129,7 +131,7 @@ fi
 snapshot=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --backlog) || fail "the backlog snapshot failed"
 
 cardless=$(printf '%s' "$snapshot" | jq -r '
-  [.backlog.records[]? | select(.structured and .hold_bucket == "live" and .decision_card == null) | .id]
+  [.backlog.records[]? | select(.structured and (.hold_bucket == "live" or .hold_bucket == "aged") and .decision_card == null) | .id]
   | join(", ")') || fail "the backlog snapshot is not valid JSON"
 [ -z "$cardless" ] || printf 'fm-captain-report: held for the captain without a decision card (shown as --): %s\n' "$cardless" >&2
 
@@ -211,7 +213,7 @@ program='
   | def reworded: . as $row | ($over[$row.id] // {}) as $o
       | {text: ($o.text // $row.title), state: $o.state, projects: ($o.projects // $row.projects)};
 
-  ([$rows[] | select(.hold_bucket == "live")
+  ([$rows[] | select(.hold_bucket == "live" or .hold_bucket == "aged")
     | . as $row | reworded as $r
     | {id: (.decision_id // "--"),
        n: (if .decision_id then (.decision_id[1:] | tonumber) else infinite end),
@@ -225,14 +227,14 @@ program='
   | ([$rows[] | select(.state == "in_flight" and (.current_role == "worker" or .current_role == "program"))
       | reworded | {projects, text: (.text + (if .state then " (\(.state))" else "" end))}]) as $ongoing
   | ([$rows[] | select(.state != "done" and .hold_reason != null)
-      | select(if .hold_kind == "captain" then (.hold_bucket == "dated" or .hold_bucket == "blocked" or .hold_bucket == "aged") else true end)
+      | select(if .hold_kind == "captain" then (.hold_bucket == "dated" or .hold_bucket == "blocked") else true end)
       | . as $row | reworded
       | {projects,
-         text: (.text + " - " +
+         text: ((if $row.decision_id then "\($row.decision_id) " else "" end)
+           + ($row.decision_card.title // .text) + " - " +
            (if $row.hold_kind != "captain" then "on hold"
-            elif $row.hold_bucket == "dated" then "until \($row.hold_until)"
-            elif $row.hold_bucket == "blocked" then "blocked by other work"
-            else "waiting since \((($row.hold_set // $row.since) // "")[0:10])" end))}]) as $parked
+            elif $row.hold_bucket == "dated" then "deferred until \($row.hold_until)"
+            else "blocked by \($row.unresolved_blocker_ids | join(", "))" end))}]) as $parked
   | ([$rows[] | select(.state == "queued" and .hold_reason == null)]
       | sort_by(.order) | sort_by(if .since then (.since | explode | map(-.)) else [1] end)) as $queued
   | ([$queued[0:5][] | reworded | {projects, text}]) as $backlog

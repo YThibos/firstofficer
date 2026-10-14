@@ -33,7 +33,7 @@ run_captain() {  # <home> <command args...>
   local home=$1
   shift
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_CONFIG_OVERRIDE="$home/config" FM_CAPTAIN_HOLD_NOW="$NOW" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_CAPTAIN_HOLD_NOW="${HOLD_NOW:-$NOW}" \
     "$ROOT/bin/fm-captain-hold.sh" "$@"
 }
 
@@ -55,11 +55,12 @@ card() {  # <path> <title> <projects-json> [context]
     + (if $context == "" then {} else {context: $context} end)' > "$path"
 }
 
-hold_card() {  # <home> <task-id> <title> <projects-json> [context]
+hold_card() {  # <home> <task-id> <title> <projects-json> [context] [hold args...]
   local home=$1 id=$2 title=$3 projects=$4 context=${5:-}
+  shift 5 2>/dev/null || shift "$#"
   card "$home/$id.card.json" "$title" "$projects" "$context"
   run_captain "$home" hold "$id" --title "Call $id" --reason "captain call pending" \
-    --repo sample --decision-card "$home/$id.card.json" >/dev/null \
+    --repo sample --decision-card "$home/$id.card.json" "$@" >/dev/null \
     || fail "could not hold $id with a decision card"
 }
 
@@ -181,19 +182,46 @@ test_backlog_shows_only_when_nothing_is_open_or_ongoing() {
   assert_contains "$out" "║  Nothing waiting on you" "the empty decision box lost its placeholder"
   assert_contains "$out" "BACKLOG  (7)" "the quiet report did not count the whole backlog"
   assert_contains "$out" "(+2 more queued)" "the quiet report did not show the top five plus a remainder"
-  assert_contains "$out" "Questions for the next demo - until 2026-10-20" "a dated call did not park with its date"
+  assert_contains "$out" "Questions for the next demo - deferred until 2026-10-20" "a dated call did not park with its date"
   assert_contains "$out" "Paused work - on hold" "a non-captain hold did not park"
   assert_contains "$out" "PARKED  (2)" "the parked count is wrong"
 
   tasks_in "$home" add busy-work "Busy work" --repo firstofficer --start
   out=$(run_report "$home") || fail "the report with ongoing work did not render"
   assert_not_contains "$out" "BACKLOG" "BACKLOG showed while work is ongoing"
-  tasks_in "$home" done busy-work
+  tasks_in "$home" "done" busy-work
   hold_card "$home" open-call "An open call" '[]'
   out=$(run_report "$home") || fail "the report with an open call did not render"
   assert_not_contains "$out" "BACKLOG" "BACKLOG showed while a call is open"
   assert_contains "$out" "╟── Fleet ──" "a call with no project did not group under Fleet"
   pass "BACKLOG shows only on a quiet fleet, and PARKED carries deferred and held work"
+}
+
+test_aged_calls_stay_open_and_parked_calls_keep_their_numbers() {
+  local home out
+  home=$(make_home aged)
+  HOLD_NOW=2026-06-01T12:00:00Z hold_card "$home" aged-call "An old unanswered call" '["JustAuth"]'
+  hold_card "$home" dated-call "A deferred call" '["JustAuth"]' "" --until 2026-10-20
+  tasks_in "$home" add prereq "Prerequisite work" --repo JustAuth
+  hold_card "$home" blocked-call "A blocked call" '["JustAuth"]'
+  tasks_in "$home" block blocked-call --by prereq
+  out=$(run_report "$home") || fail "the report did not render"
+  assert_contains "$out" "NEEDS YOUR DECISION ══ 1 open" "the aged call was not counted as open"
+  assert_contains "$out" "$(printf '%s\n' \
+    "║  D1    An old unanswered call" \
+    "║" \
+    "║        (A)  Take the first path" \
+    "║" \
+    "║        (B)  Take the second path" \
+    "║" \
+    "║        » Recommended: A - it keeps the work moving")" \
+    "the aged call did not stay in the decision box in full"
+  assert_contains "$out" "PARKED  (2)" "the parked count is wrong"
+  assert_contains "$out" "D2 A deferred call - deferred until 2026-10-20" \
+    "the deferred call lost its number or its date in PARKED"
+  assert_contains "$out" "D3 A blocked call - blocked by prereq" \
+    "the blocked call lost its number or its blocker in PARKED"
+  pass "an aged call stays open in full, and parked calls keep their number and reason"
 }
 
 test_items_group_under_project_titles() {
@@ -291,6 +319,7 @@ test_cardless_calls_and_invalid_input_are_reported() {
 test_busy_report_renders_the_chosen_layout
 test_open_decisions_are_cumulative_until_answered
 test_backlog_shows_only_when_nothing_is_open_or_ongoing
+test_aged_calls_stay_open_and_parked_calls_keep_their_numbers
 test_items_group_under_project_titles
 test_width_is_fixed_and_narrows_to_a_smaller_pane
 test_cardless_calls_and_invalid_input_are_reported
