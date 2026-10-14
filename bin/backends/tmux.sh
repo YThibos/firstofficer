@@ -566,26 +566,28 @@ fm_backend_tmux_worktree_holders() {  # <worktree>
 # fm_backend_tmux_legacy_absence: the proof for a record written before spawn
 # recorded its server identity. It cannot ask the endpoint's own server, so it
 # proves the two things a surviving agent would need instead:
-#   - no tmux server other than the one this process addresses answers on any
-#     socket in this user's tmux socket directory (${TMUX_TMPDIR:-/tmp}/tmux-UID),
-#     so the window was not merely on a sibling server; and
+#   - no tmux server other than the one this process addresses (told apart by
+#     its pid and start time, not its socket path) answers on any socket in
+#     this user's tmux socket directory (${TMUX_TMPDIR:-/tmp}/tmux-UID), so the
+#     window was not merely on a sibling server; and
 #   - no live process has the recorded worktree as its working directory, so
 #     no shell or agent of the task survives anywhere, even on a server started
 #     on a socket outside that directory.
 fm_backend_tmux_legacy_absence() {  # <target> <worktree>
-  local wt=${2-} dir ambient f holders
+  local wt=${2-} dir ambient f identity holders
   [ -n "$wt" ] && [ -d "$wt" ] || {
     printf 'unproven\tthe record carries no tmux server identity and no readable worktree to check for surviving processes'
     return 0
   }
   dir="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
-  ambient=${TMUX:-}
-  ambient=${ambient%%,*}
-  [ -n "$ambient" ] || ambient="$dir/default"
+  ambient=$(fm_backend_tmux_server_identity) && ambient=${ambient#*$'\t'} || ambient=
   for f in "$dir"/*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
-    [ "$f" != "$ambient" ] || continue
     if tmux -S "$f" list-sessions >/dev/null 2>&1; then
+      if [ -n "$ambient" ] && identity=$(fm_backend_tmux_server_identity "$f") \
+        && [ "${identity#*$'\t'}" = "$ambient" ]; then
+        continue
+      fi
       printf 'unproven\tthe record carries no tmux server identity, and another tmux server answers on %s, so the window may still be alive there' "$f"
       return 0
     fi

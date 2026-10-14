@@ -2080,6 +2080,35 @@ test_tmux_legacy_record_is_reclaimed_against_real_tmux() {
   pass "tmux legacy record: reclaimed against real tmux, and the record gains its server identity"
 }
 
+test_tmux_legacy_record_is_reclaimed_beside_its_own_server_behind_a_symlinked_socket_dir() {
+  local dir out rc sock pid
+  real_tmux_case tmux-real-legacy-link rl86 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # The seat's own server keeps running; only the task's window is gone. The
+  # socket directory is reached through a symlink, so $TMUX (which tmux writes
+  # with the real path) and the directory listing name the same server by
+  # different paths.
+  ln -s "$dir/tmuxtmp" "$dir/tmuxlink"
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir"
+  real_tmux "$dir" new-window -d -t firstmate: -n fm-rl86 -c "$dir/wt"
+  real_tmux "$dir" kill-window -t '=firstmate:fm-rl86'
+  sock=$(real_tmux "$dir" display-message -p '#{socket_path}')
+  pid=$(real_tmux "$dir" display-message -p '#{pid}')
+  mkdir -p "$dir/user-home"
+  out=$(env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
+    -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
+    TMUX="$sock,$pid,0" TMUX_TMPDIR="$dir/tmuxlink" \
+    PATH="$dir/realbin:$PATH" FM_HOME="$dir/home" \
+    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' FM_SPAWN_NO_GUARD=1 \
+    FM_CONTROL_POLL=0.1 FM_CONTROL_EXIT_WAIT=2 FM_CONTROL_LAUNCH_WAIT=20 \
+    "$CONTROL" rl86 relaunch --note "the window was lost; resume" 2>&1); rc=$?
+  expect_code 0 "$rc" "the seat's own server must not count as a sibling under another path"$'\n'"$out"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl86 \
+    || fail "the legacy reclaim must create the task's window"
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux legacy record: the seat's own server reached through a symlinked socket directory is not a sibling"
+}
+
 test_tmux_refuses_a_window_alive_on_its_recorded_server_out_of_reach() {
   local dir out rc
   real_tmux_case tmux-real-away rl82 || { echo "skip - tmux is not installed"; return 0; }
@@ -2719,6 +2748,7 @@ test_tmux_legacy_refuses_while_another_server_answers
 test_tmux_legacy_record_is_reclaimed_when_absence_is_proven
 test_tmux_recorded_identity_reclaims_a_window_lost_with_its_server
 test_tmux_legacy_record_is_reclaimed_against_real_tmux
+test_tmux_legacy_record_is_reclaimed_beside_its_own_server_behind_a_symlinked_socket_dir
 test_tmux_refuses_a_window_alive_on_its_recorded_server_out_of_reach
 test_tmux_refuses_while_the_recorded_server_process_may_still_run
 test_tmux_refuses_while_the_recorded_server_runs_behind_a_replaced_socket

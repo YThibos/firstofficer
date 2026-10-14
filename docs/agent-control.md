@@ -110,7 +110,7 @@ An unreachable endpoint can still hold the live agent a rebind would duplicate, 
   Spawn therefore records the server a task's window lives on - its socket path, pid, and start time (`tmux_socket`, `tmux_server_pid`, `tmux_server_start`) - and the proof reads that exact server through its own socket.
   The window is proven gone when that server answers with the recorded identity and the window is absent from every session on it, or when the recorded socket is answered by a server with the recorded pid but a different start time (that pid now belongs to a later server, as after a reboot), or when the recorded server no longer answers and its recorded pid is no longer a running tmux process.
   A window still on the recorded server but invisible from this seat, or a recorded server that stopped answering while its process may still run, refuses.
-- **A tmux record written before spawn recorded its server** cannot ask that server, so it proves the two things a surviving agent would need instead: no tmux server other than the one this process addresses answers on any socket in this user's socket directory (`${TMUX_TMPDIR:-/tmp}/tmux-<uid>`), and no live process outside the caller's own process chain has the recorded worktree, or anything below it, as its working directory.
+- **A tmux record written before spawn recorded its server** cannot ask that server, so it proves the two things a surviving agent would need instead: no tmux server other than the one this process addresses (told apart by its pid and start time, not its socket path) answers on any socket in this user's socket directory (`${TMUX_TMPDIR:-/tmp}/tmux-<uid>`), and no live process outside the caller's own process chain has the recorded worktree, or anything below it, as its working directory.
   The process check is what covers a server started on a socket outside that directory, because a live pane's shell or agent sits in the task's worktree.
   This route was chosen over an operator confirmation because it is checkable evidence rather than a judgement call, and it refuses whenever either fact is unreadable; a refusal names the server or the processes to stop first.
 
@@ -169,7 +169,7 @@ The worktree and the task's records are unaffected either way.
 - An ambiguous or unreadable endpoint state refuses.
   Only a positively classified state acts.
 - `exit`'s composer-empty check, above, is itself a fail-closed boundary that `relaunch` inherits by stopping the old agent through `exit`.
-- `fm-spawn --relaunch` independently refuses unless the endpoint is positively agent-free - either a `dead` endpoint that survives, or a Herdr endpoint proven gone by the absence proof above - so a replacement can never join a live agent.
+- `fm-spawn --relaunch` independently refuses unless the endpoint is positively agent-free - either a `dead` endpoint that survives, or an endpoint proven gone by the absence proof above - so a replacement can never join a live agent.
   An `alive`, `ambiguous`, or `unreadable` verdict all refuse, and so does any endpoint whose absence is not provable; absence is claimed only from positive evidence of it.
   It also requires the shell to be in the recorded worktree: every backend but Orca (which owns its own task worktree with no current-path probe) gets one explicit `cd` to the recorded path, then a pre-launch path read that refuses before any harness starts unless it confirms the endpoint is sitting in the recorded copy.
 
