@@ -219,7 +219,7 @@ test_aged_calls_stay_open_and_parked_calls_keep_their_numbers() {
   assert_contains "$out" "PARKED  (2)" "the parked count is wrong"
   assert_contains "$out" "D2 A deferred call - deferred until 2026-10-20" \
     "the deferred call lost its number or its date in PARKED"
-  assert_contains "$out" "D3 A blocked call - blocked by prereq" \
+  assert_contains "$out" "D3 A blocked call - blocked by Prerequisite work" \
     "the blocked call lost its number or its blocker in PARKED"
   pass "an aged call stays open in full, and parked calls keep their number and reason"
 }

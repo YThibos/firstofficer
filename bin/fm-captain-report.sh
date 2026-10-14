@@ -210,6 +210,7 @@ program='
   | ($turn_raw | turn_items("next")) as $next
   | ($turn_raw | turn_tasks) as $over
   | [$snap.backlog.records[]? | select(.structured)] as $rows
+  | (reduce $rows[] as $row ({}; .[$row.id] //= $row.title)) as $titles
   | def reworded: . as $row | ($over[$row.id] // {}) as $o
       | {text: ($o.text // $row.title), state: $o.state, projects: ($o.projects // $row.projects)};
 
@@ -234,7 +235,7 @@ program='
            + ($row.decision_card.title // .text) + " - " +
            (if $row.hold_kind != "captain" then "on hold"
             elif $row.hold_bucket == "dated" then "deferred until \($row.hold_until)"
-            else "blocked by \($row.unresolved_blocker_ids | join(", "))" end))}]) as $parked
+            else "blocked by \($row.unresolved_blocker_ids | map($titles[.] // .) | join(", "))" end))}]) as $parked
   | ([$rows[] | select(.state == "queued" and .hold_reason == null)]
       | sort_by(.order) | sort_by(if .since then (.since | explode | map(-.)) else [1] end)) as $queued
   | ([$queued[0:5][] | reworded | {projects, text}]) as $backlog
