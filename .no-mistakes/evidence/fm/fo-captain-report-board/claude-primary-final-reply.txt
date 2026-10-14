@@ -1,0 +1,35 @@
+Captain, here is this turn's report. No work was started, stopped or changed.
+
+```
+╔══ NEEDS YOUR DECISION ══ 1 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── JustAuth ────────────────────────────────
+║
+║  D9    Pick the release day
+║
+║        (A)  Ship on Thursday
+║
+║        (B)  Ship next Monday
+║
+║        » Recommended: A - the fix is ready and tested
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (1)
+───────────────────
+  JustAuth          • Fix PR reviewed
+
+ONGOING  (0)
+────────────
+  Nothing running
+
+NEXT
+────
+  Nothing planned
+
+PARKED  (3)
+───────────
+  firstofficer      • Call merge-call - on hold
+  JustAuth          • D7 A deferred call - deferred until 2026-10-30
+                    • D8 A blocked call - blocked by Prerequisite work
+```

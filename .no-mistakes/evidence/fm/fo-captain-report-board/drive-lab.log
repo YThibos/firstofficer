@@ -1,0 +1,172 @@
+
+===== S1: hold four carded calls across projects (real fm-captain-hold.sh) =====
+restart-call
+decision-id: D1
+merge-call
+decision-id: D2
+shared-call
+decision-id: D3
+book-call
+decision-id: D4
+
+===== S1 report at default width (no --width, outside tmux) =====
+exit=0
+╔══ NEEDS YOUR DECISION ══ 4 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D1    Restart the stopped workers
+║        Both stopped mid-task; nothing is lost.
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+║  D4    Book the research minutes
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── firstofficer ────────────────────────────
+║
+║  D2    Merge the green pull request
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── JustMasterData + JustAuth ───────────────
+║
+║  D3    Share one sign-in setup across both apps
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (2)
+───────────────────
+  Fleet             • Took over monitoring for this session
+  firstofficer      • Report-format investigation finished, see https://github.com/YThibos/firstofficer/pull/31
+
+ONGOING  (2)
+────────────
+  firstofficer      • Fix the relaunch of a stopped worker (running)
+  JustMasterData    • Finish the decision-log backfill (running)
+
+NEXT
+────
+  JustMasterData    • Start the recovery workers one at a time
+max line width (chars): 120
+
+===== S2: answer D1 (restart-call) -> leaves the box; others keep numbers =====
+answered: restart-call
+╔══ NEEDS YOUR DECISION ══ 3 open ══════════════════════════════════════════════════════════════════════════════════════
+║  D2    Merge the green pull request
+║  D3    Share one sign-in setup across both apps
+║  D4    Book the research minutes
+
+===== S2b: new hold after answering -> gets next number, not D1 reused =====
+new-call
+decision-id: D5
+
+===== S2c: lose the counter file (new session / lost state) -> still no reuse =====
+5
+newer-call
+decision-id: D6
+╔══ NEEDS YOUR DECISION ══ 5 open ══════════════════════════════════════════════════════════════════════════════════════
+║  D2    Merge the green pull request
+║  D3    Share one sign-in setup across both apps
+║  D4    Book the research minutes
+║  D5    A brand new call
+║  D6    Another new call after the counter was lost
+
+===== S3: aged call (snapshot 40 days later) stays in NEEDS YOUR DECISION =====
+╔══ NEEDS YOUR DECISION ══ 5 open ══════════════════════════════════════════════════════════════════════════════════════
+║  D2    Merge the green pull request
+║  D3    Share one sign-in setup across both apps
+║  D4    Book the research minutes
+║  D5    A brand new call
+║  D6    Another new call after the counter was lost
+
+===== S4: dated and blocked carded holds render in PARKED with D number and reason =====
+dated-call
+decision-id: D7
+blocked-call
+decision-id: D8
+PARKED  (2)
+───────────
+  JustAuth          • D7 A deferred call - deferred until 2026-10-30
+                    • D8 A blocked call - blocked by Prerequisite work
+--- is any dated/blocked call in the decision box?
+no (correct)
+
+===== S5: release then non-captain hold -> retired number never shown in PARKED =====
+released: merge-call
+PARKED  (3)
+───────────
+  firstofficer      • Call merge-call - on hold
+  JustAuth          • D7 A deferred call - deferred until 2026-10-30
+                    • D8 A blocked call - blocked by Prerequisite work
+
+===== S6: adversarial turn file input =====
+fm-captain-report: text outside the report glyph allow-list: Shipped 🚀
+exit=1
+fm-captain-report: unknown turn key(s): decisions
+exit=1
+--- turn rewording a decision's task cannot remove it:
+╔══ NEEDS YOUR DECISION ══ 4 open ══════════════════════════════════════════════════════════════════════════════════════
+║  D3    Share one sign-in setup across both apps
+║  D4    Book the research minutes
+║  D5    A brand new call
+║  D6    Another new call after the counter was lost
+fm-captain-report: --width must be at least 60 columns
+exit=1
+
+===== S7: BACKLOG appears only when nothing open and nothing ongoing =====
+with open+ongoing: 0 BACKLOG headings
+╔══ NEEDS YOUR DECISION ══ nothing open ════════════════════════════════════════════════════════════════════════════════
+║  Nothing waiting on you
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (0)
+───────────────────
+  Nothing finished this turn
+
+ONGOING  (0)
+────────────
+  Nothing running
+
+NEXT
+────
+  Nothing planned
+
+PARKED  (3)
+───────────
+  firstofficer      • Call merge-call - on hold
+  JustAuth          • D7 A deferred call - deferred until 2026-10-30
+                    • D8 A blocked call - blocked by Prerequisite work
+
+BACKLOG  (2)
+────────────
+  firstofficer      • Queued idea one
+  JustAuth          • Prerequisite work
+LAB=/tmp/fm-lab.P1zB9A

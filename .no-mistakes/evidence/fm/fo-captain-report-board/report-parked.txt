@@ -1,0 +1,79 @@
+╔══ NEEDS YOUR DECISION ══ 5 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── firstofficer ────────────────────────────
+║
+║  D2    Merge the green pull request
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── JustMasterData + JustAuth ───────────────
+║
+║  D3    Share one sign-in setup across both apps
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D4    Book the research minutes
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── JustAuth ────────────────────────────────
+║
+║  D5    A brand new call
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+║  D6    Another new call after the counter was lost
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (0)
+───────────────────
+  Nothing finished this turn
+
+ONGOING  (2)
+────────────
+  firstofficer      • Relaunch fix
+  JustMasterData    • SHIP JustMasterData: finish the backfill
+
+NEXT
+────
+  Nothing planned
+
+PARKED  (2)
+───────────
+  JustAuth          • D7 A deferred call - deferred until 2026-10-30
+                    • D8 A blocked call - blocked by Prerequisite work

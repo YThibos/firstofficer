@@ -1,0 +1,64 @@
+╔══ NEEDS YOUR DECISION ══ 4 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── JustMasterData ──────────────────────────
+║
+║  D1    Restart the stopped workers
+║        Both stopped mid-task; nothing is lost.
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+║  D4    Book the research minutes
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── firstofficer ────────────────────────────
+║
+║  D2    Merge the green pull request
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╟── JustMasterData + JustAuth ───────────────
+║
+║  D3    Share one sign-in setup across both apps
+║
+║        (A)  Restart now, one at a time, watching the first for ten minutes before the next
+║
+║        (B)  Wait until tomorrow morning so the captain can watch
+║
+║        (C)  Drop the work and file a fresh task
+║
+║        » Recommended: A - it keeps the work moving and nothing is lost
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (2)
+───────────────────
+  Fleet             • Took over monitoring for this session
+  firstofficer      • Report-format investigation finished, see https://github.com/YThibos/firstofficer/pull/31
+
+ONGOING  (2)
+────────────
+  firstofficer      • Fix the relaunch of a stopped worker (running)
+  JustMasterData    • Finish the decision-log backfill (running)
+
+NEXT
+────
+  JustMasterData    • Start the recovery workers one at a time
