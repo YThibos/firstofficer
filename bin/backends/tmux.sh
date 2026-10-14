@@ -467,37 +467,18 @@ fm_backend_tmux_server_identity() {  # [<socket>] [<session>]
   printf '%s\t%s\t%s\n' "$path" "$pid" "$start"
 }
 
-# Whether <pid> may still be the tmux server that started at <start> (epoch
-# seconds, tmux's #{start_time}). A running tmux process whose start time cannot
-# be read counts as that server, so an unreadable process table never proves a
-# server dead; one that started more than a minute after <start> is a later
-# process that reused the pid, as after a reboot.
-fm_backend_tmux_pid_may_be_server() {  # <pid> <start>
-  local comm etime now secs=0 days=0 part
-  local -a parts=()
+# Whether <pid> is a running tmux process. Any process that cannot be shown NOT
+# to be tmux counts as one, so an unreadable process table never proves a
+# server dead.
+fm_backend_tmux_pid_is_tmux() {  # <pid>
+  local comm
   case "${1-}" in ''|*[!0-9]*) return 0 ;; esac
   kill -0 "$1" 2>/dev/null || [ -e "/proc/$1" ] || return 1
   comm=$(ps -p "$1" -o comm= 2>/dev/null) || return 0
   case "$comm" in
-    *tmux*) ;;
-    *) return 1 ;;
+    *tmux*) return 0 ;;
   esac
-  case "${2-}" in ''|*[!0-9]*) return 0 ;; esac
-  etime=$(ps -p "$1" -o etime= 2>/dev/null) || return 0
-  etime=${etime//[[:space:]]/}
-  now=$(date +%s) || return 0
-  case "$etime" in ''|*[!0-9:-]*) return 0 ;; esac
-  case "$etime" in
-    *-*) days=${etime%%-*}; etime=${etime#*-} ;;
-  esac
-  IFS=: read -r -a parts <<< "$etime"
-  [ "${#parts[@]}" -ge 2 ] && [ "${#parts[@]}" -le 3 ] || return 0
-  for part in "${parts[@]}"; do
-    case "$part" in ''|*[!0-9]*) return 0 ;; esac
-    secs=$((secs * 60 + 10#$part))
-  done
-  secs=$((secs + 10#$days * 86400))
-  [ $((now - secs)) -le $(($2 + 60)) ]
+  return 1
 }
 
 # fm_backend_tmux_recorded_absence: the proof for a record that carries its
@@ -508,15 +489,18 @@ fm_backend_tmux_pid_may_be_server() {  # <pid> <start>
 #   - the recorded server answers with the recorded identity: the window's
 #     name absent from every session on it is `gone`; a window still there is
 #     `unproven`, because this seat's own read could not see it.
+#   - a server with the recorded pid but another start time answers on that
+#     socket: that pid now belongs to a later server, as after a reboot, so the
+#     recorded server is `gone`.
 #   - another server answers on that socket, or none does: the recorded server
-#     is gone unless its recorded pid is still a running tmux process that did
-#     not start after the recorded start time (a server whose socket file was
-#     removed keeps running), which is `unproven`.
+#     is gone unless its recorded pid is still a running tmux process (a server
+#     whose socket file was removed keeps running), which is `unproven`.
 fm_backend_tmux_recorded_absence() {  # <target> <socket> <pid> <start>
   local target=$1 socket=$2 pid=$3 start=$4 window identity windows
   window=${target#*:}
   if identity=$(fm_backend_tmux_server_identity "$socket"); then
-    if [ "${identity#*$'\t'}" = "$pid"$'\t'"$start" ]; then
+    identity=${identity#*$'\t'}
+    if [ "$identity" = "$pid"$'\t'"$start" ]; then
       # Every session, not only the recorded one: a window moved or a session
       # renamed on that server is still the task's live window.
       windows=$(LC_ALL=C tmux -S "$socket" list-windows -a -F '#{window_name}' 2>/dev/null) || {
@@ -530,8 +514,12 @@ fm_backend_tmux_recorded_absence() {  # <target> <socket> <pid> <start>
       printf 'gone\t'
       return 0
     fi
+    if [ "${identity%%$'\t'*}" = "$pid" ]; then
+      printf 'gone\t'
+      return 0
+    fi
   fi
-  if fm_backend_tmux_pid_may_be_server "$pid" "$start"; then
+  if fm_backend_tmux_pid_is_tmux "$pid"; then
     printf 'unproven\tthe recorded tmux server (pid %s) no longer answers on %s but may still be running' "$pid" "$socket"
     return 0
   fi

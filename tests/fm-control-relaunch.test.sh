@@ -2106,7 +2106,9 @@ test_tmux_refuses_while_the_recorded_server_process_may_still_run() {
   real_tmux_case tmux-real-orphan rl83 || { echo "skip - tmux is not installed"; return 0; }
   dir=$REAL_DIR
   # The recorded server no longer answers on its socket (its socket file was
-  # removed), but a tmux process with its recorded pid is still running.
+  # removed), but a tmux process with its recorded pid is still running. Its
+  # recorded start lies hours before the process's elapsed time suggests, as
+  # after a host sleep that stopped the boot clock but not the wall clock.
   mkdir -p "$dir/fakeserver"
   cp /bin/sleep "$dir/fakeserver/tmux"
   "$dir/fakeserver/tmux" 300 &
@@ -2115,7 +2117,7 @@ test_tmux_refuses_while_the_recorded_server_process_may_still_run() {
   {
     echo "tmux_socket=$dir/tmuxtmp/tmux-$(id -u)/default"
     echo "tmux_server_pid=$fakepid"
-    echo "tmux_server_start=$(date +%s)"
+    echo "tmux_server_start=$(( $(date +%s) - 7200 ))"
   } >> "$dir/home/state/rl83.meta"
   out=$(run_real_control "$dir" rl83 exit); rc=$?
   expect_code 1 "$rc" "a recorded server that may still run must not be claimed gone"$'\n'"$out"
@@ -2126,22 +2128,45 @@ test_tmux_refuses_while_the_recorded_server_process_may_still_run() {
   pass "tmux: a recorded server process that may still run refuses both verbs"
 }
 
-test_tmux_reclaims_when_the_recorded_server_pid_was_reused() {
+test_tmux_refuses_while_the_recorded_server_runs_behind_a_replaced_socket() {
   local dir out rc fakepid
-  real_tmux_case tmux-real-pid-reuse rl84 || { echo "skip - tmux is not installed"; return 0; }
+  real_tmux_case tmux-real-replaced rl85 || { echo "skip - tmux is not installed"; return 0; }
   dir=$REAL_DIR
-  # After a reboot the recorded pid belongs to a tmux process that started long
-  # after the recorded server did, so it cannot be that server.
+  # A new server took over the recorded socket path while the recorded server,
+  # pid still running, kept its windows.
   mkdir -p "$dir/fakeserver"
   cp /bin/sleep "$dir/fakeserver/tmux"
   "$dir/fakeserver/tmux" 300 &
   fakepid=$!
   HOLDER_PIDS+=("$fakepid")
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir/wt"
   {
-    echo "tmux_socket=$dir/tmuxtmp/tmux-$(id -u)/default"
+    echo "tmux_socket=$(real_tmux "$dir" display-message -p '#{socket_path}')"
     echo "tmux_server_pid=$fakepid"
-    echo "tmux_server_start=$(( $(date +%s) - 3600 ))"
-  } >> "$dir/home/state/rl84.meta"
+    echo "tmux_server_start=$(( $(date +%s) - 7200 ))"
+  } >> "$dir/home/state/rl85.meta"
+  out=$(run_real_control "$dir" rl85 exit); rc=$?
+  expect_code 1 "$rc" "a recorded server behind a replaced socket must not be claimed gone"$'\n'"$out"
+  assert_contains "$out" "may still be running" "the refusal should name the surviving server"
+  out=$(run_real_control "$dir" rl85 relaunch --note "must never launch"); rc=$?
+  expect_code 1 "$rc" "relaunch must refuse too"$'\n'"$out"
+  real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl85 \
+    && fail "a refused relaunch must not create a window"
+  kill "$fakepid" 2>/dev/null
+  real_tmux "$dir" kill-server 2>/dev/null
+  pass "tmux: a recorded server process still running behind a replaced socket refuses both verbs"
+}
+
+test_tmux_reclaims_when_the_recorded_server_pid_was_reused() {
+  local dir out rc
+  real_tmux_case tmux-real-pid-reuse rl84 || { echo "skip - tmux is not installed"; return 0; }
+  dir=$REAL_DIR
+  # After a reboot a new server answers on the recorded socket with the
+  # recorded pid but a later start time, so the recorded server cannot be alive.
+  real_tmux "$dir" new-session -d -s firstmate -c "$dir/wt"
+  record_server_identity "$dir" rl84
+  sed -i "s/^tmux_server_start=.*/tmux_server_start=$(( $(meta_field "$dir" rl84 tmux_server_start) - 3600 ))/" \
+    "$dir/home/state/rl84.meta"
   out=$(run_real_control "$dir" rl84 exit); rc=$?
   expect_code 0 "$rc" "a reused recorded pid must not keep a gone window from being proven gone"$'\n'"$out"
   assert_contains "$out" "endpoint-gone rl84" "exit should report the endpoint gone"
@@ -2149,9 +2174,8 @@ test_tmux_reclaims_when_the_recorded_server_pid_was_reused() {
   expect_code 0 "$rc" "relaunch should reclaim despite the reused pid"$'\n'"$out"
   real_tmux "$dir" list-windows -t '=firstmate' -F '#{window_name}' | grep -qx fm-rl84 \
     || fail "the reclaim must create the task's window"
-  kill "$fakepid" 2>/dev/null
   real_tmux "$dir" kill-server 2>/dev/null
-  pass "tmux: a recorded server pid reused by a later tmux process does not block the reclaim"
+  pass "tmux: a recorded pid answering on its socket with a later start time does not block the reclaim"
 }
 
 test_reclaim_refuses_an_unreadable_endpoint() {
@@ -2697,6 +2721,7 @@ test_tmux_recorded_identity_reclaims_a_window_lost_with_its_server
 test_tmux_legacy_record_is_reclaimed_against_real_tmux
 test_tmux_refuses_a_window_alive_on_its_recorded_server_out_of_reach
 test_tmux_refuses_while_the_recorded_server_process_may_still_run
+test_tmux_refuses_while_the_recorded_server_runs_behind_a_replaced_socket
 test_tmux_reclaims_when_the_recorded_server_pid_was_reused
 test_reclaim_refuses_an_unreadable_endpoint
 test_herdr_relaunch_resumes_only_the_registered_pi_session
