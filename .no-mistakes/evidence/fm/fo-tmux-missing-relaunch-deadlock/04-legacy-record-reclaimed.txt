@@ -1,0 +1,57 @@
+# legacy record, window lost with its server; no sibling server, no worktree holder
+worktree HEAD before: 55f7374d392fa6d907adce3cdd8b72664b9035d6
+status before:
+?? uncommitted.txt
+--- meta before
+window=firstmate:fm-lv1
+endpoint_task_id=lv1
+worktree=/tmp/fm-lab.MHfMsT/wt-lv1
+project=/tmp/fm-lab.MHfMsT/projects/demo
+harness=claude
+kind=ship
+mode=local-only
+yolo=off
+tasktmp=/tmp/fm-lv1
+model=haiku
+effort=default
+backend=tmux
+$ fm-control.sh lv1 relaunch --note 'server lost; resume'
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+warning: /tmp/fm-lab.MHfMsT/data/lv1/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode local-only - confirm its definition of done matches
+notice: lv1 ships mode=local-only while the standing posture for demo is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+relaunched lv1 harness=claude from=claude model=haiku effort=default backend=tmux endpoint=firstmate:fm-lv1 worktree=/tmp/fm-lab.MHfMsT/wt-lv1
+rc=0
+$ lt list-windows -a
+firstmate:zsh /tmp/fm-lab.MHfMsT zsh
+firstmate:fm-lv1 /tmp/fm-lab.MHfMsT/wt-lv1 claude
+--- meta after
+window=firstmate:fm-lv1
+endpoint_task_id=lv1
+worktree=/tmp/fm-lab.MHfMsT/wt-lv1
+project=/tmp/fm-lab.MHfMsT/projects/demo
+harness=claude
+kind=ship
+mode=local-only
+yolo=off
+tasktmp=/tmp/fm-lv1
+model=haiku
+effort=default
+busy_gen=g1791972830.1941034.4777
+spawn_gen=s1791972830.1939251.26306
+tmux_socket=/tmp/fml.tLnrcF/tmux-1000/default
+tmux_server_pid=1920046
+tmux_server_start=1791972807
+control_relaunch_tx=1938258.20261014T101348Z.14707
+$ lt display -p '#{pid} #{start_time} #{socket_path}'
+1920046 1791972807 /tmp/fml.tLnrcF/tmux-1000/default
+worktree HEAD after: 55f7374d392fa6d907adce3cdd8b72664b9035d6
+status after:
+?? uncommitted.txt

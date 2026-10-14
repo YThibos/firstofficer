@@ -1,0 +1,24 @@
+
+ ▐▛███▛█   Claude Code v2.1.299
+▝▜██████▀  Haiku 5.5 · Claude Team
+ ▝▝   ▝▝   /tmp/fm-lab.MHfMsT/wt-lv1
+
+
+❯ : Firstmate operational input waiting: read
+  '/tmp/fm-lab.MHfMsT/state/operational-inbox/1791972891-0063141e5dd98649.msg'
+  and handle its contents as Firstmate operational input.
+
+  Read 1 file, ran 1 shell command
+
+● ready
+
+✻ Cogitated for 6s · done 10:15Z
+
+
+
+
+  tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and re…
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents

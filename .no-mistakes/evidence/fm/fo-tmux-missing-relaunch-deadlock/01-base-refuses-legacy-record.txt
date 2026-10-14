@@ -1,0 +1,7 @@
+$ lt list-windows -a   # only the firstmate session's own window remains after the server was lost
+firstmate:zsh
+$ (BASE 3f18b7d) fm-control.sh lv1 relaunch --note 'server lost; resume'
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+error: task lv1's endpoint firstmate:fm-lv1 reads 'missing', but tmux absence cannot be proven from a task record: the record does not carry the endpoint's socket identity, and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one
+error: relaunch of lv1 failed while stopping the old agent and its state is 'missing', so it was not proven stopped; its original instructions were restored and the durable record was retained for recovery
+rc=1

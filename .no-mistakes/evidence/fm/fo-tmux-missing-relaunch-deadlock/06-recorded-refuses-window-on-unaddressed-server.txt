@@ -1,0 +1,16 @@
+# recorded-identity record; recorded server alive with the agent window, but this seat addresses a different TMUX_TMPDIR (/tmp/fml-other.1NuGlP)
+$ TMUX_TMPDIR=/tmp/fml-other.1NuGlP fm-control.sh lv1 exit
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+error: task lv1's endpoint firstmate:fm-lv1 reads 'missing', but window fm-lv1 still exists on the recorded tmux server at /tmp/fml.tLnrcF/tmux-1000/default, which this process does not address; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one
+rc=1
+$ TMUX_TMPDIR=/tmp/fml-other.1NuGlP fm-control.sh lv1 relaunch
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+error: task lv1's endpoint firstmate:fm-lv1 reads 'missing', but window fm-lv1 still exists on the recorded tmux server at /tmp/fml.tLnrcF/tmux-1000/default, which this process does not address; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one
+error: relaunch of lv1 failed while stopping the old agent and its state is 'missing', so it was not proven stopped; its original instructions were restored and the durable record was retained for recovery
+rc=1
+$ lt list-windows -a  (recorded server)
+firstmate:zsh zsh
+firstmate:fm-lv1 claude
+agent pane pid 1940659 still alive: yes
+$ ls /tmp/fml-other.1NuGlP
+tmux-1000

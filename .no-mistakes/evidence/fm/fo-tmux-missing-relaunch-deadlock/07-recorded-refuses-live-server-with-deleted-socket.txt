@@ -1,0 +1,13 @@
+# recorded-identity record; the recorded server (pid 1920046) still runs the agent but its socket /tmp/fml.tLnrcF/tmux-1000/default was deleted
+$ fm-control.sh lv1 relaunch
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+error: task lv1's endpoint firstmate:fm-lv1 reads 'missing', but the recorded tmux server (pid 1920046) no longer answers on /tmp/fml.tLnrcF/tmux-1000/default but may still be running; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one
+error: relaunch of lv1 failed while stopping the old agent and its state is 'missing', so it was not proven stopped; its original instructions were restored and the durable record was retained for recovery
+rc=1
+$ fm-control.sh lv1 exit
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.MHfMsT
+error: task lv1's endpoint firstmate:fm-lv1 reads 'missing', but the recorded tmux server (pid 1920046) no longer answers on /tmp/fml.tLnrcF/tmux-1000/default but may still be running; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one
+rc=1
+$ ps -p 1920046 -o pid,comm
+    PID COMMAND
+1920046 tmux: server

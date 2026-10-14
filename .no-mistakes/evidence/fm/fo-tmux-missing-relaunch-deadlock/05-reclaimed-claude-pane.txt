@@ -1,0 +1,24 @@
+
+ ▐▛███▛█   Claude Code v2.1.299
+▝▜██████▀  Haiku 5.5 · Claude Team
+ ▝▝   ▝▝   /tmp/fm-lab.MHfMsT/wt-lv1
+
+
+❯ : Firstmate operational input waiting: read
+  '/tmp/fm-lab.MHfMsT/state/operational-inbox/1791972831-f8dbb78713add39f.msg'
+  and handle its contents as Firstmate operational input.
+
+  Read 1 file, listed 2 directories, ran 1 shell command
+
+● ready
+
+✻ Crunched for 7s · done 10:14Z
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
