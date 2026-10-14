@@ -325,29 +325,40 @@ fm_control_backend_state_verified() {  # <backend>
 # re-creating the endpoint - must come through here rather than trusting the
 # raw verdict.
 #
-# Whether absence is provable AT ALL is a property of the backend, not of the
-# reading:
-#   herdr CAN prove it. Every read goes through fm_backend_herdr_cli, which
-#     passes `--session <session>`, so the recheck starts and reads the session
-#     the RECORD names, through that session's own socket. The answer is about
-#     the task's endpoint and nothing else.
-#   tmux CANNOT. `list-windows -a` describes only the server the CURRENT
-#     process addresses (its TMUX_TMPDIR/socket), and a task's record does not
-#     carry the endpoint's socket identity - so a different but running server
-#     would answer "not anywhere" about a window it was never able to see.
-#     There is no read available here that closes that gap, so tmux always
-#     returns `unproven` and both verbs refuse. tmux is left exactly as
-#     deadlocked as it was before this change - no worse - but deliberately.
+# How absence is proven is a property of the backend:
+#   herdr - every read goes through fm_backend_herdr_cli, which passes
+#     `--session <session>`, so the recheck starts and reads the session the
+#     RECORD names, through that session's own socket. The answer is about the
+#     task's endpoint and nothing else.
+#   tmux - `list-windows` describes only the server the CURRENT process
+#     addresses, so the proof asks the endpoint's OWN server instead. A record
+#     written since spawn recorded it carries that server's socket path, pid and
+#     start time (tmux_socket, tmux_server_pid, tmux_server_start), and
+#     bin/backends/tmux.sh's fm_backend_tmux_recorded_absence reads that exact
+#     server. An older record without them gets
+#     fm_backend_tmux_legacy_absence: no other tmux server answers in this
+#     user's socket directory and no live process holds the recorded worktree.
+#     Anything short of that is `unproven`.
 #
 # Both control-plane callers share this one implementation so the proof cannot
 # drift into two answers for the same endpoint.
-fm_control_endpoint_absence_verdict() {  # <backend> <target>
-  local backend=${1-} target=${2-}
+fm_control_endpoint_absence_verdict() {  # <backend> <target> [<meta>]
+  local backend=${1-} target=${2-} meta=${3-} socket
   fm_backend_source "$backend" \
     || { printf 'unproven\tbackend %s could not be loaded to prove anything about that endpoint' "'$backend'"; return 0; }
   case "$backend" in
     tmux)
-      printf 'unproven\ttmux absence cannot be proven from a task record: the record does not carry the endpoint'"'"'s socket identity, and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another'
+      if [ -z "$meta" ] || [ ! -f "$meta" ]; then
+        printf 'unproven\ttmux absence cannot be proven without the task record that names the endpoint'"'"'s server'
+        return 0
+      fi
+      socket=$(fm_meta_get "$meta" tmux_socket)
+      if [ -n "$socket" ]; then
+        fm_backend_tmux_recorded_absence "$target" "$socket" \
+          "$(fm_meta_get "$meta" tmux_server_pid)" "$(fm_meta_get "$meta" tmux_server_start)"
+      else
+        fm_backend_tmux_legacy_absence "$target" "$(fm_meta_get "$meta" worktree)"
+      fi
       ;;
     herdr)
       # Start the RECORDED session's server (only the server - nothing is
