@@ -1,0 +1,16 @@
+{
+  "pi": "1.2.0",
+  "events": [
+    {
+      "messageType": "user",
+      "hasPrompt": true,
+      "prompt": "captain user prompt"
+    },
+    {
+      "messageType": "custom",
+      "hasPrompt": false,
+      "customType": "fm-processing-request",
+      "content": "PROCESSING CONTENT"
+    }
+  ]
+}

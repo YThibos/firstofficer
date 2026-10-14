@@ -1,0 +1,6 @@
+## base 3f18b7d, Pi 1.2.0, tsc Version 7.0.2
+../../../../../../tmp/fm-pi-primary-types.tW4EJ6/fm-branch-supervision.ts(1684,26): error TS2339: Property 'prompt' does not exist on type 'BeforeAgentStartEvent'.
+  Property 'prompt' does not exist on type 'BeforeAgentStartCustomEvent'.
+../../../../../../tmp/fm-pi-primary-types.tW4EJ6/fm-primary-pi-watch.ts(1203,35): error TS2339: Property 'prompt' does not exist on type 'BeforeAgentStartEvent'.
+  Property 'prompt' does not exist on type 'BeforeAgentStartCustomEvent'.
+exit=1

@@ -1,0 +1,8 @@
+ok - real Pi SDK 1.2.0 accepts the branch session construction and preserves an unpromptable wake
+ok - real Pi SDK 1.2.0 rejects a post-construction 429 to watcher-owned main delivery without losing its durable row
+ok - real Pi SDK 1.2.0 applies an explicit branch model on create and over a reopened session's recorded model
+ok - real Pi SDK 1.2.0 reports its own supported effort levels and applies an explicit branch effort over a reopened session's recorded level
+ok - real Pi SDK 1.2.0 immediately renders appendEntry in the active transcript, persists it across reopen, and excludes it from model context
+ok - real Pi SDK 1.2.0 queues a streaming-time watcher wake without before_agent_start, keeps the successor chain, and surfaces consumption of both follow-ups
+ok - real Pi SDK 1.2.0 suppresses only empty or exact-repeat retry finals, retains first and differing replies after reopen, buffers retry streaming, and keeps outcomes retryable
+exit=0

@@ -1,0 +1,3 @@
+## target 09e9fd5, Pi 1.2.0
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.2.0
+exit=0
