@@ -27,6 +27,10 @@
 #     structured record is Done, and missing ids stay open.
 #     There is no separate decision type: any captain-held task is the same
 #     primitive, whatever kind its row carries.
+#     decision_id and decision_card project the `Captain decision id:` and
+#     `Captain decision card:` body lines bin/fm-captain-hold.sh owns (null
+#     when absent; an unparseable card is null). projects is the card's project
+#     set when a card exists, else [repo] for a row with a repo, else [].
 #     hold_bucket is the single classification for every captain hold, decided
 #     only from structured fields - state, hold_kind, hold_until,
 #     unresolved_blocker_ids, and the machine-written hold-set timestamp. No
@@ -112,6 +116,8 @@
 #   contributions: cached owned-contribution coverage; fm-contributions.sh owns it.
 #   secondmate_guidance: return-channel action note for renderers and bearings.
 #
+# --backlog prints only {backlog} from the canonical backlog parser, without
+# worker observations or cross-home collection; bin/fm-captain-report.sh reads it.
 # --contribution-input prints only the canonical backlog/tasks ownership pair,
 # without worker observations or cross-home collection, for the home-local poll.
 # Compatibility: JSON is the primary machine-readable surface.
@@ -235,11 +241,15 @@ esac
 usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
+       fm-fleet-snapshot.sh --backlog
        fm-fleet-snapshot.sh --secondmate-home-summary
 
 Print a structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract. The default snapshot
 refreshes only its parent-side remote-summary cache as an observational side effect.
+
+--backlog emits {backlog} only, from the canonical local backlog parser, without
+worker observations or cross-home collection.
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
@@ -292,6 +302,7 @@ OUTPUT_MODE=json
 case "${1:---json}" in
   --json) ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
+  --backlog) OUTPUT_MODE=backlog ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
@@ -500,6 +511,8 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
              hold_kind:metadata($rest; "hold-kind"),
              hold_until:metadata($rest; "hold-until"),
              hold_set:null,
+             decision_id:null,
+             decision_card:null,
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
              blocked_by_ids:blocked_by_ids($rest),
              blocked_reason:blocked_reason($rest),
@@ -536,6 +549,10 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
     | .records |= map(
         if (.body_lines | length) > 0 then
           .hold_set = cap(.body_lines[0]; "^Captain hold set:[[:space:]]*(?<v>[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?)$")
+          | .decision_id = (first(.body_lines[] | capture("^Captain decision id: (?<v>D[0-9]+)$").v) // null)
+          | .decision_card = (first(.body_lines[] | select(startswith("Captain decision card: "))
+              | ltrimstr("Captain decision card: ") | (try fromjson catch null)
+              | select(type == "object")) // null)
           | .local_note = (.local_note
               // (if any(.body_lines[];
                     test("^Resolution recorded by fm-(captain|decision)-hold\\.$"))
@@ -562,6 +579,10 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                elif .state == "queued" then "queued"
                else "done" end)
           | .requires_child_metadata = (.current_role == "worker")
+          | .projects =
+              (if (.decision_card.projects | type) == "array" then .decision_card.projects
+               elif .repo != null and .repo != "" and .repo != "-" then [.repo]
+               else [] end)
           | .hold_age_days = days_between((.hold_set // .since); $now)
           | .hold_bucket =
               (if .hold_kind != "captain" or .hold_reason == null or .state == "done" then null
@@ -1991,6 +2012,10 @@ contribution_tasks_json() {
   done | jq -s .
 }
 
+if [ "$OUTPUT_MODE" = backlog ]; then
+  jq -n --argjson backlog "$BACKLOG_JSON" '{backlog:$backlog}'
+  exit 0
+fi
 if [ "$OUTPUT_MODE" = contribution-input ]; then
   # Reuse the canonical backlog parser, without observing workers or other homes.
   contribution_tasks=$(contribution_tasks_json) || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }

@@ -78,6 +78,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Project and secondmate registries.
 - Captain preferences and optional shared captain preferences.
 - Learnings, backlog, briefs, and scout reports.
+- The captain-decision number counter `data/decision-seq`, owned by `bin/fm-captain-hold.sh`.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 
 `state/` holds runtime records:
