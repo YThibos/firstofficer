@@ -334,6 +334,28 @@ test_cardless_calls_and_invalid_input_are_reported() {
   pass "a cardless call still shows, and unsafe glyphs or malformed turn files are refused"
 }
 
+test_a_fleet_snapshot_past_the_argument_limit_still_renders() {
+  local home i body out size
+  home=$(make_home large)
+  # A busy real fleet's backlog snapshot outgrows the kernel's 128 KiB
+  # per-argument limit; the report must still render it.
+  body=$(printf 'note %.0s' $(seq 1 300))
+  {
+    printf '## In flight\n\n## Queued\n'
+    for i in $(seq 1 60); do
+      printf -- '- [ ] large-%s - Queued work item %s (repo: sample) (since 2026-07-01)\n  %s\n' "$i" "$i" "$body"
+    done
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+  size=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SNAPSHOT_NOW="$NOW" \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --backlog | wc -c | tr -d '[:space:]')
+  [ "$size" -gt 131072 ] || fail "the fixture snapshot is only $size bytes, under the argument limit it must exceed"
+  out=$(run_report "$home" 2>&1) || fail "a $size-byte snapshot did not render: $out"
+  assert_contains "$out" "BACKLOG  (60)" "the large backlog did not render its count: $out"
+  pass "a $size-byte snapshot, past the per-argument limit, still renders"
+}
+
 test_busy_report_renders_the_chosen_layout
 test_open_decisions_are_cumulative_until_answered
 test_backlog_shows_only_when_nothing_is_open_or_ongoing
@@ -342,3 +364,4 @@ test_a_retired_number_stays_out_of_parked
 test_items_group_under_project_titles
 test_width_is_fixed_and_narrows_to_a_smaller_pane
 test_cardless_calls_and_invalid_input_are_reported
+test_a_fleet_snapshot_past_the_argument_limit_still_renders

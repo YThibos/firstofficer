@@ -2012,8 +2012,10 @@ contribution_tasks_json() {
   done | jq -s .
 }
 
+# The backlog reaches jq on stdin or as a file, never as an argument: a busy
+# fleet's backlog outgrows the kernel's 128 KiB per-argument limit.
 if [ "$OUTPUT_MODE" = backlog ]; then
-  jq -n --argjson backlog "$BACKLOG_JSON" '{backlog:$backlog}'
+  printf '%s\n' "$BACKLOG_JSON" | jq '{backlog:.}'
   exit 0
 fi
 if [ "$OUTPUT_MODE" = contribution-input ]; then
