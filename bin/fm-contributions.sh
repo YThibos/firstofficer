@@ -20,7 +20,8 @@
 # request that has never been read, or whose last read failed, stays visibly
 # unmeasured rather than becoming fleet work or a clear result.
 # Only canonical PR and issue URLs on the exact github.com host, and GitLab merge
-# request URLs, are supported; other accepted URLs remain visibly unmeasured.
+# request URLs that fm_pr_url_parse can parse, are supported; other accepted URLs
+# remain visibly unmeasured.
 # poll skips unsupported URLs without forge calls, unavailable output, wakes or
 # new error stamps, and clears their legacy errors without changing observation,
 # timestamps or ownership evidence.
