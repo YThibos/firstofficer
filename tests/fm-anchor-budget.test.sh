@@ -24,7 +24,7 @@ UPSTREAM_CONTRACT="$ROOT/AGENTS.md"
 # upstream merge lands: when it does, reconcile the rule-bearing changes into
 # CLAUDE.md by hand and then update this pin in the same commit. Bumping the pin
 # without reconciling defeats the guard.
-RECONCILED_UPSTREAM_BLOB=507a7f51498c25c8fbff894beae46f78d8ffede6
+RECONCILED_UPSTREAM_BLOB=2e6b25d6a894df3df745a496d56d5994c7b98420
 # Harness agent-instruction warning threshold. Raising this is not the fix for a
 # breach: route the detail to its owner (a skill, a script header, docs/) and
 # leave a one-line trigger in the anchor instead.
