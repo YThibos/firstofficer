@@ -284,7 +284,12 @@ program='
   | .[] | sub(" +$"; "")
 '
 
-if ! out=$(printf '%s' "$turn" | jq -r --argjson snap "$snapshot" --argjson width "$width" "$program" 2>&1); then
+# The snapshot reaches jq as a file, never as an argument: a real fleet's
+# snapshot outgrows the kernel's per-argument limit (128 KiB on Linux), and
+# --argjson then fails with "Argument list too long".
+if ! out=$(printf '%s' "$turn" \
+    | jq -r --slurpfile snaps <(printf '%s' "$snapshot") --argjson width "$width" \
+      "\$snaps[0] as \$snap | $program" 2>&1); then
   fail "$(printf '%s\n' "$out" | sed -e 's/^jq: error (at [^)]*): //' -e 's/^jq: error: //' | head -1)"
 fi
 printf '%s\n' "$out"

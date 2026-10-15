@@ -2012,14 +2012,16 @@ contribution_tasks_json() {
   done | jq -s .
 }
 
+# The backlog reaches jq on stdin or as a file, never as an argument: a busy
+# fleet's backlog outgrows the kernel's 128 KiB per-argument limit.
 if [ "$OUTPUT_MODE" = backlog ]; then
-  jq -n --argjson backlog "$BACKLOG_JSON" '{backlog:$backlog}'
+  printf '%s\n' "$BACKLOG_JSON" | jq '{backlog:.}'
   exit 0
 fi
 if [ "$OUTPUT_MODE" = contribution-input ]; then
   # Reuse the canonical backlog parser, without observing workers or other homes.
   contribution_tasks=$(contribution_tasks_json) || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }
-  jq -n --argjson backlog "$BACKLOG_JSON" --argjson tasks "$contribution_tasks" '{backlog:$backlog,tasks:$tasks}'
+  printf '%s\n' "$BACKLOG_JSON" | jq --argjson tasks "$contribution_tasks" '{backlog:.,tasks:$tasks}'
   exit 0
 fi
 prefetch_task_current_states || { echo "fm-fleet-snapshot: task observation failed" >&2; exit 1; }
