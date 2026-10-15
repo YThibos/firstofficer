@@ -16,6 +16,7 @@ Firstmate is its own repo, behind the same no-mistakes gate as any project, so n
 Only `CLAUDE.md`, `AGENTS.md`, `bin/`, and `.agents/skills/` are a running firstmate instruction surface; public `skills/` is installer-facing and is not loaded by firstmate.
 `CLAUDE.md` is the fork-owned anchor a running firstmate actually loads, and `AGENTS.md` is the full upstream contract it reads on demand.
 This skill performs that pull for the running main firstmate and every secondmate, without disturbing any in-flight work.
+Updating is consumption, not publication: it only pulls from upstream, so every home runs it regardless of role, and the firstmate-repository publication boundary (`firstmate-self-repo`) never applies to it.
 
 Pulling the files is only half of it.
 A running agent holds its `CLAUDE.md` anchor and every skill it has already loaded frozen from the moment it launched, and no verified harness offers a reload, so new bytes on disk change nothing for it until it starts a fresh conversation.

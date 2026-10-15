@@ -157,6 +157,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/firstmate-self-repo/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/fmx-respond/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -190,6 +194,10 @@
     },
     {
       "path": ".agents/skills/harness-adapters/references/harness/codex.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/commandcode.md",
       "audience": "agent-runtime"
     },
     {
@@ -373,6 +381,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/forgejo-tea-integration.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/gerrit-change-watch.md",
       "audience": "maintainer-verification"
     },
@@ -486,6 +498,10 @@
     },
     {
       "path": "docs/verification/claude-colocation.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/commandcode.md",
       "audience": "maintainer-verification"
     },
     {
