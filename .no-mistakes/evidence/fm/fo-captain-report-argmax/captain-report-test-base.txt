@@ -1,0 +1,10 @@
+ok - the busy report renders the chosen Rail layout, grouped by project with oldest calls first
+ok - every open call reappears until answered, and an answered call leaves the next report
+ok - BACKLOG shows only on a quiet fleet, and PARKED carries deferred and held work
+ok - an aged call stays open in full, and parked calls keep their number and reason
+ok - a retired decision number stays out of PARKED when the task is held again for another reason
+ok - items group under project titles in the label column, with long titles on their own line
+ok - the report is 120 columns, narrows to a smaller pane, and never breaks a long link
+ok - a cardless call still shows, and unsafe glyphs or malformed turn files are refused
+/tmp/fmbasefull/bin/fm-fleet-snapshot.sh: line 2016: /usr/bin/jq: Argument list too long
+not ok - the fixture snapshot is only 0 bytes, under the argument limit it must exceed

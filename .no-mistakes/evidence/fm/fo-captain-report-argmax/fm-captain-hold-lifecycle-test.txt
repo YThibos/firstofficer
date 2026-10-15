@@ -1,0 +1,64 @@
+ok - marked hold reasons round-trip through public reads, fleet, startup, and return without changing other fields
+ok - new, active, and released holds require the origin first with and without deferral
+ok - historical self-inventories name a workable repair that preserves sibling entries
+ok - completion and verification compare backend identities for entries and current or stored origins
+ok - complete refuses the origin as its own captain-call inventory
+ok - complete refuses an entry held for another origin and flags one with none recorded
+ok - report-only unresolved captain call is reproduced and completion refuses before loss
+ok - both body-decoding paths work without the allow_nonref default
+ok - cleanup preserves every byte of a retained body's non-ASCII characters
+ok - the completion gate attests captain-held inventory and transfers open status decisions
+ok - answer records the captain's words, closes idempotently, and releases routed work
+ok - release frees held work with the captain's words recorded and the body preserved
+ok - captain holds become visible only after their hold-set timestamp is durable
+ok - an interrupted answer preserves its hold age until close retry
+ok - a deferred captain call leaves the live Captain's Call until its date and stays answerable
+ok - an out-of-band close is recordable with the captain's word and nothing else
+ok - ended visual review follows the same captain-hold completion owner
+ok - resolved findings and decision-like prose do not create captain-held tasks
+ok - terminal single-owner stale status decisions do not block empty inventory
+ok - main-home and secondmate-home captain calls remain correctly routed
+ok - a secondmate home publishes each hold occurrence and its answer on the parent channel
+ok - secondmate resolutions publish before retiring durable retry triggers
+ok - a bound channel's captured answers close their captain-held tasks at answer time
+ok - only a bound captured source creates reconcile requests
+ok - normal answers and their replays retire reconcile requests
+ok - reconcile closes a moot call with evidence and keeps an active one open with a note
+ok - reconcile outcomes apply durable mutations once across partial failures
+ok - a channel source with no decision binding closes nothing
+ok - legacy identities, metadata, bindings, and the shim keep working
+ok - a board answer reaches the keyed-answer intake and wakes firstmate
+ok - the chat channel feeds the same keyed-answer intake a captured review does
+ok - completion and verification validate origins before constructing paths
+ok - a status resolution over a still-open captain-held task is signalled, not closed
+ok - a captain call with no routed work, a verified transfer, an open decision, and an answered call all stay silent
+ok - cleanup leaves a captain-held work item open with its deliverable, and only an answer closes it
+ok - release and scout report retention distinguish deliveries from rejected merge answers
+ok - an interrupted cleanup keeps the captain call recoverable and session start retains it
+ok - an answer before cleanup replay preserves the retained report
+ok - an answer before cleanup replay notes the retained Gerrit change
+ok - an unusable pending-close record names its reason instead of a bare refusal
+ok - an unsupported relocated report does not wedge the captain's answer
+ok - cleanup retains captain calls in the configured backlog
+ok - cleanup keeps a captain-held Gerrit task open and records its change URL
+ok - merge approval releases before zero-retention cleanup records completion
+ok - the PR merge entrypoint refuses a captain-held task before merging
+ok - the local merge entrypoint refuses a captain-held task before merging
+ok - the PR merge entrypoint separates an unreadable authority record from an absent one
+ok - the local merge entrypoint separates an unreadable authority record from an absent one
+ok - merge entrypoints reject unsafe identities and absent state before locking
+ok - merge entrypoints refuse a replacement incarnation after waiting for cleanup
+ok - merge entrypoints own task state before forced cleanup can retire it
+ok - a released merge passes the guarded entrypoint and remains recently landed
+ok - cleanup refuses a ship row when its captain hold cannot be read
+ok - skipped on markdown-only tasks-axi: verify against a beads-migrated hold
+ok - skipped on markdown-only tasks-axi: verify against a prefix-migrated hold
+ok - skipped on markdown-only tasks-axi: prefer a marker-noted row over a prefix namesake
+ok - skipped on markdown-only tasks-axi: complete against a beads-migrated hold
+ok - skipped on markdown-only tasks-axi: verify an unresolvable beads legacy id
+ok - skipped on markdown-only tasks-axi: verify a derived pre-collapse key
+ok - captain-hold mutations address the beads backend without a markdown override
+ok - skipped on markdown-only tasks-axi: captain-hold create under due.required without types.custom
+ok - a decision card numbers the call past every used number, keeps it on repeat, and is projected
+ok - decision numbers are never issued twice
+ok - invalid decision cards are refused before any task or number is created

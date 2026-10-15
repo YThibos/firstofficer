@@ -1,0 +1,2 @@
+--backlog: fixed and base output semantically identical (jq -S)
+--contribution-input: fixed and base output semantically identical (jq -S)

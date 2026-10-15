@@ -1,0 +1,60 @@
+ok - task teardown during metadata capture is omitted without aborting the snapshot
+ok - current state and decision hints share one captured status observation
+ok - reused live state is discarded when task generation changes
+ok - large local snapshot overlaps local reads with byte-identical serial and concurrent projections
+ok - remote ledgers collect concurrently under one budget, reuse aged cache, and cancel wedged collectors
+ok - a missing remote ledger stays explicitly unreadable without remote summary computation
+ok - Domain Alpha structured state overrides a stale parent Phase 7 event
+ok - GNU stat file reads select -c without BSD filesystem-report pollution
+ok - parent activity evidence is bounded and disclosed
+ok - Bearings excludes a status-only child decision
+ok - a structured child captain hold reaches Captain's Call
+ok - missing, invalid, unreadable, malformed, and unavailable-child homes stay explicit unknowns
+ok - oversized ledgers stay strict unknown
+ok - secondmate and per-home child counts are bounded, disclosed, and explicitly expandable
+ok - parent decisions remain untrusted contradiction evidence
+ok - parent evidence reconciliation distinguishes matching holds, blocks, and decisions
+ok - nonprogressing child states are explicit and inconsistent terminal rows invalidate
+ok - registry unavailability and bounded truncation remain explicit
+ok - repeated snapshots keep the same current landed baseline and ignore prior reports
+ok - default output is bounded, local-only, and marks omitted surfaces
+ok - TOON and JSON are parity representations of the same model
+ok - landed includes secondmate-managed merges alongside main-home merges
+ok - landed accepts only kind-owned delivery artifacts while answered questions stay out
+ok - kind fallback matches tasks-axi word boundaries and preserves scout deliveries
+ok - kindless v1 summaries retain report artifacts from fresh and cached ledgers
+ok - default landed selection balances one dominant home with sparse homes
+ok - landed selection refills capacity after sparse homes exhaust
+ok - landed selection uses deterministic home order when homes exceed the cap
+ok - landed selection preserves deterministic home and internal tie ordering
+ok - landed selection handles no landed items
+ok - --all-landed keeps the complete global landed output
+ok - landed stays bounded with per-home + overall caps and omitted[] disclosure
+ok - Bearings keeps a live blocker in structured live state and never converts it to Charted Next queue work
+ok - action-free items (working/done/queued/landed) do not leak into Captain's Call
+ok - main orphan in-flight stays out of Underway and is disclosed in omitted/gates
+ok - main unstructured current is disclosed while structured siblings still project
+ok - counterfactual meta clears main inventory warning and projects the live task
+ok - working captain holds retain main and secondmate bucket surfaces
+ok - active children reach Underway independently of a home captain hold
+ok - blank legacy summary names use their durable identifier
+ok - newest filed gates are selected before snapshot bounds
+ok - Underway rows carry the durable task name and gates carry their filed date
+ok - mixed secondmate roles, partial state, and captain readiness project independently
+ok - main and secondmate captain actionability use the same blocker readiness
+ok - a completed scout with decision-like report prose is a pointer, not pending
+ok - an authoritative captain hold surfaces end-to-end
+ok - current report pointers surface
+ok - queued body prose never hides an item from the board
+ok - --include-prs is the only path that fetches, and it enriches correctly
+ok - --include-prs maps a custom branch-prefix PR back to its recorded task
+ok - a partial GitHub failure degrades gracefully
+ok - Perl fallback bounds stalled GitHub calls without coreutils timeout
+ok - all fleet-sized sections are capped with counted opt-in expansion
+ok - captain-held tasks of any kind reach Captain's Call, deferral is honored, and landed excludes answered calls
+ok - structured hold buckets decide Captain's Call, Charted Next, and the reveal
+ok - a blocked deferred hold stays gated when its date arrives and is revealed by --all-decisions
+ok - revealed deferred holds display their deferral reason while live calls stay unannotated
+ok - live PR enrichment caps repositories with counted expansion
+ok - per-repository open-PR caps are disclosed with an expansion knob
+ok - projection and TOON rendering failures exit nonzero with diagnostics

@@ -1,0 +1,55 @@
+ok - only required-captain contributions are rows; other actors are counted
+ok - replaced-head verdict is stale and cannot create a captain requirement
+ok - unchecked ownership is disclosed and cannot prove silence
+ok - newest check with no verdict is distinct from passing and pending
+ok - new maintainer comment wakes once and stays pending until acknowledged
+ok - new maintainer review wakes once and stays pending until acknowledged
+ok - new maintainer inline wakes once and stays pending until acknowledged
+ok - ready-for-pr on a filed issue becomes a planning wake
+ok - a fresh open issue remains measured maintainer triage
+ok - an absent check lane remains missing across repeated observations
+ok - mixed freshness retains measured captain work and discloses the gap
+ok - malformed durable evidence cannot prove silence
+ok - a transient ready-for-pr label wakes and its exact acknowledgement survives replay
+ok - recorded judgment keeps its exact head and is stale immediately on a published replacement
+ok - verdict help and refusal name exactly the actors the command accepts
+ok - a current forge observation refreshes a verdict after a replacement
+ok - an unavailable current head leaves verdict freshness unknown
+ok - away yolo delivery is fleet work without granting merge authority
+actionable: PR https://github.com/o/r/pull/8 is registered but its ready line did not reach the parent channel (rc=3)
+ok - cross-home away yolo delivery is fleet work
+ok - retired ownership persists and unsupported forge remains visibly unmeasured
+ok - unsupported forge coverage is disclosed without inventing fleet work
+ok - held unsupported forge coverage remains unmeasured
+ok - shared contribution signal wakes once while retaining both acknowledgements
+ok - watcher keeps observer diagnostics separate from contribution wakes
+ok - expired child unsupported-forge coverage remains unmeasured
+ok - watcher surfaces one newly durable contribution signal without re-ringing it
+ok - parent consumes measured child coverage and refuses expired child silence
+ok - unreadable pending signals refuse an empty-inbox claim
+ok - record task identity is the directory dirname/basename named
+ok - snapshot and pending create nothing in a home without state
+ok - budget exhausted mid-observation (exhaust) keeps the prior record and stays silent
+ok - budget exhausted mid-observation (hang) keeps the prior record and stays silent
+ok - a genuine forge failure inside the budget still records the error and wakes
+ok - a URL owned by two tasks is observed once and every owner receives the result
+ok - a merged or closed contribution settles once, is not re-read, and never wakes again
+ok - a late owner inherits a terminal observation without a forge read or wake
+ok - a retry converges every owner whose saved row is not terminal, keeping its own acknowledgement state
+ok - an open PR linked from a done task keeps being observed
+ok - a later URL waits when fewer than fifteen seconds remain for its observation
+ok - eight 3-second PR reads complete fresh within one 20-second poll cycle
+ok - a read killed at the five-second bound is budget refusal and stays silent
+ok - rotation preserves timed-out records and refreshes every slow PR on successive cycles
+ok - the effective budget is cut down to the watcher per-check bound with margin
+ok - generated checks enforce configured and inherited budgets at runtime
+ok - a genuinely unavailable forge records an error and wakes once per failure episode
+ok - a late owner does not restart a shared forge failure episode
+ok - a GitLab merge request is observed through glab and a member note wakes once
+ok - a merged or closed GitLab merge request needs nobody, like a GitHub pull request
+ok - a forbidden GitLab member lookup leaves the role unknown and the observation readable
+ok - a transient GitLab member lookup failure never re-raises an acknowledged note
+ok - resolving a GitLab thread keeps the acknowledgement while a real edit re-raises
+ok - GitLab member lookups are capped per poll and progress across polls
+ok - GitLab approval states map onto the review decision
+ok - an unreadable GitLab merge request is reported once per condition and stays unmeasured

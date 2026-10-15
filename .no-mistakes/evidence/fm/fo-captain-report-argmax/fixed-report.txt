@@ -1,0 +1,57 @@
+╔══ NEEDS YOUR DECISION ══ 1 open ══════════════════════════════════════════════════════════════════════════════════════
+║
+╟── firstofficer ────────────────────────────
+║
+║  D58   Upstream changed its operating contract: what goes into the fork's anchor for this last sync?
+║        Five rule changes: a firstmate-role gate that refuses publishing to the firstmate repo unless the home is a
+║        declared maintainer (could block PRs to your own fork), external memory tiers, the Command Code worker tool,
+║        starting tasks from a named base branch, and per-project worker capacity. The anchor has about 10 bytes free,
+║        so anything added needs pruning elsewhere.
+║
+║        (A)  Reconcile only what changes behaviour here: the role gate, with this home declared maintainer of its own
+║             fork so fork PRs keep working, plus the base-branch line; record the three unused opt-ins as not
+║             applicable
+║
+║        (B)  Reconcile all five rule changes into the anchor, pruning wording elsewhere to fit
+║
+║        (C)  Bump the contract pin only and leave the anchor as is, since E.D.I. replaces the fork soon
+║
+║        » Recommended: A - keeps your fork PRs working and the safety boundary honest, at the smallest anchor cost
+║          before EDI takes over
+║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+DONE THIS TURN  (0)
+───────────────────
+  Nothing finished this turn
+
+ONGOING  (5)
+────────────
+  firstofficer      • SHIP firstofficer: last upstream sync before E.D.I. - resolve the 20 conflicts of the upstream
+                      merge (53 commits) in the sync copy; anchor reconciliation waits for the captain
+                    • SHIP firstofficer: bin/fm-captain-report.sh fails with 'jq: Argument list too long' because it
+                      passes the whole backlog snapshot (now ~132 KB) through --argjson on argv; feed it through
+                      --slurpfile/--rawfile from a temp file instead, with a regression test using an oversized snapshot
+                    • SCOUT firstofficer: write the 100% clear E.D.I. rewrite spec - full rewrite of the harness
+                      decoupled from upstream, with a port ledger for every ongoing, scheduled, backlogged and reported
+                      item, settled with the captain on a Lavish board
+  JustFront-UIComponents
+                    • SCOUT JustFront-UIComponents: why 'Pull and deploy Storybook on dev' fails, and the correct
+                      CONTAINERAPP_NAME / CONTAINERAPP_RESOURCE_GROUP values
+  JustMasterData    • JustMasterData + JustAuth: ship the settled requester identity plan (JIRA story + JUSTMD-51
+                      extension, server-side identity fix, then the JustAuth claims)
+
+NEXT
+────
+  Nothing planned
+
+PARKED  (4)
+───────────
+  JustAuth          • SCOUT: reusable Confluence push job for JustMasterData and JustAuth (JSL space), refined to an
+                      implementation-ready plan - blocked by renovate-justauth
+  JustFront-UIComponents
+                    • SHIP JustFront-UIComponents: merge origin/develop into chore/angular-22-support, resolving the
+                      Angular 21 vs 22 conflicts without losing any v22 migration item - blocked by jfui-version-2-0-0,
+                      fo-spawn-external-imports-blocker
+  JustMasterData    • Next JMD demo: 10 parked JUSTMD-52 questions for the MasterData team - deferred until 2026-10-20
+                    • JMD demo 2026-10-06: inputs for the SAP-bound follow-ups - deferred until 2026-10-20
