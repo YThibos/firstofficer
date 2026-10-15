@@ -411,7 +411,7 @@ test_retired_and_unsupported_coverage() {
   bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 1
     and .contributions.proven_clear == true and .contributions.counts.maintainer == 1' >/dev/null \
     || fail 'endpoint retirement lost published ownership or proved nothing'
-  printf -- '- [ ] unsupported - Filed https://gitlab.com/o/r/-/merge_requests/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf -- '- [ ] unsupported - Filed https://githubQcom/o/r/pull/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
   bearings "$home" | jq -e '.contributions.known == 2 and .contributions.checked == 1
     and .contributions.complete == false and .contributions.proven_clear == false' >/dev/null \
     || fail 'unsupported forge silently disappeared from coverage'
@@ -421,7 +421,7 @@ test_retired_and_unsupported_coverage() {
 test_unsupported_forge_is_not_fleet_work() {
   local home
   home=$(new_home unsupported-forge)
-  printf -- '- [ ] unsupported - Filed https://gitlab.com/o/r/-/merge_requests/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf -- '- [ ] unsupported - Filed https://githubQcom/o/r/pull/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
   bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 0
     and .contributions.unmeasured == 1 and .contributions.counts.fleet == 0
     and .contributions.complete == false and .contributions.proven_clear == false' >/dev/null \
@@ -437,10 +437,10 @@ test_unsupported_poll_is_silent_and_clears_legacy_errors() {
     wrap_forge "$home"
     rm -f "$home/state/delivery.meta" "$home/data/delivery/contributions.json"
     printf '# Backlog\n\n## Queued\n' > "$home/data/backlog.md"
-    for task in gitlab selfhosted hyphenated wildcard; do
+    for task in lookalikeq lookaliker hyphenated wildcard; do
       case "$task" in
-        gitlab) url=https://gitlab.com/o/r/-/merge_requests/2 ;;
-        selfhosted) url=https://git.example.org/group/subgroup/r/-/merge_requests/3 ;;
+        lookalikeq) url=https://githubQcom/o/r/pull/2 ;;
+        lookaliker) url=https://githubRcom/o/r/pull/3 ;;
         hyphenated) url=https://github-com/o/r/pull/8 ;;
         wildcard) url=https://githubXcom/o/r/issues/9 ;;
       esac
@@ -464,7 +464,7 @@ test_unsupported_poll_is_silent_and_clears_legacy_errors() {
     [ -z "$out" ] || fail "unsupported poll printed an unavailable signal ($mode): $out"
     [ ! -s "$home/forge/calls" ] || fail "unsupported poll contacted the forge ($mode)"
     [ ! -s "$home/state/.wake-queue" ] || fail "unsupported poll enqueued a wake ($mode)"
-    for task in gitlab selfhosted hyphenated wildcard; do
+    for task in lookalikeq lookaliker hyphenated wildcard; do
       if [ "$mode" = legacy ]; then
         jq -e --slurpfile expected "$home/$task.expected.json" '. == $expected[0]' \
           "$home/data/$task/contributions.json" >/dev/null \
@@ -489,7 +489,7 @@ test_legacy_cleanup_preserves_supported_failure() {
   wrap_forge "$home"
   mutate_record "$home" delivery '.records[0].observation=null
     | .records[0].error="forge observation unavailable or changed during read"
-    | .records += [(.records[0] | .url="https://gitlab.com/o/r/-/merge_requests/2"),
+    | .records += [(.records[0] | .url="https://githubQcom/o/r/pull/2"),
       (.records[0] | .url="https://github-com/o/r/pull/8"),
       (.records[0] | .url="https://githubXcom/o/r/issues/9" | .kind="issue")]'
   jq '[.records[] | select(.url != "https://github.com/o/r/pull/8") | .error=null]' \
@@ -531,7 +531,7 @@ test_legacy_cleanup_preserves_supported_failure() {
 test_held_unsupported_forge_is_not_captain_work() {
   local home
   home=$(new_home held-unsupported-forge)
-  printf -- '- [ ] unsupported - Filed https://gitlab.com/o/r/-/merge_requests/2 (repo: sample) (kind: ship) (hold: choose scope) (hold-kind: captain)\n' >> "$home/data/backlog.md"
+  printf -- '- [ ] unsupported - Filed https://githubQcom/o/r/pull/2 (repo: sample) (kind: ship) (hold: choose scope) (hold-kind: captain)\n' >> "$home/data/backlog.md"
   bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 0
     and .contributions.unmeasured == 1 and .contributions.counts.captain == 0
     and .contributions.counts.fleet == 0 and (.contributions.captain | length) == 0
@@ -570,7 +570,7 @@ test_shared_contribution_signal_wakes_once() {
 test_watcher_keeps_diagnostics_separate_from_contribution_wakes() {
   local home out rc wakes diagnostic
   home=$(new_home watcher-diagnostics)
-  printf -- '- [ ] unsupported - Filed https://gitlab.com/o/r/-/merge_requests/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf -- '- [ ] unsupported - Filed https://githubQcom/o/r/pull/2 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
   forge_home "$home"
   with_home "$home" "$ROOT/bin/fm-pr-check.sh" delivery https://github.com/o/r/pull/8 >/dev/null \
     || fail 'could not register delivery for diagnostic watcher wake'
@@ -600,7 +600,7 @@ test_expired_child_unsupported_forge_stays_unmeasured() {
   mkdir -p "$child/bin"
   printf '# Fixture\n' > "$child/AGENTS.md"
   printf 'child\n' > "$child/.fm-secondmate-home"
-  printf -- '- [ ] unsupported - Filed https://gitlab.com/o/r/-/merge_requests/2 (repo: sample) (kind: ship)\n' >> "$child/data/backlog.md"
+  printf -- '- [ ] unsupported - Filed https://githubQcom/o/r/pull/2 (repo: sample) (kind: ship)\n' >> "$child/data/backlog.md"
   FM_SNAPSHOT_NOW="$NOW" with_home "$child" "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary > "$child/state/home-summary.json" \
     || fail 'could not collect child unsupported-forge coverage'
   jq '.contributions.valid_until=0' "$child/state/home-summary.json" > "$child/update.json"
