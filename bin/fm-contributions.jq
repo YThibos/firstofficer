@@ -1,7 +1,15 @@
 # Projection for fm-contributions.sh; its header owns the record contract.
+# The merge request grammar mirrors fm_pr_url_parse in bin/fm-pr-lib.sh, so
+# every supported URL is one observe() can parse.
 def supported_url:
   type == "string" and (test("^https://github[.]com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/(pull|issues)/[1-9][0-9]*$")
-    or test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/-/merge_requests/[1-9][0-9]*$"));
+    or any(capture("^https://(?<host>[a-z0-9.-]{1,253})/(?<path>[A-Za-z0-9._/-]+)/-/merge_requests/[1-9][0-9]*$");
+      .host != "github.com"
+      and all(.host | split(".")[]; test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"))
+      and (.path | length >= 3 and length <= 1024)
+      and (.path | split("/") | length >= 2 and length <= 20
+        and all(.[]; length >= 1 and length <= 255 and (IN(".", "..") | not)
+          and (test("^-|[.]git$|[.]atom$") | not)))));
 # Preserve legacy ownership and saved-record compatibility, including lookalike
 # hosts accepted by the historical regex; supported_url alone gates observation.
 # tests/fm-contributions.test.sh covers fresh, retained and mixed saved ownership.

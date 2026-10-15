@@ -437,12 +437,14 @@ test_unsupported_poll_is_silent_and_clears_legacy_errors() {
     wrap_forge "$home"
     rm -f "$home/state/delivery.meta" "$home/data/delivery/contributions.json"
     printf '# Backlog\n\n## Queued\n' > "$home/data/backlog.md"
-    for task in lookalikeq lookaliker hyphenated wildcard; do
+    for task in lookalikeq lookaliker hyphenated wildcard uppercasehost emptysegment; do
       case "$task" in
         lookalikeq) url=https://githubQcom/o/r/pull/2 ;;
         lookaliker) url=https://githubRcom/o/r/pull/3 ;;
         hyphenated) url=https://github-com/o/r/pull/8 ;;
         wildcard) url=https://githubXcom/o/r/issues/9 ;;
+        uppercasehost) url=https://GitLab.example.com/g/p/-/merge_requests/5 ;;
+        emptysegment) url=https://gitlab.example.com/g//p/-/merge_requests/6 ;;
       esac
       printf -- '- [ ] %s - Filed %s (repo: sample) (kind: ship)\n' "$task" "$url" >> "$home/data/backlog.md"
       if [ "$mode" = legacy ]; then
@@ -464,7 +466,7 @@ test_unsupported_poll_is_silent_and_clears_legacy_errors() {
     [ -z "$out" ] || fail "unsupported poll printed an unavailable signal ($mode): $out"
     [ ! -s "$home/forge/calls" ] || fail "unsupported poll contacted the forge ($mode)"
     [ ! -s "$home/state/.wake-queue" ] || fail "unsupported poll enqueued a wake ($mode)"
-    for task in lookalikeq lookaliker hyphenated wildcard; do
+    for task in lookalikeq lookaliker hyphenated wildcard uppercasehost emptysegment; do
       if [ "$mode" = legacy ]; then
         jq -e --slurpfile expected "$home/$task.expected.json" '. == $expected[0]' \
           "$home/data/$task/contributions.json" >/dev/null \
@@ -473,8 +475,8 @@ test_unsupported_poll_is_silent_and_clears_legacy_errors() {
         [ ! -e "$home/data/$task/contributions.json" ] || fail 'unsupported poll fabricated a record'
       fi
     done
-    bearings "$home" | jq -e '.contributions | .known == 4 and .checked == 0
-      and .unmeasured == 4 and .unreadable_records == 0
+    bearings "$home" | jq -e '.contributions | .known == 6 and .checked == 0
+      and .unmeasured == 6 and .unreadable_records == 0
       and .counts == {captain:0,fleet:0,maintainer:0,nobody:0}
       and .complete == false and .proven_clear == false' >/dev/null \
       || fail "unsupported poll corrupted unmeasured coverage ($mode)"
