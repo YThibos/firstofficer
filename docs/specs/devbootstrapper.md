@@ -1,9 +1,9 @@
 # DevBootstrapper specification
 
-Status: draft, not yet approved for implementation.
+Status: draft; every captain question is answered, and the work-laptop investigation (section 18) is pending.
 Implementation repository: `YThibos/DevBootstrapper` (currently empty).
 This spec lives in the First Officer repository so a First Officer on any machine can read it, investigate the open points in section 18, and refine it.
-Implementation starts only after every question in section 19 is answered and the captain signs off.
+Implementation starts only after the investigation findings are folded in and the captain signs off.
 
 ## 1. Goal
 
@@ -15,7 +15,7 @@ Prerequisites stay minimal, and after the one-time install everything happens in
 
 In scope for v1:
 
-- Windows 10 or 11 as the host, with WSL2 running an Ubuntu LTS distribution.
+- Windows 10 or 11 as the host, with WSL2 running the latest stable Ubuntu release.
 - WezTerm nightly, from the portable zip, as the terminal.
 - A structured, modular bash setup under `~/development/bash/`.
 - Installing and updating every listed tool, plus WezTerm itself.
@@ -25,7 +25,7 @@ In scope for v1:
 Out of scope for v1:
 
 - macOS, and Linux distributions other than Debian and Ubuntu.
-- Git Bash for Windows (see section 15).
+- The Windows-native side (Git Bash for Windows, PowerShell, Command Prompt), planned as a later phase under `C:\development\` (section 15).
 - Kubernetes tooling.
 - Installing IDEs or Docker Desktop.
 - Cloning First Officer or EDI.
@@ -38,8 +38,8 @@ Out of scope for v1:
 - Docker Desktop with WSL integration enabled for that distribution (optional, but needed for the `docker` command).
 - Network access to GitHub and the tool download hosts, either directly or through the Windows proxy configuration.
 
-The installer detects a missing WSL or Ubuntu and prints the exact command to install it.
-It does not install WSL itself, because that needs administrator rights and a reboot (open question Q5).
+The installer detects a missing WSL or Ubuntu and prints the exact command to install the newest Ubuntu release that `wsl --list --online` offers.
+It does not install WSL or Ubuntu itself, because that needs administrator rights and a reboot.
 
 ## 4. Architecture
 
@@ -47,7 +47,7 @@ Three layers, each with a single entry point.
 
 | Layer | Location | Entry point | Runs |
 |---|---|---|---|
-| Windows host | `%USERPROFILE%\development\tools\` (Q4) | `windows/install.ps1`, then the WezTerm launcher | Install once; the launcher runs every time WezTerm starts |
+| Windows host | `C:\development\tools\` | `windows/install.ps1`, then the WezTerm launcher | Install once; the launcher runs every time WezTerm starts |
 | WezTerm config | `~/development/config/wezterm/` | A stub `wezterm.lua` next to `wezterm.exe` that loads the repository config | Every WezTerm start, with hot reload |
 | WSL shell | `~/development/` | `bash/bootstrap.sh`, sourced from `~/.bashrc` | Every shell |
 
@@ -62,6 +62,8 @@ Two jobs are kept strictly apart:
 
 The dev home is `~/development` on the WSL ext4 filesystem, never under `/mnt/c`, because cross-filesystem I/O is slow.
 The DevBootstrapper repository is cloned directly as the dev home.
+On Windows, `C:\development\` is the Windows-side dev home.
+In v1 the toolkit uses only `C:\development\tools\wezterm\` and `C:\development\tools\launcher\` there; the rest is reserved for the later Windows-native phase.
 
 ```
 ~/development/
@@ -93,8 +95,8 @@ The DevBootstrapper repository is cloned directly as the dev home.
 │   ├── launcher.ps1        # WezTerm updater and launcher
 │   └── wezterm-stub.lua    # copied next to wezterm.exe
 ├── sources/
-│   ├── home/               # home project checkouts, home git identity
-│   └── work/               # work project checkouts, work git identity
+│   ├── home/               # home project checkouts, always the home git identity
+│   └── work/               # work project checkouts, always the work git identity
 ├── tools/                  # every mise-managed tool, plus tools/cache/ for all caches
 ├── tmp/                    # empty scratch directory, no automatic cleanup
 ├── .local/                 # gitignored machine settings: profile, proxy, git identities
@@ -115,7 +117,7 @@ The DevBootstrapper repository is cloned directly as the dev home.
 - `sources/home/` and `sources/work/` exist through tracked `.gitkeep` files, and the checkouts inside them are ignored.
 - `.gitattributes` forces LF line endings for `*.sh`, `*.lua`, `*.toml` and configuration files, and CRLF for `*.ps1` and `*.cmd`.
 - No tracked file may contain an employer name, internal host, proxy address, personal email address or credential.
-  Everything machine- or employer-specific lives in `.local/` or `.secrets` (see Q1 on repository visibility).
+  The repository is treated as public, so everything machine- or employer-specific lives in `.local/` or `.secrets`.
 
 ## 7. Install flow
 
@@ -125,10 +127,11 @@ The user runs one PowerShell line that downloads and runs `windows/install.ps1` 
 The installer:
 
 1. Detects WSL2 and the installed Ubuntu distribution, and asks which distribution to use if there are several.
+   If WSL or Ubuntu is missing, it prints the install command for the newest Ubuntu release and stops.
 2. Optionally writes or merges `%USERPROFILE%\.wslconfig` (opt-in prompt): mirrored networking, `autoProxy`, `dnsTunneling` and a memory cap.
-3. Downloads the WezTerm nightly portable zip, verifies its checksum when one is published, and extracts it into the WezTerm tools directory.
+3. Downloads the WezTerm nightly portable zip, verifies its checksum when one is published, and extracts it into `C:\development\tools\wezterm\`.
 4. Copies `wezterm-stub.lua` next to `wezterm.exe` as `wezterm.lua`, and writes a small local file with the distribution name and Linux home path.
-5. Copies `launcher.ps1` and creates a Start-menu shortcut that runs it with a hidden window.
+5. Copies `launcher.ps1` into `C:\development\tools\launcher\` and creates a Start-menu shortcut that runs it with a hidden window.
 6. Runs the WSL first install: `git clone` of the repository into `~/development`, then `install/devup.sh --first-run`.
 7. Restarts WSL if `/etc/wsl.conf` changed, then starts WezTerm through the launcher.
 
@@ -136,8 +139,8 @@ The installer:
 
 `devup --first-run` is interactive once:
 
-1. Asks for the profile (`home` or `work`) and writes `.local/profile.env`.
-2. Asks for the home and work git identities, and writes them to `.local/`.
+1. Asks for the machine profile (`home` on the desktop PC, `work` on the work laptop) and writes `.local/profile.env`.
+2. Asks for the home and work git identities, writes them to `.local/`, and selects the profile's identity as this machine's default.
 3. Detects the proxy from the environment WSL inherited from Windows, asks to confirm or enter it, and records it in `.local/profile.env`.
 4. Creates `.secrets` from `.secrets.example` with mode 600.
 5. Writes `/etc/wsl.conf` (`systemd=true`, `appendWindowsPath=false`) with `sudo`.
@@ -177,7 +180,7 @@ That is why git and tmux come from apt.
 | Tool | Source | Version policy |
 |---|---|---|
 | Java JDK (8, 11, 17, 21, 25) | mise, Eclipse Temurin (OpenJDK builds) | Every LTS that is still supported, latest patch; default 25 |
-| Maven | mise | Latest 3.x (Q8) |
+| Maven 3 and Maven 4 | mise | Both installed; default is the 3.10 line (currently 3.10.0) until the captain says otherwise; switch with `mvnuse` (section 9.1) |
 | Maven daemon (mvnd) | mise | Latest |
 | Gradle | mise | Latest |
 | Node.js and npm | mise | Current LTS; npm ships with Node |
@@ -186,7 +189,7 @@ That is why git and tmux come from apt.
 | uv | mise | Latest |
 | Claude Code | mise (registry entry if present, else `npm:@anthropic-ai/claude-code`) | Latest |
 | gh, jq, yq, ripgrep, fd, fzf, bat, eza, zoxide, delta, lazygit, lazydocker, starship, xh, shellcheck, shfmt | mise | Latest |
-| git | apt, from the `git-core` PPA | Latest stable |
+| git | apt, from the `git-core` PPA when it publishes for the installed Ubuntu release, otherwise the distribution package | Latest stable |
 | tmux | apt | Distribution version |
 | Base packages (curl, wget, zip, unzip, ca-certificates, gnupg, build-essential, bash-completion, wslu) | apt | Distribution version |
 | docker CLI and compose | Docker Desktop WSL integration | Managed by Docker Desktop; `doctor` only checks it |
@@ -195,12 +198,26 @@ That is why git and tmux come from apt.
 `wslu` provides `wslview`, so browser-based logins (`gh auth login`, Claude Code) open the Windows browser.
 Projects pin their own versions through a project `.mise.toml` or `.java-version`, which mise honours automatically.
 
+### 9.1 Switching the default version
+
+The captain wants a quick command to switch the system-wide default version of a tool, starting with Maven.
+"System-wide" means the whole WSL2 distribution in v1, and the Windows machine itself once the Windows-native phase exists.
+
+- `use-version <tool> <version>` sets the default version of a mise-managed tool for this machine.
+  `mvnuse <version>` and `jdkuse <version>` are shortcuts for Maven and Java.
+- Without a version argument, the command lists the installed versions and marks the current default.
+- The switch is machine-local and stored under `.local/`, so it never edits the tracked manifest in `config/mise/config.toml` and never changes other machines.
+- It takes effect for new shells and for non-interactive callers, because mise resolves the default through its shims.
+  The current shell picks it up immediately as well.
+- A project's own `.mise.toml` or `.java-version` still wins inside that project.
+- The Windows-native phase must provide the same commands with the same names for PowerShell and Git Bash.
+
 ## 10. Configuration ownership
 
 | Tool | Repository file | How it is applied |
 |---|---|---|
 | mise | `config/mise/config.toml` | `MISE_GLOBAL_CONFIG_FILE`, plus a symlink at `~/.config/mise/config.toml` for non-interactive callers |
-| git | `config/git/gitconfig` | Symlink at `~/.gitconfig`; `includeIf "gitdir:~/development/sources/work/"` and `.../home/` load the identities from `.local/` |
+| git | `config/git/gitconfig` | Symlink at `~/.gitconfig`; first includes this machine's default identity from `.local/`, then `includeIf "gitdir:~/development/sources/work/"` and `.../home/` override it |
 | Maven | `config/maven/settings.xml` | Symlink at `~/.m2/settings.xml`; local repository at `tools/cache/m2`; proxy and mirrors from environment variables |
 | npm | `config/npm/npmrc` | Symlink at `~/.npmrc`; cache at `tools/cache/npm`; tokens through `${ENV}` references to `.secrets` |
 | tmux | `config/tmux/tmux.conf` | Symlink at `~/.config/tmux/tmux.conf` |
@@ -210,7 +227,7 @@ Projects pin their own versions through a project `.mise.toml` or `.java-version
 
 `devup` owns every symlink.
 It replaces an existing real file only after backing it up to `tmp/backup-<date>/`.
-Repositories outside `sources/home/` and `sources/work/` use the home identity by default (Q3).
+Repositories outside `sources/home/` and `sources/work/`, including the dev home itself, use the machine's profile identity: work on the work laptop, home on the desktop PC.
 
 ## 11. Update model
 
@@ -246,7 +263,7 @@ Other terminals get only the reminder from section 8.
 
 ### 11.4 Version pinning
 
-Runtimes keep their major or LTS line fixed (Java per LTS, Node `lts`), so updates stay within that line.
+Runtimes keep their major or LTS line fixed (Java per LTS, Node `lts`, Maven 3.10 and 4), so updates stay within that line.
 CLI tools follow `latest`.
 Moving a runtime to a new major version is a deliberate edit of `config/mise/config.toml`.
 
@@ -292,17 +309,17 @@ How the work proxy actually behaves (authentication, PAC file, TLS inspection) i
   Windows-only pieces (`wslview`, `/mnt/c` sync, `wsl.conf`) are guarded by WSL detection.
 - `devup` is Debian- and Ubuntu-specific because of apt.
   Another Linux distribution would need only a package-manager adapter, because mise itself is distribution-independent.
-- Git Bash for Windows is a different environment: MSYS paths, no apt, Windows-native binaries and a different home.
-  The installer cannot be reused there.
-  However, `aliases.sh`, `functions.sh`, `prompt.sh` and the git configuration could be shared through a "lite" mode of `bootstrap.sh` that detects MSYS and loads only those files.
-  Lite mode is out of scope for v1 unless the captain asks for it (Q6), but v1 must keep those files free of WSL-only assumptions so it stays possible.
+- The Windows-native side (Git Bash for Windows, PowerShell and Command Prompt) is a different environment: Windows paths, no apt, Windows-native binaries and a different home.
+  The WSL installer cannot be reused there.
+  It is planned as a later phase with its own install path under `C:\development\`.
+  Git Bash can still share `aliases.sh`, `functions.sh`, `prompt.sh` and the git configuration, so v1 must keep those files free of WSL-only assumptions.
 
 ## 16. Footprint outside the dev home
 
 Everything outside `~/development`, listed so it can be audited and removed:
 
 - WSL: one line in `~/.bashrc`; the symlinks from section 10; `/etc/wsl.conf`; the apt drop-ins for the proxy and the git PPA; the corporate certificate in the system trust store; and the apt packages.
-- Windows: the tools directory (Q4), the Start-menu shortcut and, opt-in, `%USERPROFILE%\.wslconfig`.
+- Windows: `C:\development\tools\wezterm\` and `C:\development\tools\launcher\`, the Start-menu shortcut and, opt-in, `%USERPROFILE%\.wslconfig`.
 
 `README.md` documents uninstall: remove the `~/.bashrc` line, run `devup --unlink` to remove the symlinks, delete `~/development`, and delete the Windows tools directory and shortcut.
 
@@ -321,6 +338,8 @@ On a fresh Windows machine with WSL2 and Ubuntu:
 9. The launcher installs a newer WezTerm nightly on the next start after one is published.
 10. The work profile installs and updates successfully behind the corporate proxy.
 11. Every shell script passes `shellcheck`.
+12. `mvn -v` reports 3.10; after `mvnuse 4`, both a new interactive shell and a non-interactive shell report Maven 4, and `mvnuse 3.10` switches back, with no change to tracked files.
+13. Outside `sources/`, `git config user.email` returns the work identity on a machine with the work profile and the home identity on one with the home profile.
 
 ## 18. Work-laptop investigation brief
 
@@ -334,40 +353,28 @@ It writes findings to its private report, and feeds back into this spec only gen
 3. Package registries: whether work uses Maven and npm mirrors (Artifactory, Nexus or similar), how authentication is configured today, and whether public registries are blocked.
 4. Restrictions on the laptop: PowerShell execution policy, AppLocker or similar, administrator rights, whether WSL and Ubuntu may be installed, and which Ubuntu version is allowed.
 5. Current Claude Code user settings and user-level `CLAUDE.md`, as a candidate for `config/claude/`.
-6. Java, Maven, Node and Angular versions used across current work projects, to confirm the version policy in section 9.
+6. Java, Maven, Node and Angular versions used across current work projects, to confirm the version policy in section 9, including whether the work builds run on Maven 3.10 and Maven 4.
 7. Current git, Maven and npm user configuration, with credentials replaced by placeholders.
 8. Which IDE is used and how it reaches the code: IntelliJ on Windows against WSL sources, JetBrains Gateway, VS Code Remote WSL, or something else.
 9. What EDI needs from its host beyond tmux, gh and git.
 10. Which tools are installed on the laptop today (winget, Chocolatey, Scoop or manual), to catch anything missing from section 9.
+11. Whether `C:\development\` exists and can be written without administrator rights, and what it currently contains.
 
 ## 19. Open questions
 
-- Q1. Will the DevBootstrapper repository be public or private?
-  Default: treat it as public, so nothing personal or employer-specific is ever tracked (section 6).
-- Q2. The JDK vendor: you asked for OpenJDK.
-  The plain OpenJDK builds from jdk.java.net are only published for the current release, so older LTS versions need a vendor build.
-  Default: Eclipse Temurin for every version, which is the standard OpenJDK distribution.
-- Q3. Which git identity applies to repositories outside `sources/home/` and `sources/work/`, such as the dev home itself?
-  Default: home.
-- Q4. Where do the Windows-side files go: `%USERPROFILE%\development\tools\` (next to your existing Windows development folder) or `%LOCALAPPDATA%\DevBootstrapper\`?
-  Default: `%USERPROFILE%\development\tools\`.
-  Related: does the existing Windows development folder keep a role, or do its projects move into WSL under `sources/`?
-- Q5. Should the installer also offer to install WSL and Ubuntu (administrator rights and a reboot), or only detect and explain?
-  Default: detect and explain.
-  If it should offer it, which Ubuntu LTS: 24.04 or 26.04?
-- Q6. Do you want the Git Bash lite mode (section 15) in v1?
-  Default: no.
-- Q7. Java 8 and 11 are still supported LTS lines but add about 400 MB.
-  Should both be installed on every machine, or only on the work profile?
-  Default: every machine, as you asked.
-- Q8. Maven 4 is now released.
-  Should the default be Maven 4 or the latest 3.9?
-  Default: latest 3.9 until the work projects are confirmed compatible (investigation item 6).
+None for the captain at this point.
+The remaining unknowns are the work-laptop investigation items in section 18; any question they raise is added here.
 
 ## 20. Decisions recorded
 
 - Windows is the only host platform for v1, with WSL2 and Ubuntu assumed.
+- Ubuntu is the latest stable release available.
+  The captain prefers bleeding-edge releases.
+  The installer detects and explains a missing WSL or Ubuntu, but does not install them.
 - WezTerm runs from the nightly portable zip and is updated by a custom launcher, not Scoop.
+- Windows-side files live in `C:\development\tools\`.
+  The Windows-native side (Git Bash, PowerShell, Command Prompt) is a later phase, and Git Bash lite mode is not part of v1.
+- The DevBootstrapper repository is treated as public.
 - The dev home is `~/development`, which is the repository itself, using an allow-list `.gitignore`.
 - All mise-managed tools live in `~/development/tools/`, and all caches in `~/development/tools/cache/`.
 - `tmp/` exists, is never committed and is never cleaned automatically.
@@ -376,7 +383,10 @@ It writes findings to its private report, and feeds back into this spec only gen
 - Shell setup and install/update are separate (`bootstrap.sh` versus `devup`).
 - Configurations are applied through environment variables or symlinks, with the full footprint listed in section 16.
 - Project checkouts go in `~/development/sources/home/` and `~/development/sources/work/`, and the folder decides the git identity.
-- Every supported Java LTS is installed, with JDK 25 as the default.
+  Everywhere else, the machine's profile decides: work on the work laptop, home on the desktop PC.
+- Java comes from Eclipse Temurin: every supported LTS (8, 11, 17, 21, 25) on every machine, with JDK 25 as the default.
+- Maven 3 and Maven 4 are both installed, with the 3.10 line (currently 3.10.0) as the default until the captain says otherwise.
+- Switching the default version is one quick command per machine (`mvnuse`, `jdkuse`, `use-version`), with Windows-side equivalents in the later phase.
 - npm is the only Node package manager, at home and at work.
 - The work profile has a corporate proxy.
 - The daily update asks for the `sudo` password in its own tab; there is no passwordless `sudo` rule.
